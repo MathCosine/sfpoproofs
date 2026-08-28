@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>SFPO 2026 — Staff Grading Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
+</head>
+<body>
+
+<!-- ===================== door ===================== -->
+<div class="gate" id="gate">
+  <div class="gate__card card">
+    <h1 class="gate__title" id="gateTitle">SFPO 2026</h1>
+    <p class="gate__sub">Staff grading portal</p>
+
+    <div class="banner banner--info hidden" id="gateDemo">
+      <div>
+        <b>Demo mode</b>
+        <span>No database configured, so everything stays in this browser. Open a second tab
+        to watch the live locking work.</span>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="field__label" for="graderName">Your name</label>
+      <input class="input" id="graderName" placeholder="e.g. Priya Raman" autocomplete="off">
+      <p class="field__hint">Stamped on every grade you enter. Set it once — it stays put.</p>
+    </div>
+
+    <div class="field" id="passwordField">
+      <label class="field__label" for="staffPassword">Staff password</label>
+      <input class="input" id="staffPassword" type="password" placeholder="Shared with the grading team" autocomplete="current-password">
+      <p class="field__hint" id="gateError"></p>
+    </div>
+
+    <button class="btn btn--primary btn--block" id="gateEnter">Start grading</button>
+  </div>
+</div>
+
+<!-- ===================== app ===================== -->
+<div class="app hidden" id="app">
+
+  <header class="topbar">
+    <div class="topbar__brand">
+      <b id="brandName">SFPO 2026</b>
+      <span id="brandSub">Grading Portal</span>
+    </div>
+
+    <div class="presence">
+      <span class="dot" id="connDot"></span>
+      <span id="connLabel">connecting…</span>
+    </div>
+
+    <div class="presence" title="Graders active in the last two minutes">
+      <span id="onlineCount">0</span>&nbsp;online
+    </div>
+
+    <div class="whoami" id="whoami">
+      <div>
+        <div class="whoami__label">Grading as</div>
+        <div class="whoami__name" id="whoamiName">—</div>
+      </div>
+      <button class="whoami__edit" id="changeName">change</button>
+    </div>
+
+    <button class="icon-btn" id="themeToggle" title="Toggle theme">◐</button>
+  </header>
+
+  <main class="layout">
+
+    <!-- ---------- left: the grading console ---------- -->
+    <section class="console">
+
+      <div class="card panel">
+        <div class="panel__head">
+          <span class="step">1</span>
+          <h2>Grade a proof</h2>
+          <span class="spacer"></span>
+          <span class="tag" id="editingTag" hidden>editing your read</span>
+        </div>
+
+        <div id="cellBanner"></div>
+
+        <div class="field">
+          <label class="field__label" for="contestantId">Contestant ID</label>
+          <input class="input id-input" id="contestantId" placeholder="12C"
+                 autocomplete="off" spellcheck="false" maxlength="5">
+          <p class="field__hint id-echo" id="idEcho">Team number, then the member letter.</p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Problem</span>
+          <div class="chip-row">
+            <span class="chip-row__label">DIV A</span>
+            <div class="chip-row" id="problemsA"></div>
+          </div>
+          <div class="chip-row">
+            <span class="chip-row__label">DIV B</span>
+            <div class="chip-row" id="problemsB"></div>
+          </div>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Score <span class="muted" id="scoreHint">— press 0–7</span></span>
+          <div class="scorepad" id="scorepad"></div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="feedback">Feedback to the contestant</label>
+          <textarea class="textarea" id="feedback"
+            placeholder="What earned the points, and what was missing. This goes back to the student."></textarea>
+        </div>
+
+        <div class="chip-row">
+          <button class="btn btn--go" id="submitGrade">
+            Submit grade <span class="kbd">⌘↵</span>
+          </button>
+          <button class="btn btn--ghost" id="clearForm">Clear</button>
+          <span class="spacer" style="margin-left:auto"></span>
+          <span class="muted" id="myCount" style="font-size:12px"></span>
+        </div>
+      </div>
+
+      <div class="card panel">
+        <div class="panel__head">
+          <span class="step">2</span>
+          <h2>Grade these next</h2>
+          <span class="spacer"></span>
+          <span class="tag" id="queueCount">0</span>
+        </div>
+        <p class="field__hint" style="margin-bottom:11px">
+          Conflicts first, then second reads, then unfinished contestants. Anything another
+          grader is holding right now is left out.
+        </p>
+        <div class="suggest" id="suggestList"></div>
+      </div>
+
+    </section>
+
+    <!-- ---------- right: live status ---------- -->
+    <section>
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-tab="matrix" aria-selected="true">Coverage matrix</button>
+        <button class="tab" role="tab" data-tab="leaderboard" aria-selected="false">Leaderboards</button>
+        <button class="tab" role="tab" data-tab="activity" aria-selected="false">Activity</button>
+        <button class="tab" role="tab" data-tab="setup" aria-selected="false">Guts &amp; export</button>
+      </div>
+
+      <!-- matrix -->
+      <div class="card panel" id="tab-matrix">
+        <div class="panel__head">
+          <h2>What has been graded</h2>
+          <span class="spacer"></span>
+          <div class="legend">
+            <span><i style="background:var(--slate)"></i>not yet</span>
+            <span><i style="background:var(--lime)"></i>graded</span>
+            <span><i style="background:var(--amber)"></i>2nd read</span>
+            <span><i style="background:var(--red)"></i>conflict</span>
+            <span><i style="background:var(--violet)"></i>in progress</span>
+          </div>
+        </div>
+        <div class="matrix" id="matrix"></div>
+        <div id="unassigned"></div>
+      </div>
+
+      <!-- leaderboards -->
+      <div class="card panel hidden" id="tab-leaderboard">
+        <div class="panel__head">
+          <h2>Standings</h2>
+          <span class="spacer"></span>
+          <div class="tabs" style="margin:0">
+            <button class="tab btn--ghost" data-board="combined" aria-selected="true">Combined</button>
+            <button class="tab btn--ghost" data-board="individual" aria-selected="false">Individual</button>
+            <button class="tab btn--ghost" data-board="guts" aria-selected="false">Guts</button>
+          </div>
+        </div>
+        <div id="boards"></div>
+      </div>
+
+      <!-- activity -->
+      <div class="card panel hidden" id="tab-activity">
+        <div class="panel__head"><h2>Live activity</h2></div>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">Graders online</h3>
+        <div class="grader-chips" id="graderChips" style="margin-bottom:20px"></div>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">In progress right now</h3>
+        <div class="grader-chips" id="activeClaims" style="margin-bottom:20px"></div>
+        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">Recent grades</h3>
+        <div class="feed" id="feed"></div>
+      </div>
+
+      <!-- guts + export -->
+      <div class="card panel hidden" id="tab-setup">
+        <div class="panel__head"><h2>Guts round import</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          A CSV of <span class="mono">team,score</span> — one row per team, header optional.
+          Add a third <span class="mono">division</span> column and it will assign divisions too.
+          Re-importing overwrites the teams in the file and leaves the rest alone.
+        </p>
+        <div class="dropzone" id="gutsDrop">
+          <b>Drop your guts CSV here</b>
+          <p class="field__hint" style="margin-top:6px">or click to choose a file</p>
+          <input type="file" id="gutsFile" accept=".csv,text/csv" hidden>
+        </div>
+        <div id="gutsResult" style="margin-top:13px"></div>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Roster shape</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          There is no roster file, so the matrix is drawn from these bounds. Teams with fewer
+          than four members simply leave their extra slots untouched — that is expected, and a
+          slot nobody grades is never counted against coverage.
+        </p>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="teamCount">Teams (1 – N)</label>
+            <input class="input" id="teamCount" type="number" min="1" max="500">
+          </div>
+          <div class="field">
+            <label class="field__label" for="secondReadThreshold">Second read at score ≥</label>
+            <input class="input" id="secondReadThreshold" type="number" min="0" max="7" step="0.5">
+          </div>
+          <div class="field">
+            <label class="field__label" for="disagreementDelta">Conflict when reads differ by ≥</label>
+            <input class="input" id="disagreementDelta" type="number" min="0.5" max="7" step="0.5">
+          </div>
+        </div>
+        <button class="btn btn--primary" id="saveSettings">Save settings for everyone</button>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Export</h2></div>
+        <div class="chip-row">
+          <button class="btn" id="exportGrades">All grades + feedback</button>
+          <button class="btn" id="exportIndividual">Individual results</button>
+          <button class="btn" id="exportCombined">Final combined results</button>
+        </div>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Session</h2></div>
+        <div class="chip-row">
+          <button class="btn btn--ghost" id="signOut">Sign out</button>
+          <button class="btn btn--ghost btn--danger hidden" id="seedDemo">Load demo data</button>
+          <button class="btn btn--ghost btn--danger hidden" id="resetDemo">Wipe demo data</button>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<script type="module" src="assets/app.js"></script>
+</body>
+</html>

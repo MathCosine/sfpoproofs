@@ -1,0 +1,15 @@
+{
+  "name": "sfpo-grading-portal",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Staff grading portal for the San Francisco Proof Open 2026",
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "serve": "python3 -m http.server 8000",
+    "test:e2e": "node tests/e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.47.2"
+  }
+}
