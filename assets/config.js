@@ -12,8 +12,8 @@
 // =====================================================================
 
 export const CONFIG = {
-  SUPABASE_URL: '',
-  SUPABASE_ANON_KEY: '',
+  SUPABASE_URL: 'https://epkrytwiecfliqjadabl.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_1GtB3jQACkq_3yDAGH__mw_4uwA-G7X',
 
   // The single shared staff account you created in Supabase
   // (Authentication -> Users -> Add user).  Graders type only the
