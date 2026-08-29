@@ -208,6 +208,23 @@ function supabaseBackend(cfg) {
         .upsert({ id: 1, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'id' });
       if (error) throw new Error(error.message);
     },
+
+    /**
+     * Wipe every grade, guts score, lock and team so a dry run does not
+     * end up in the real results. Settings survive on purpose — the team
+     * count and thresholds are configuration, not test data.
+     */
+    async clearAll() {
+      const c = await getClient();
+      const counts = {};
+      for (const [table, key] of [['grades', 'contestant_id'], ['claims', 'contestant_id'],
+        ['guts', 'team'], ['teams', 'team'], ['graders', 'grader_id']]) {
+        const { data, error } = await c.from(table).delete().not(key, 'is', null).select(key);
+        if (error) throw new Error(`${table}: ${error.message}`);
+        counts[table] = data?.length ?? 0;
+      }
+      return counts;
+    },
   };
   return api;
 }
@@ -326,7 +343,16 @@ function demoBackend() {
     async saveSettings(patch) {
       mutate((db) => { db.settings = { ...(db.settings ?? {}), ...patch }; });
     },
-    async reset() { mutate((db) => { Object.assign(db, EMPTY()); }); },
+    async clearAll() {
+      const counts = {};
+      mutate((db) => {
+        for (const table of ['grades', 'claims', 'guts', 'teams', 'graders']) {
+          counts[table] = db[table].length;
+          db[table] = [];
+        }
+      });
+      return counts;
+    },
   };
 }
 

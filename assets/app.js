@@ -90,6 +90,7 @@ function recompute() {
   derived = {
     byCell,
     claims,
+    seen,
     divByTeam,
     roster,
     individuals,
@@ -453,29 +454,44 @@ function renderSuggestions() {
 // Coverage matrix
 // ---------------------------------------------------------------------
 
-function renderMatrix() {
+// The matrix is the expensive thing on the page: at 100 teams it is
+// ~1,600 cells, and a realtime event arrives every time any grader
+// submits. So the DOM is built once per *shape* change (a team joining a
+// division, a new member letter appearing) and every data change after
+// that only repaints classes and tooltips on cells that already exist.
+let matrixShape = null;
+const matrixCells = new Map();
+const matrixBars = new Map();
+
+function shapeSignature() {
+  return ['A', 'B'].map((division) => derived.roster[division]
+    .map((t) => `${t.team}.${t.members.map((m) => m.member).join('')}`)
+    .join(',')).join('|');
+}
+
+function buildMatrix() {
   const host = $('#matrix');
   host.replaceChildren();
+  matrixCells.clear();
+  matrixBars.clear();
 
   for (const division of ['A', 'B']) {
     const entries = derived.roster[division];
+    const problems = problemsFor(division, cfg);
     const section = el('div', 'matrix__division');
-    const bar = el('div', 'matrix__bar');
-    const progress = derived.progress[division];
 
-    bar.append(
-      el('span', `tag tag--${division.toLowerCase()}`, `Division ${division}`),
-      el('span', 'muted', `${entries.length} teams · ${problemsFor(division, cfg).join(' ')}`),
-    );
-    const spacer = el('span', 'spacer');
-    bar.appendChild(spacer);
-    if (progress.flagged) bar.appendChild(el('span', 'tag tag--flag', `${progress.flagged} flagged`));
-    bar.appendChild(el('span', 'muted', `${progress.done}/${progress.expected}`));
+    const bar = el('div', 'matrix__bar');
+    const flagged = el('span', 'tag tag--flag');
+    const counter = el('span', 'muted');
     const track = el('div', 'progress');
     const fill = el('div', 'progress__fill');
-    fill.style.width = `${progress.pct}%`;
     track.appendChild(fill);
-    bar.appendChild(track);
+    bar.append(
+      el('span', `tag tag--${division.toLowerCase()}`, `Division ${division}`),
+      el('span', 'muted', `${entries.length} teams · ${problems.join(' ')}`),
+      el('span', 'spacer'), flagged, counter, track,
+    );
+    matrixBars.set(division, { flagged, counter, fill });
     section.appendChild(bar);
 
     const grid = el('div', 'matrix__grid');
@@ -485,34 +501,17 @@ function renderMatrix() {
     }
     for (const entry of entries) {
       const teamCard = el('div', 'matrix__team');
-      const label = el('div', 'matrix__team-no', `TEAM ${entry.team}${entry.beyondRange ? ' ⚠' : ''}`);
-      teamCard.appendChild(label);
+      teamCard.appendChild(
+        el('div', 'matrix__team-no', `TEAM ${entry.team}${entry.beyondRange ? ' ⚠' : ''}`));
       for (const member of entry.members) {
         const row = el('div', 'matrix__row');
         row.appendChild(el('span', 'matrix__who', member.member));
-        for (const problem of problemsFor(division, cfg)) {
-          const key = cellKey(member.contestantId, problem);
-          const summary = summariseCell(derived.byCell.get(key), cfg);
-          const claim = derived.claims.get(key);
-
+        for (const problem of problems) {
           const cell = el('button', 'cell');
           cell.type = 'button';
-          if (summary.state !== 'ungraded') cell.classList.add(`cell--${summary.state}`);
-          else if (claim) cell.classList.add('cell--claimed');
-          else if (!member.seen) cell.classList.add('cell--absent');
-          if (claim?.grader_id === grader.id) cell.classList.add('cell--mine');
-
-          const parts = [`${member.contestantId} · ${problem}`];
-          if (summary.state === 'ungraded') parts.push(claim ? `${claim.grader_name} is on it` : 'not graded');
-          else parts.push(`${summary.scores.join(' → ')} by ${summary.graders.join(', ')}`);
-          cell.title = parts.join(' — ');
-          cell.setAttribute('aria-label', cell.title);
-
-          cell.addEventListener('click', () => {
-            $('#contestantId').value = member.contestantId;
-            setContestant(member.contestantId);
-            selectProblem(problem);
-          });
+          cell.dataset.cid = member.contestantId;
+          cell.dataset.problem = problem;
+          matrixCells.set(cellKey(member.contestantId, problem), cell);
           row.appendChild(cell);
         }
         teamCard.appendChild(row);
@@ -522,7 +521,50 @@ function renderMatrix() {
     section.appendChild(grid);
     host.appendChild(section);
   }
+}
 
+function paintMatrix() {
+  for (const [key, cell] of matrixCells) {
+    const [contestantId, problem] = key.split('|');
+    const summary = summariseCell(derived.byCell.get(key), cfg);
+    const claim = derived.claims.get(key);
+    const seen = derived.seen.has(contestantId);
+
+    let cls = 'cell';
+    if (summary.state !== 'ungraded') cls += ` cell--${summary.state}`;
+    else if (claim) cls += ' cell--claimed';
+    else if (!seen) cls += ' cell--absent';
+    if (claim?.grader_id === grader.id) cls += ' cell--mine';
+    if (cell.className !== cls) cell.className = cls;
+
+    const detail = summary.state === 'ungraded'
+      ? (claim ? `${claim.grader_name} is on it` : 'not graded')
+      : `${summary.scores.join(' → ')} by ${summary.graders.join(', ')}`;
+    const title = `${contestantId} · ${problem} — ${detail}`;
+    if (cell.title !== title) {
+      cell.title = title;
+      cell.setAttribute('aria-label', title);
+    }
+  }
+
+  for (const division of ['A', 'B']) {
+    const bar = matrixBars.get(division);
+    if (!bar) continue;
+    const progress = derived.progress[division];
+    bar.fill.style.width = `${progress.pct}%`;
+    bar.counter.textContent = `${progress.done}/${progress.expected}`;
+    bar.flagged.textContent = `${progress.flagged} flagged`;
+    bar.flagged.hidden = progress.flagged === 0;
+  }
+}
+
+function renderMatrix() {
+  const shape = shapeSignature();
+  if (shape !== matrixShape) {
+    matrixShape = shape;
+    buildMatrix();
+  }
+  paintMatrix();
   renderUnassigned();
 }
 
@@ -838,6 +880,11 @@ function render() {
 
   const mine = data.grades.filter((g) => g.grader_id === grader.id).length;
   $('#myCount').textContent = mine ? `${mine} graded by you` : '';
+
+  const teamsWithData = new Set([...data.grades.map((g) => g.team), ...data.guts.map((g) => g.team)]);
+  $('#wipeCounts').textContent = data.grades.length || data.guts.length
+    ? `${data.grades.length} grades · ${data.guts.length} guts scores · ${teamsWithData.size} teams · ${data.claims.length} open locks`
+    : 'Nothing to delete.';
   for (const [id, value] of [['#teamCount', cfg.TEAM_COUNT],
     ['#secondReadThreshold', cfg.SECOND_READ_THRESHOLD],
     ['#disagreementDelta', cfg.DISAGREEMENT_DELTA]]) {
@@ -878,6 +925,16 @@ function updateConnectionBadge() {
 // ---------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------
+
+function wireMatrix() {
+  $('#matrix').addEventListener('click', (e) => {
+    const cell = e.target.closest('.cell');
+    if (!cell) return;
+    $('#contestantId').value = cell.dataset.cid;
+    setContestant(cell.dataset.cid);
+    selectProblem(cell.dataset.problem);
+  });
+}
 
 function wireTabs() {
   for (const tab of $$('.tab[data-tab]')) {
@@ -979,15 +1036,36 @@ function wireSetup() {
     location.reload();
   });
 
+  // Deleting the whole contest is one click away from the export
+  // buttons, so it takes a deliberate word to arm it.
+  const confirmInput = $('#wipeConfirm');
+  const wipeButton = $('#wipeAll');
+  confirmInput.addEventListener('input', () => {
+    wipeButton.disabled = confirmInput.value.trim().toUpperCase() !== 'ERASE';
+  });
+  wipeButton.addEventListener('click', async () => {
+    if (confirmInput.value.trim().toUpperCase() !== 'ERASE') return;
+    wipeButton.disabled = true;
+    try {
+      await releaseHeldClaim();
+      const counts = await store.clearAll();
+      confirmInput.value = '';
+      clearForm();
+      await refresh();
+      const total = Object.values(counts).reduce((a, b) => a + b, 0);
+      toast(total ? `Deleted ${counts.grades} grades and ${counts.guts} guts scores.`
+        : 'There was nothing to delete.', 'info');
+    } catch (err) {
+      toast(err.message || 'Could not clear the data.', 'error');
+    } finally {
+      wipeButton.disabled = confirmInput.value.trim().toUpperCase() !== 'ERASE';
+    }
+  });
+
+  // Seeding fake grades only ever makes sense against the local demo store.
   if (store.mode === 'demo') {
     $('#seedDemo').classList.remove('hidden');
-    $('#resetDemo').classList.remove('hidden');
     $('#seedDemo').addEventListener('click', async () => { await seedDemo(); toast('Demo data loaded.'); });
-    $('#resetDemo').addEventListener('click', async () => {
-      await store.reset();
-      await refresh();
-      toast('Demo data wiped.', 'info');
-    });
   }
 }
 
@@ -1060,6 +1138,7 @@ async function enterApp() {
   $('#brandSub').textContent = 'Grading Portal';
 
   wireTabs();
+  wireMatrix();
   wireForm();
   wireSetup();
   wireIdentity();

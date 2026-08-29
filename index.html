@@ -238,11 +238,24 @@
           <button class="btn" id="exportCombined">Final combined results</button>
         </div>
 
+        <div class="panel__head" style="margin-top:28px"><h2>Clear test data</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          Deletes every grade, guts score, team and lock so a dry run never lands in the real
+          results. Your settings above are kept. There is no undo — export first if you want a copy.
+        </p>
+        <div class="danger">
+          <p class="danger__counts mono" id="wipeCounts">Nothing to delete.</p>
+          <div class="danger__row">
+            <input class="input" id="wipeConfirm" placeholder="Type ERASE to unlock"
+                   autocomplete="off" spellcheck="false">
+            <button class="btn btn--danger" id="wipeAll" disabled>Delete it all</button>
+          </div>
+        </div>
+
         <div class="panel__head" style="margin-top:28px"><h2>Session</h2></div>
         <div class="chip-row">
           <button class="btn btn--ghost" id="signOut">Sign out</button>
-          <button class="btn btn--ghost btn--danger hidden" id="seedDemo">Load demo data</button>
-          <button class="btn btn--ghost btn--danger hidden" id="resetDemo">Wipe demo data</button>
+          <button class="btn btn--ghost hidden" id="seedDemo">Load demo data</button>
         </div>
       </div>
 

@@ -40,7 +40,11 @@ export const CONFIG = {
   // Expected roster shape. There is no roster file — the portal draws
   // the matrix from these bounds and quietly ignores slots nobody ever
   // touches, because plenty of teams come with 1, 2 or 3 members.
-  TEAM_COUNT: 50,
+  //
+  // Changing this here only affects a database that has never had its
+  // settings saved. Once app_settings exists, the stored value wins —
+  // set it from Guts & export instead, so every grader picks it up.
+  TEAM_COUNT: 100,
   MEMBERS: ['A', 'B', 'C', 'D'],
 
   // Live coordination timings (milliseconds)

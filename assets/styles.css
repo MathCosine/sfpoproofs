@@ -486,6 +486,19 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 .dropzone:hover, .dropzone.is-over { background: color-mix(in srgb, var(--cyan) 22%, var(--card)); }
 .dropzone.is-over { transform: scale(1.01); }
 
+/* ---------- danger zone ------------------------------------------- */
+
+.danger {
+  border: var(--bw) solid var(--red);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--red) 12%, var(--card));
+  padding: 15px;
+  box-shadow: var(--shadow-xs);
+}
+.danger__counts { font-size: 13px; font-weight: 700; margin-bottom: 11px; }
+.danger__row { display: flex; gap: 9px; flex-wrap: wrap; }
+.danger__row .input { flex: 1; min-width: 190px; }
+
 /* ---------- gate -------------------------------------------------- */
 
 .gate {

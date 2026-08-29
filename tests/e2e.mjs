@@ -204,6 +204,11 @@ check('guts leaderboard renders',
 
 // ---- guts CSV import --------------------------------------------
 await page.click('.tab[data-tab="setup"]');
+check('the team count defaults to 100', (await page.inputValue('#teamCount')) === '100',
+  await page.inputValue('#teamCount'));
+await page.click('#saveSettings');
+await page.waitForTimeout(500);
+
 await page.setInputFiles('#gutsFile', {
   name: 'guts.csv',
   mimeType: 'text/csv',
@@ -242,6 +247,36 @@ check('individual CSV columns line up across both divisions',
 const divA = lines.slice(1).find((l) => l.split(',')[1] === 'A');
 check('a Division A row still ends with total and status',
   /,\d+(\.\d+)?,(complete|in progress)$/.test(divA), divA);
+
+// ---- clearing test data -----------------------------------------
+await page.click('.tab[data-tab="setup"]');
+const before = await page.textContent('#wipeCounts');
+check('the wipe panel shows what would be deleted',
+  /\d+ grades · \d+ guts scores/.test(before), before.trim());
+check('the wipe button starts locked', await page.isDisabled('#wipeAll'));
+
+await page.fill('#wipeConfirm', 'erase please');
+check('a wrong confirmation keeps it locked', await page.isDisabled('#wipeAll'));
+
+await page.fill('#wipeConfirm', 'erase');
+check('typing ERASE unlocks it (case-insensitive)', !(await page.isDisabled('#wipeAll')));
+await page.click('#wipeAll');
+await page.waitForTimeout(700);
+
+check('grades are gone', (await page.textContent('#wipeCounts')) === 'Nothing to delete.');
+check('the confirmation box resets', (await page.inputValue('#wipeConfirm')) === '');
+await page.click('.tab[data-tab="matrix"]');
+await page.waitForTimeout(300);
+check('the matrix empties out', (await page.locator('.cell--graded').count()) === 0);
+await page.click('.tab[data-tab="leaderboard"]');
+await page.waitForTimeout(300);
+check('the leaderboards empty out',
+  (await page.locator('#boards table tbody tr').count()) === 0);
+
+// Settings are configuration, not test data — they must survive the wipe.
+await page.click('.tab[data-tab="setup"]');
+check('the team count survives the wipe',
+  (await page.inputValue('#teamCount')) === '100', await page.inputValue('#teamCount'));
 
 // ---- theme + screenshots ----------------------------------------
 await page.click('.tab[data-tab="matrix"]');

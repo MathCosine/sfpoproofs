@@ -11,7 +11,7 @@ create extension if not exists "pgcrypto";
 -- ---------------------------------------------------------------------
 create table if not exists app_settings (
   id                    int primary key default 1,
-  team_count            int     not null default 50,   -- expected teams: 1..team_count
+  team_count            int     not null default 100,  -- expected teams: 1..team_count
   max_members           int     not null default 4,    -- A..D
   max_score             numeric not null default 7,    -- olympiad 0-7
   second_read_threshold numeric not null default 5,    -- >= this => suggest a 2nd read

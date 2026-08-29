@@ -51,6 +51,11 @@ column assigns divisions at the same time.
 **Export when you are done.** All grades with feedback, individual results, or the
 final combined standings — as CSV.
 
+**It stays quick at full scale.** With 100 teams the matrix is about 1,600 cells and
+a grade lands on every grader's screen several times a minute. The grid is built once
+per shape change and only repainted after that, which keeps a realtime update at
+around 40ms instead of the ~156ms a full rebuild costs.
+
 ---
 
 ## The stack, and why
@@ -154,7 +159,7 @@ in a believable half-graded contest to click around in.
 
 ```bash
 npm test                 # 28 unit tests over the scoring + CSV logic
-npm run test:e2e         # 44 browser checks, driving two tabs as two graders
+npm run test:e2e         # 54 browser checks, driving two tabs as two graders
                          # (set CHROMIUM_PATH to reuse a preinstalled browser)
 ```
 
@@ -175,8 +180,14 @@ The browser test drives two tabs as two different graders to prove the locking.
 - **Teams with 1–3 members are normal.** The matrix draws four member slots per team
   because it has no roster; slots nobody ever grades stay faded and are excluded from
   the coverage count, so a two-person team never shows as 50% done.
-- **Set the team count** in *Guts & export* if you end up with more than 50 teams. A
-  contestant graded outside the range still appears, marked with a ⚠.
+- **Set the team count** in *Guts & export*. It defaults to 100. A contestant graded
+  outside the range still appears anyway, marked with a ⚠, so a late registration is
+  never silently dropped. Note that once a database has saved its settings, the stored
+  value wins over `config.js` — change it in the UI, not the file, so every grader
+  picks it up.
+- **Clear the dry run before the contest.** *Guts & export → Clear test data* deletes
+  every grade, guts score, team and lock, but keeps your settings. It needs the word
+  `ERASE` typed in to arm, and there is no undo — export first if you want the data.
 - **Tune the thresholds mid-contest.** Second-read and conflict thresholds are saved
   to the database, so changing them updates every grader's screen.
 - **The keyboard is faster.** `0`–`7` set the score from anywhere outside a text box;
