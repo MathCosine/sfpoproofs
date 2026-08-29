@@ -122,6 +122,22 @@ function supabaseBackend(cfg) {
     },
 
     /**
+     * Disqualify or reinstate. Nothing is deleted either way — the team's
+     * grades stay untouched, so reinstating restores the exact score.
+     */
+    async setTeamDq(team, { disqualified, reason = '', by = '' }) {
+      const c = await getClient();
+      const { error } = await c.from('teams').upsert({
+        team,
+        disqualified,
+        dq_reason: disqualified ? reason : '',
+        dq_by: disqualified ? by : '',
+        dq_at: disqualified ? new Date().toISOString() : null,
+      }, { onConflict: 'team' });
+      if (error) throw new Error(error.message);
+    },
+
+    /**
      * Take the lock on one cell. This is deliberately NOT an upsert:
      * an upsert would let whoever clicked last quietly take a proof off
      * the grader already reading it, which is the exact thing the panel
@@ -280,6 +296,19 @@ function demoBackend() {
       mutate((db) => {
         const i = db.teams.findIndex((x) => x.team === team);
         if (i >= 0) db.teams[i].division = division; else db.teams.push({ team, division });
+      });
+    },
+    async setTeamDq(team, { disqualified, reason = '', by = '' }) {
+      mutate((db) => {
+        const patch = {
+          disqualified,
+          dq_reason: disqualified ? reason : '',
+          dq_by: disqualified ? by : '',
+          dq_at: disqualified ? new Date().toISOString() : null,
+        };
+        const i = db.teams.findIndex((x) => x.team === team);
+        if (i >= 0) Object.assign(db.teams[i], patch);
+        else db.teams.push({ team, division: null, ...patch });
       });
     },
     async claim(contestantId, problem, grader, ttlMs) {

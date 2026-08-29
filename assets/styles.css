@@ -486,6 +486,32 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 .dropzone:hover, .dropzone.is-over { background: color-mix(in srgb, var(--cyan) 22%, var(--card)); }
 .dropzone.is-over { transform: scale(1.01); }
 
+/* ---------- disqualification -------------------------------------- */
+
+.matrix__team--dq {
+  border-color: var(--red);
+  background: color-mix(in srgb, var(--red) 11%, var(--card));
+  opacity: .72;
+}
+.matrix__team--dq .matrix__team-no { color: var(--red); }
+
+.table-wrap--dq { margin-top: 8px; border-color: var(--red); }
+.table-wrap--dq tbody td { color: var(--muted); }
+.table-wrap--dq tbody td:nth-child(2) { text-decoration: line-through; }
+.table-wrap--dq .rank { background: var(--red); color: #10131a; font-size: 11px; }
+
+.dq-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 13px;
+  border: 2px solid var(--line); border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--red) 13%, var(--card));
+  box-shadow: var(--shadow-xs);
+}
+.dq-row + .dq-row { margin-top: 8px; }
+.dq-row > div { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.dq-row b { font-size: 14px; }
+.dq-row .muted { font-size: 12px; }
+
 /* ---------- danger zone ------------------------------------------- */
 
 .danger {

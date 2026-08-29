@@ -9,7 +9,7 @@ import {
   parseContestantId, divisionOfProblem, problemsFor, cellKey,
   indexGrades, summariseCell, liveClaims, divisionByTeam, buildRoster,
   individualStandings, teamProofStandings, gutsStandings, combinedStandings,
-  splitByDivision, suggestQueue, progressFor,
+  splitByDivision, suggestQueue, progressFor, dqTeams, proofMaxFor,
 } from './scoring.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -80,6 +80,9 @@ function recompute() {
     if (data.settings.disagreement_delta != null) {
       cfg.DISAGREEMENT_DELTA = Number(data.settings.disagreement_delta);
     }
+    if (data.settings.proof_weight != null) cfg.PROOF_WEIGHT = Number(data.settings.proof_weight);
+    if (data.settings.guts_weight != null) cfg.GUTS_WEIGHT = Number(data.settings.guts_weight);
+    if (data.settings.guts_max != null) cfg.GUTS_MAX = Number(data.settings.guts_max);
   }
 
   const byCell = indexGrades(data.grades);
@@ -88,16 +91,18 @@ function recompute() {
   const seen = new Set(data.grades.map((g) => g.contestant_id));
   for (const key of claims.keys()) seen.add(key.split('|')[0]);
 
-  const roster = buildRoster(cfg, divByTeam, seen);
-  const individuals = individualStandings(data.grades, divByTeam, cfg);
-  const teamProof = teamProofStandings(individuals, divByTeam, cfg);
+  const dq = dqTeams(data.teams);
+  const roster = buildRoster(cfg, divByTeam, seen, dq);
+  const individuals = individualStandings(data.grades, divByTeam, cfg, dq);
+  const teamProof = teamProofStandings(individuals, divByTeam, cfg, dq);
   const guts = gutsStandings(data.guts, divByTeam);
-  const combined = combinedStandings(teamProof, data.guts, divByTeam);
+  const combined = combinedStandings(teamProof, data.guts, divByTeam, cfg, dq);
 
   derived = {
     byCell,
     claims,
     seen,
+    dq,
     divByTeam,
     roster,
     individuals,
@@ -472,7 +477,7 @@ const matrixBars = new Map();
 
 function shapeSignature() {
   return ['A', 'B'].map((division) => derived.roster[division]
-    .map((t) => `${t.team}.${t.members.map((m) => m.member).join('')}`)
+    .map((t) => `${t.team}.${t.members.map((m) => m.member).join('')}${t.disqualified ? '!' : ''}`)
     .join(',')).join('|');
 }
 
@@ -507,9 +512,11 @@ function buildMatrix() {
         `No teams in Division ${division} yet. A team joins the moment one of its ${division} problems is graded.`));
     }
     for (const entry of entries) {
-      const teamCard = el('div', 'matrix__team');
-      teamCard.appendChild(
-        el('div', 'matrix__team-no', `TEAM ${entry.team}${entry.beyondRange ? ' ⚠' : ''}`));
+      const teamCard = el('div', `matrix__team${entry.disqualified ? ' matrix__team--dq' : ''}`);
+      const label = el('div', 'matrix__team-no',
+        `TEAM ${entry.team}${entry.beyondRange ? ' ⚠' : ''}${entry.disqualified ? ' · DQ' : ''}`);
+      if (entry.disqualified) label.title = teamNote(entry.team) || 'Disqualified';
+      teamCard.appendChild(label);
       for (const member of entry.members) {
         const row = el('div', 'matrix__row');
         row.appendChild(el('span', 'matrix__who', member.member));
@@ -649,17 +656,124 @@ function table(headers, rows) {
 
 const rankCls = (i) => `rank${i < 3 ? ` rank--${i + 1}` : ''}`;
 
+function teamNote(team) {
+  return data.teams.find((t) => t.team === team)?.dq_reason ?? '';
+}
+
+/** The combined figure, with its two halves spelled out on hover. */
+function combinedCell(r) {
+  const cell = el('span', 'mono', r.total.toFixed(2));
+  cell.title = `proof ${r.proof}/${r.proofMax} = ${r.proofPct.toFixed(1)}% × ${cfg.PROOF_WEIGHT}\n`
+    + `guts ${r.guts ?? 0}/${r.gutsMax || '—'} = ${r.gutsPct.toFixed(1)}% × ${cfg.GUTS_WEIGHT}`;
+  return cell;
+}
+
+/** Disqualified teams sit below the ranking, scores intact and reasons shown. */
+function dqTable(rows, division) {
+  const wrap = el('div');
+  const head = el('p', 'field__hint');
+  head.style.margin = '16px 0 8px';
+  head.textContent = `Disqualified in Division ${division} — scores kept for the record, not ranked.`;
+  wrap.appendChild(head);
+  const t = table(
+    ['', 'Team', { label: 'Proof', num: true }, { label: 'Guts', num: true },
+      { label: 'Combined', num: true }, 'Reason'],
+    rows.map((r) => [
+      { text: 'DQ', cls: 'rank' },
+      { text: `Team ${r.team}` },
+      { text: r.proof.toFixed(1), cls: 'num' },
+      { text: r.guts == null ? '—' : r.guts.toFixed(1), cls: 'num' },
+      { text: r.total.toFixed(2), cls: 'num' },
+      { text: teamNote(r.team) || '—', cls: 'muted' },
+    ]),
+  );
+  t.classList.add('table-wrap--dq');
+  wrap.appendChild(t);
+  return wrap;
+}
+
+function renderWeightPreview() {
+  const proof = Number($('#proofWeight').value) || 0;
+  const guts = Number($('#gutsWeight').value) || 0;
+  const pinned = Number($('#gutsMax').value) || 0;
+  const observed = data.guts.length ? Math.max(...data.guts.map((g) => Number(g.score))) : 0;
+  const gutsMax = pinned > 0 ? pinned : observed;
+  const sum = proof + guts;
+
+  const host = $('#weightPreview');
+  host.replaceChildren();
+  const d = el('div');
+  if (!sum) {
+    host.className = 'banner banner--error';
+    d.append(el('b', null, 'Both weights are zero'), el('span', null, 'Nothing would be scored.'));
+  } else {
+    host.className = 'banner banner--info';
+    const pp = Math.round((proof / sum) * 100);
+    d.append(
+      el('b', null, `A perfect team scores ${pp} from proofs and ${100 - pp} from guts.`),
+      el('span', null, gutsMax
+        ? `Guts is measured out of ${gutsMax}${pinned > 0 ? ' (set by hand)' : ' — the highest score imported so far'}.`
+        : 'No guts scores imported yet, so the guts half scores zero for everyone until you import them.'),
+    );
+  }
+  host.appendChild(d);
+}
+
+function renderDqList() {
+  const host = $('#dqList');
+  host.replaceChildren();
+  const out = data.teams.filter((t) => t.disqualified).sort((a, b) => a.team - b.team);
+  if (!out.length) {
+    host.appendChild(el('p', 'field__hint', 'No teams are disqualified.'));
+    return;
+  }
+  for (const team of out) {
+    const chip = el('div', 'dq-row');
+    const info = el('div');
+    info.append(
+      el('b', null, `Team ${team.team}`),
+      el('span', 'muted', team.dq_reason
+        ? `${team.dq_reason}${team.dq_by ? ` — ${team.dq_by}` : ''}`
+        : 'no reason recorded'),
+    );
+    const undo = el('button', 'btn btn--ghost', 'Reinstate');
+    undo.type = 'button';
+    undo.addEventListener('click', async () => {
+      undo.disabled = true;
+      try {
+        await store.setTeamDq(team.team, { disqualified: false });
+        await refresh();
+        toast(`Team ${team.team} is back in the standings.`);
+      } catch (err) {
+        toast(err.message || 'Could not reinstate that team.', 'error');
+        undo.disabled = false;
+      }
+    });
+    chip.append(info, undo);
+    host.appendChild(chip);
+  }
+}
+
 function renderBoards() {
   const host = $('#boards');
   host.replaceChildren();
 
   const note = el('p', 'field__hint');
   note.style.marginBottom = '14px';
-  note.textContent = activeBoard === 'combined'
-    ? 'Team proof total (its members added together) plus the guts score. Rows marked provisional are still missing a guts import or have ungraded proofs.'
-    : activeBoard === 'individual'
-      ? 'One row per contestant, summed across their division’s problems. Two-read cells use the later read.'
-      : 'Straight from the guts CSV import.';
+  if (activeBoard === 'combined') {
+    const gutsMax = derived.combined[0]?.gutsMax || 0;
+    note.textContent = `Combined = ${cfg.PROOF_WEIGHT}% of the proof score plus `
+      + `${cfg.GUTS_WEIGHT}% of the guts score, each as a share of its own maximum, out of 100. `
+      + `Proof is out of ${proofMaxFor('A', cfg)} in Division A and ${proofMaxFor('B', cfg)} in `
+      + `Division B; guts is out of ${gutsMax || '—'}`
+      + `${cfg.GUTS_MAX > 0 ? ' (set by hand)' : ' (the highest score imported)'}. `
+      + 'Hover a combined score to see its two halves.';
+  } else if (activeBoard === 'individual') {
+    note.textContent = 'One row per contestant, summed across their division’s problems. '
+      + 'Two-read cells use the later read.';
+  } else {
+    note.textContent = 'Straight from the guts CSV import.';
+  }
   host.appendChild(note);
 
   for (const division of ['A', 'B']) {
@@ -667,35 +781,47 @@ function renderBoards() {
       'font-size:13px;text-transform:uppercase;letter-spacing:.07em;margin:18px 0 9px';
 
     if (activeBoard === 'combined') {
-      const rows = splitByDivision(derived.combined)[division];
-      host.appendChild(rows.length ? table(
+      const all = splitByDivision(derived.combined)[division];
+      const ranked = all.filter((r) => !r.disqualified);
+      const out = all.filter((r) => r.disqualified);
+      host.appendChild(ranked.length ? table(
         ['#', 'Team', { label: 'Proof', num: true }, { label: 'Guts', num: true },
-          { label: 'Total', num: true }, 'Status'],
-        rows.map((r, i) => [
+          { label: 'Combined', num: true }, 'Status'],
+        ranked.map((r, i) => [
           { text: String(i + 1), cls: rankCls(i) },
           { text: `Team ${r.team}` },
           { text: r.proof.toFixed(1), cls: 'num' },
           { text: r.guts == null ? '—' : r.guts.toFixed(1), cls: 'num' },
-          { text: r.total.toFixed(1), cls: 'num' },
+          { node: combinedCell(r), cls: 'num' },
           { text: r.status, cls: 'muted' },
         ]),
       ) : el('div', 'empty', 'Nothing here yet.'));
+      if (out.length) host.appendChild(dqTable(out, division));
     } else if (activeBoard === 'individual') {
-      const rows = splitByDivision(derived.individuals)[division];
+      const all = splitByDivision(derived.individuals)[division];
+      const ranked = all.filter((r) => !r.disqualified);
+      const out = all.filter((r) => r.disqualified);
       const problems = problemsFor(division, cfg);
-      host.appendChild(rows.length ? table(
-        ['#', 'Contestant', ...problems.map((p) => ({ label: p, num: true })),
-          { label: 'Total', num: true }, 'Status'],
-        rows.map((r, i) => [
-          { text: String(i + 1), cls: rankCls(i) },
-          { text: r.contestantId },
-          ...problems.map((p) => ({
-            text: r.byProblem[p] ? String(r.byProblem[p].score) : '·', cls: 'num',
-          })),
-          { text: r.total.toFixed(1), cls: 'num' },
-          { text: r.complete ? (r.openFlags ? `${r.openFlags} flagged` : 'complete') : 'in progress', cls: 'muted' },
-        ]),
-      ) : el('div', 'empty', 'Nothing here yet.'));
+      const header = ['#', 'Contestant', ...problems.map((p) => ({ label: p, num: true })),
+        { label: 'Total', num: true }, 'Status'];
+      const row = (r, i) => [
+        { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
+        { text: r.contestantId },
+        ...problems.map((p) => ({
+          text: r.byProblem[p] ? String(r.byProblem[p].score) : '·', cls: 'num',
+        })),
+        { text: r.total.toFixed(1), cls: 'num' },
+        { text: i == null ? 'disqualified'
+          : (r.complete ? (r.openFlags ? `${r.openFlags} flagged` : 'complete') : 'in progress'),
+        cls: 'muted' },
+      ];
+      host.appendChild(ranked.length ? table(header, ranked.map(row))
+        : el('div', 'empty', 'Nothing here yet.'));
+      if (out.length) {
+        const wrap = table(header, out.map((r) => row(r, null)));
+        wrap.classList.add('table-wrap--dq');
+        host.appendChild(wrap);
+      }
     } else {
       const rows = splitByDivision(derived.guts)[division];
       host.appendChild(rows.length ? table(
@@ -843,30 +969,39 @@ function exportIndividual() {
   for (const division of ['A', 'B']) {
     const problems = problemsFor(division, cfg);
     const ranked = splitByDivision(derived.individuals)[division];
-    ranked.forEach((r, i) => {
+    let rank = 0;
+    ranked.forEach((r) => {
+      const i = r.disqualified ? null : rank++;
       const cells = problems.map((p) => (r.byProblem[p] ? r.byProblem[p].score : ''));
       while (cells.length < widest) cells.push('');
-      rows.push([i + 1, division, r.contestantId, r.team, r.member, ...cells,
-        r.total, r.complete ? 'complete' : 'in progress']);
+      rows.push([i == null ? 'DQ' : i + 1, division, r.contestantId, r.team, r.member, ...cells,
+        r.total, r.complete ? 'complete' : 'in progress',
+        r.disqualified ? 'yes' : 'no', r.disqualified ? teamNote(r.team) : '']);
     });
   }
   downloadCsv('sfpo-2026-individual.csv', toCsv(
     ['rank_in_division', 'division', 'contestant_id', 'team', 'member',
-      'p1', 'p2', 'p3', 'p4', 'p5', 'total', 'status'],
+      'p1', 'p2', 'p3', 'p4', 'p5', 'total', 'status', 'disqualified', 'dq_reason'],
     rows));
 }
 
 function exportCombined() {
   const rows = [];
   for (const division of ['A', 'B']) {
-    splitByDivision(derived.combined)[division].forEach((r, i) => {
-      rows.push([i + 1, division, r.team, r.proof, r.guts ?? '', r.total, r.status,
+    const ordered = splitByDivision(derived.combined)[division];
+    let rank = 0;
+    ordered.forEach((r) => {
+      const i = r.disqualified ? null : rank++;
+      rows.push([i == null ? 'DQ' : i + 1, division, r.team, r.proof, r.proofMax, r.proofPct.toFixed(2),
+        r.guts ?? '', r.gutsMax || '', r.gutsPct.toFixed(2), r.total.toFixed(4), r.status,
+        r.disqualified ? 'yes' : 'no', r.disqualified ? teamNote(r.team) : '',
         r.members.map((m) => `${m.contestantId}:${m.total}`).join(' ')]);
     });
   }
   downloadCsv('sfpo-2026-combined.csv', toCsv(
-    ['rank_in_division', 'division', 'team', 'proof_total', 'guts_score', 'combined_total',
-      'status', 'member_breakdown'],
+    ['rank_in_division', 'division', 'team', 'proof_total', 'proof_max', 'proof_pct',
+      'guts_score', 'guts_max', 'guts_pct', 'combined_total', 'status',
+      'disqualified', 'dq_reason', 'member_breakdown'],
     rows));
 }
 
@@ -894,10 +1029,15 @@ function render() {
     : 'Nothing to delete.';
   for (const [id, value] of [['#teamCount', cfg.TEAM_COUNT],
     ['#secondReadThreshold', cfg.SECOND_READ_THRESHOLD],
-    ['#disagreementDelta', cfg.DISAGREEMENT_DELTA]]) {
+    ['#disagreementDelta', cfg.DISAGREEMENT_DELTA],
+    ['#proofWeight', cfg.PROOF_WEIGHT],
+    ['#gutsWeight', cfg.GUTS_WEIGHT],
+    ['#gutsMax', cfg.GUTS_MAX]]) {
     const input = $(id);
     if (input !== document.activeElement) input.value = value;
   }
+  renderWeightPreview();
+  renderDqList();
 }
 
 async function refresh() {
@@ -1020,15 +1160,60 @@ function wireSetup() {
 
   $('#saveSettings').addEventListener('click', async () => {
     try {
+      const proofWeight = Number($('#proofWeight').value);
+      const gutsWeight = Number($('#gutsWeight').value);
+      if (proofWeight + gutsWeight <= 0) {
+        toast('One of the weights has to be above zero.', 'error');
+        return;
+      }
       await store.saveSettings({
         team_count: Number($('#teamCount').value) || cfg.TEAM_COUNT,
         second_read_threshold: Number($('#secondReadThreshold').value),
         disagreement_delta: Number($('#disagreementDelta').value),
+        proof_weight: proofWeight,
+        guts_weight: gutsWeight,
+        guts_max: Math.max(0, Number($('#gutsMax').value) || 0),
       });
       await refresh();
       toast('Settings saved for every grader.');
     } catch (err) {
       toast(err.message || 'Could not save settings.', 'error');
+    }
+  });
+
+  for (const id of ['#proofWeight', '#gutsWeight', '#gutsMax']) {
+    $(id).addEventListener('input', renderWeightPreview);
+  }
+
+  $('#dqAdd').addEventListener('click', async () => {
+    const team = Number($('#dqTeam').value);
+    const reason = $('#dqReason').value.trim();
+    if (!Number.isInteger(team) || team < 1) {
+      toast('Enter the team number to disqualify.', 'error');
+      $('#dqTeam').focus();
+      return;
+    }
+    if (!reason) {
+      toast('Record a reason — it goes on the results and the export.', 'error');
+      $('#dqReason').focus();
+      return;
+    }
+    if (derived.dq.has(team)) {
+      toast(`Team ${team} is already disqualified.`, 'info');
+      return;
+    }
+    const button = $('#dqAdd');
+    button.disabled = true;
+    try {
+      await store.setTeamDq(team, { disqualified: true, reason, by: grader.name });
+      $('#dqTeam').value = '';
+      $('#dqReason').value = '';
+      await refresh();
+      toast(`Team ${team} disqualified. Its scores are kept.`, 'info');
+    } catch (err) {
+      toast(err.message || 'Could not disqualify that team.', 'error');
+    } finally {
+      button.disabled = false;
     }
   });
 

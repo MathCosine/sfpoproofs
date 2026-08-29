@@ -111,12 +111,27 @@ export function divisionByTeam(grades, teams, guts = []) {
   return div;
 }
 
+/** Team numbers a head grader has disqualified. */
+export function dqTeams(teams) {
+  return new Set(teams.filter((t) => t.disqualified).map((t) => t.team));
+}
+
+/**
+ * The most a team could possibly score on proofs in this division:
+ * a full roster, every problem, full marks. Small teams are measured
+ * against the same ceiling, which keeps this consistent with the team
+ * total being the plain sum of its members.
+ */
+export function proofMaxFor(division, cfg) {
+  return cfg.MEMBERS.length * problemsFor(division, cfg).length * cfg.MAX_SCORE;
+}
+
 /**
  * The roster we can't be given: every team in range, every member
  * letter, tagged with what we know. Teams with no division yet are
  * returned separately so the UI can ask instead of guessing.
  */
-export function buildRoster(cfg, divByTeam, seenContestants) {
+export function buildRoster(cfg, divByTeam, seenContestants, dq = new Set()) {
   const rows = { A: [], B: [], unassigned: [] };
   for (let team = 1; team <= cfg.TEAM_COUNT; team += 1) {
     const division = divByTeam.get(team) ?? null;
@@ -126,7 +141,7 @@ export function buildRoster(cfg, divByTeam, seenContestants) {
       member: m,
       seen: seenContestants.has(`${team}${m}`),
     }));
-    const entry = { team, division, members };
+    const entry = { team, division, members, disqualified: dq.has(team) };
     if (division === 'A' || division === 'B') rows[division].push(entry);
     else rows.unassigned.push(entry);
   }
@@ -145,6 +160,7 @@ export function buildRoster(cfg, divByTeam, seenContestants) {
       team,
       division,
       beyondRange: true,
+      disqualified: dq.has(team),
       members: [...letters].sort().map((m) => ({
         contestantId: `${team}${m}`, team, member: m, seen: true,
       })),
@@ -160,7 +176,7 @@ export function buildRoster(cfg, divByTeam, seenContestants) {
 // ---------------------------------------------------------------------
 
 /** Per-contestant totals for the individual proof round. */
-export function individualStandings(grades, divByTeam, cfg) {
+export function individualStandings(grades, divByTeam, cfg, dq = new Set()) {
   const byCell = indexGrades(grades);
   const people = new Map();
 
@@ -176,6 +192,7 @@ export function individualStandings(grades, divByTeam, cfg) {
         team: parsed.ok ? parsed.team : null,
         member: parsed.ok ? parsed.member : '?',
         division,
+        disqualified: parsed.ok && dq.has(parsed.team),
         total: 0,
         byProblem: {},
         gradedCount: 0,
@@ -194,12 +211,16 @@ export function individualStandings(grades, divByTeam, cfg) {
     person.expected = expected;
     person.complete = expected > 0 && person.gradedCount >= expected;
   }
+  // Disqualified contestants keep every score but always sort last, so a
+  // ranked list can be read straight down without special-casing.
   return [...people.values()].sort(
-    (a, b) => b.total - a.total || a.contestantId.localeCompare(b.contestantId));
+    (a, b) => Number(a.disqualified) - Number(b.disqualified)
+      || b.total - a.total
+      || a.contestantId.localeCompare(b.contestantId));
 }
 
 /** Team proof score = the sum of its members' individual totals. */
-export function teamProofStandings(individuals, divByTeam, cfg) {
+export function teamProofStandings(individuals, divByTeam, cfg, dq = new Set()) {
   const teamsMap = new Map();
   for (const person of individuals) {
     if (person.team == null) continue;
@@ -207,6 +228,7 @@ export function teamProofStandings(individuals, divByTeam, cfg) {
       teamsMap.set(person.team, {
         team: person.team,
         division: divByTeam.get(person.team) ?? person.division,
+        disqualified: dq.has(person.team),
         proof: 0,
         members: [],
         complete: true,
@@ -222,7 +244,9 @@ export function teamProofStandings(individuals, divByTeam, cfg) {
   for (const t of teamsMap.values()) {
     t.members.sort((a, b) => a.member.localeCompare(b.member));
   }
-  return [...teamsMap.values()].sort((a, b) => b.proof - a.proof || a.team - b.team);
+  return [...teamsMap.values()].sort(
+    (a, b) => Number(a.disqualified) - Number(b.disqualified)
+      || b.proof - a.proof || a.team - b.team);
 }
 
 export function gutsStandings(guts, divByTeam) {
@@ -236,14 +260,37 @@ export function gutsStandings(guts, divByTeam) {
 }
 
 /**
- * Combined = team proof total + that team's guts score. A team that has
- * one half but not the other still ranks, flagged as partial, because a
- * missing guts import should be obvious rather than quietly zeroed.
+ * Combined standing = a weighted blend of proof and guts.
+ *
+ * The weights are applied to each side's PERCENTAGE of its own maximum,
+ * never to the raw points. That distinction matters: a Division B team
+ * can score 140 on proofs where Division A tops out at 84, and guts is
+ * on a third scale entirely — so weighting raw points would hand guts a
+ * different real share in each division (roughly 18% in B against 26% in
+ * A for the same nominal "20%"). Normalising first makes 80/20 mean 80/20
+ * everywhere.
+ *
+ *   proofPct = team proof / (members x problems x max score)
+ *   gutsPct  = team guts  / gutsMax
+ *   combined = 100 x (Wp x proofPct + Wg x gutsPct) / (Wp + Wg)
+ *
+ * gutsMax comes from cfg.GUTS_MAX, or the highest guts score present when
+ * that is 0 — which makes the top guts team the 100% reference.
+ *
+ * A team that has one half but not the other still ranks, flagged, so a
+ * missing guts import is obvious rather than quietly scored as zero.
+ * Disqualified teams keep every point and always sort last.
  */
-export function combinedStandings(teamProof, guts, divByTeam) {
+export function combinedStandings(teamProof, guts, divByTeam, cfg, dq = new Set()) {
   const gutsByTeam = new Map(guts.map((g) => [g.team, Number(g.score)]));
-  const rows = new Map();
+  const observedMax = gutsByTeam.size ? Math.max(...gutsByTeam.values()) : 0;
+  const gutsMax = Number(cfg?.GUTS_MAX) > 0 ? Number(cfg.GUTS_MAX) : observedMax;
 
+  const wProof = Number(cfg?.PROOF_WEIGHT ?? 80);
+  const wGuts = Number(cfg?.GUTS_WEIGHT ?? 20);
+  const wTotal = wProof + wGuts;
+
+  const rows = new Map();
   for (const t of teamProof) {
     rows.set(t.team, {
       team: t.team,
@@ -254,6 +301,7 @@ export function combinedStandings(teamProof, guts, divByTeam) {
       complete: t.complete,
       openFlags: t.openFlags,
       members: t.members,
+      disqualified: t.disqualified || dq.has(t.team),
     });
   }
   for (const [team, score] of gutsByTeam) {
@@ -267,25 +315,37 @@ export function combinedStandings(teamProof, guts, divByTeam) {
       complete: false,
       openFlags: 0,
       members: [],
+      disqualified: dq.has(team),
     });
   }
+
   return [...rows.values()]
     .map((r) => {
-      // A combined total is only final once every member's proofs are
-      // graded AND the guts score is in. Anything else is provisional,
-      // so a half-finished team is never mistaken for a winner.
+      const proofMax = r.division ? proofMaxFor(r.division, cfg) : 0;
+      const proofPct = proofMax ? r.proof / proofMax : 0;
+      const gutsPct = gutsMax && r.guts != null ? r.guts / gutsMax : 0;
+      const total = wTotal ? ((wProof * proofPct + wGuts * gutsPct) / wTotal) * 100 : 0;
+
       let status = 'final';
-      if (!r.hasProof) status = 'guts only';
+      if (r.disqualified) status = 'disqualified';
+      else if (!r.hasProof) status = 'guts only';
       else if (r.guts == null) status = 'awaiting guts';
       else if (!r.complete) status = 'grading';
+
       return {
         ...r,
-        total: r.proof + (r.guts ?? 0),
+        proofPct: proofPct * 100,
+        gutsPct: gutsPct * 100,
+        proofMax,
+        gutsMax,
+        total,
+        raw: r.proof + (r.guts ?? 0),
         status,
-        partial: status !== 'final',
+        partial: status !== 'final' && status !== 'disqualified',
       };
     })
-    .sort((a, b) => b.total - a.total || a.team - b.team);
+    .sort((a, b) => Number(a.disqualified) - Number(b.disqualified)
+      || b.total - a.total || a.team - b.team);
 }
 
 export function splitByDivision(rows) {
@@ -324,6 +384,8 @@ export function suggestQueue({ roster, byCell, claims, cfg, myGraderId, limit = 
   const consider = (entry, member) => {
     const division = entry.division;
     if (division !== 'A' && division !== 'B') return;
+    // Grading a disqualified team's remaining proofs is wasted effort.
+    if (entry.disqualified) return;
     for (const problem of problemsFor(division, cfg)) {
       const key = cellKey(member.contestantId, problem);
       const claim = claims.get(key);
@@ -377,6 +439,7 @@ export function progressFor(division, roster, byCell, cfg) {
   const problems = problemsFor(division, cfg);
   let expected = 0; let done = 0; let flagged = 0;
   for (const entry of roster[division]) {
+    if (entry.disqualified) continue;
     for (const member of entry.members) {
       if (!member.seen) continue;
       for (const problem of problems) {

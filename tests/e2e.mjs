@@ -255,8 +255,93 @@ const ragged = lines.slice(1).filter((l) => l.split(',').length !== width);
 check('individual CSV columns line up across both divisions',
   ragged.length === 0, `header ${width} cols, ${ragged.length} ragged rows`);
 const divA = lines.slice(1).find((l) => l.split(',')[1] === 'A');
-check('a Division A row still ends with total and status',
-  /,\d+(\.\d+)?,(complete|in progress)$/.test(divA), divA);
+check('a Division A row keeps total, status and the DQ columns',
+  /,\d+(\.\d+)?,(complete|in progress),(yes|no),[^,]*$/.test(divA), divA);
+
+// ---- weighting ---------------------------------------------------
+await page.click('.tab[data-tab="setup"]');
+check('the weights default to 80/20',
+  (await page.inputValue('#proofWeight')) === '80' && (await page.inputValue('#gutsWeight')) === '20',
+  `${await page.inputValue('#proofWeight')}/${await page.inputValue('#gutsWeight')}`);
+const preview = await page.textContent('#weightPreview');
+check('the weighting preview spells out the split',
+  preview.includes('80 from proofs and 20 from guts'), preview.trim().slice(0, 70));
+
+await page.fill('#gutsWeight', '0');
+await page.waitForTimeout(150);
+check('changing a weight updates the preview live',
+  (await page.textContent('#weightPreview')).includes('100 from proofs and 0 from guts'));
+await page.fill('#gutsWeight', '20');
+
+await page.click('.tab[data-tab="leaderboard"]');
+await page.click('.tab[data-board="combined"]');
+await page.waitForTimeout(300);
+const caption = await page.textContent('#boards');
+check('the leaderboard states the formula',
+  caption.includes('80% of the proof score plus 20% of the guts score'),
+  caption.trim().slice(0, 80));
+const topCombined = await page.locator('#boards table tbody tr').first().textContent();
+check('combined scores are on a 0-100 scale',
+  /\d+\.\d{2}/.test(topCombined), topCombined.trim());
+
+// ---- disqualification --------------------------------------------
+const rankedBefore = await page.locator('#boards table tbody tr').count();
+// Read the cell, not the row text — concatenated columns turn
+// "Team 7" + "24.0" into a bogus "Team 724".
+const topTeam = ((await page.locator('#boards table tbody tr').first()
+  .locator('td').nth(1).textContent()).match(/(\d+)/) ?? [])[1];
+check('there is a leader to disqualify', Boolean(topTeam), topCombined.trim());
+
+await page.click('.tab[data-tab="setup"]');
+await page.click('#dqAdd');
+await page.waitForTimeout(300);
+check('a DQ without a team number is refused',
+  (await page.locator('.toast').last().textContent()).includes('team number'),
+  await page.locator('.toast').last().textContent());
+
+await page.fill('#dqTeam', topTeam);
+await page.click('#dqAdd');
+await page.waitForTimeout(300);
+check('a DQ without a reason is refused',
+  (await page.locator('.toast').last().textContent()).includes('reason'),
+  await page.locator('.toast').last().textContent());
+
+await page.fill('#dqReason', 'Outside collaboration');
+await page.click('#dqAdd');
+await page.waitForTimeout(600);
+check('the DQ list shows the team and reason',
+  (await page.textContent('#dqList')).includes(`Team ${topTeam}`)
+  && (await page.textContent('#dqList')).includes('Outside collaboration'));
+
+await page.click('.tab[data-tab="leaderboard"]');
+await page.waitForTimeout(300);
+const rankedAfter = await page.locator('#boards .table-wrap:not(.table-wrap--dq) tbody tr').count();
+check('the disqualified team leaves the ranking', rankedAfter === rankedBefore - 1,
+  `${rankedBefore} -> ${rankedAfter}`);
+const dqTable = await page.locator('#boards .table-wrap--dq').first().textContent();
+check('it appears in a disqualified table with its score and reason',
+  dqTable.includes(`Team ${topTeam}`) && dqTable.includes('Outside collaboration'), dqTable.trim().slice(0, 80));
+
+await page.click('.tab[data-tab="matrix"]');
+await page.waitForTimeout(300);
+check('the matrix marks the team DQ',
+  (await page.locator('.matrix__team--dq').count()) >= 1);
+
+const queueAfter = await page.locator('.suggest__item').allTextContents();
+check('the queue stops offering that team',
+  !queueAfter.some((t) => new RegExp(`^${topTeam}[A-D]`).test(t.trim())),
+  queueAfter.slice(0, 2).join(' | '));
+
+// Reinstating must restore the team exactly.
+await page.click('.tab[data-tab="setup"]');
+await page.click('#dqList button');
+await page.waitForTimeout(600);
+check('reinstating clears the DQ list',
+  (await page.textContent('#dqList')).includes('No teams are disqualified'));
+await page.click('.tab[data-tab="leaderboard"]');
+await page.waitForTimeout(300);
+check('the team is back in the ranking',
+  (await page.locator('#boards .table-wrap:not(.table-wrap--dq) tbody tr').count()) === rankedBefore);
 
 // ---- clearing test data -----------------------------------------
 await page.click('.tab[data-tab="setup"]');

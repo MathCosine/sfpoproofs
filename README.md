@@ -41,9 +41,31 @@ division, live. Grey is untouched, green is graded, amber wants a second read, r
 is a conflict, purple is someone grading it this second. Click any cell to open it.
 
 **Three leaderboards, computed as you go.** Individual (per contestant), Guts
-(imported), and Combined (team proof total + guts), each split into Division A and
-Division B. Rows say plainly why they are not final yet — `grading`,
-`awaiting guts`, `guts only` — so a half-graded team is never mistaken for a winner.
+(imported), and Combined, each split into Division A and Division B. Rows say plainly
+why they are not final yet — `grading`, `awaiting guts`, `guts only` — so a
+half-graded team is never mistaken for a winner.
+
+**Combined is a weighted blend, done properly.** Default 80% proof / 20% guts,
+editable from the app. The weights apply to each side's *share of its own maximum*,
+not to raw points:
+
+```
+proofPct = team proof / (4 members × problems × 7)      # 84 in Div A, 140 in Div B
+gutsPct  = team guts  / gutsMax                          # highest imported, or set by hand
+combined = 100 × (80 × proofPct + 20 × gutsPct) / 100
+```
+
+That distinction is not pedantry. Weighting the raw points instead would have given
+guts roughly 26% of the result in Division A and 18% in Division B for the same
+nominal "20%" — a different contest in each division. Normalising first makes 80/20
+mean 80/20 everywhere. Hover any combined score to see both halves; the export
+carries the percentages and maxima so the result is checkable by hand.
+
+**Disqualification.** Guts & export → Disqualifications takes a team number and a
+reason. A DQ'd team keeps every grade it has: it stops ranking, drops out of the
+grading queue and the coverage count, is marked in the matrix, and is listed
+separately under each leaderboard with its reason. Reinstating restores the exact
+score — nothing is ever deleted.
 
 **Guts round by CSV.** Drop in a `team,score` file. An optional third `division`
 column assigns divisions at the same time.
@@ -163,8 +185,8 @@ real thing. The browser tests pin themselves to `?demo=1` for exactly this reaso
 ## Tests
 
 ```bash
-npm test                 # 28 unit tests over the scoring + CSV logic
-npm run test:e2e         # 55 browser checks, driving two tabs as two graders
+npm test                 # 39 unit tests over the scoring + CSV logic
+npm run test:e2e         # 70 browser checks, driving two tabs as two graders
                          # (set CHROMIUM_PATH to reuse a preinstalled browser)
 ```
 

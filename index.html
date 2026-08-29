@@ -229,7 +229,50 @@
             <input class="input" id="disagreementDelta" type="number" min="0.5" max="7" step="0.5">
           </div>
         </div>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Combined score weighting</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          The weights apply to each side's <b>share of its own maximum</b>, not to raw points.
+          They have to: a Division B team can score 140 on proofs where Division A tops out at
+          84, and guts is on a third scale — so weighting raw points would quietly give guts a
+          different real share in each division.
+        </p>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="proofWeight">Proof weight</label>
+            <input class="input" id="proofWeight" type="number" min="0" max="100" step="1">
+          </div>
+          <div class="field">
+            <label class="field__label" for="gutsWeight">Guts weight</label>
+            <input class="input" id="gutsWeight" type="number" min="0" max="100" step="1">
+          </div>
+          <div class="field">
+            <label class="field__label" for="gutsMax">Guts is out of</label>
+            <input class="input" id="gutsMax" type="number" min="0" step="1" placeholder="0">
+            <p class="field__hint">0 uses the highest guts score imported.</p>
+          </div>
+        </div>
+        <div class="banner banner--info" id="weightPreview"></div>
         <button class="btn btn--primary" id="saveSettings">Save settings for everyone</button>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Disqualifications</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          A disqualified team keeps every grade it has — it just stops ranking, drops out of
+          the grading queue, and is listed separately at the bottom of each leaderboard.
+          Reinstating restores the exact score.
+        </p>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="dqTeam">Team number</label>
+            <input class="input" id="dqTeam" type="number" min="1" placeholder="37" autocomplete="off">
+          </div>
+          <div class="field">
+            <label class="field__label" for="dqReason">Reason</label>
+            <input class="input" id="dqReason" placeholder="Outside collaboration" autocomplete="off">
+          </div>
+        </div>
+        <button class="btn btn--warn" id="dqAdd">Disqualify team</button>
+        <div id="dqList" style="margin-top:16px"></div>
 
         <div class="panel__head" style="margin-top:28px"><h2>Export</h2></div>
         <div class="chip-row">

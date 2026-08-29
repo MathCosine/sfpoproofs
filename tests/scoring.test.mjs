@@ -5,13 +5,16 @@ import assert from 'node:assert/strict';
 import {
   parseContestantId, summariseCell, indexGrades, liveClaims, divisionByTeam,
   buildRoster, individualStandings, teamProofStandings, combinedStandings,
-  splitByDivision, suggestQueue, progressFor, cellKey,
+  splitByDivision, suggestQueue, progressFor, cellKey, dqTeams, proofMaxFor,
 } from '../assets/scoring.js';
 import { parseGutsCsv } from '../assets/csv.js';
 
 const cfg = {
   PROBLEMS: { A: ['A1', 'A2', 'A3'], B: ['B1', 'B2', 'B3', 'B4', 'B5'] },
   MAX_SCORE: 7,
+  PROOF_WEIGHT: 80,
+  GUTS_WEIGHT: 20,
+  GUTS_MAX: 0,
   SECOND_READ_THRESHOLD: 5,
   DISAGREEMENT_DELTA: 2,
   TEAM_COUNT: 5,
@@ -152,36 +155,88 @@ test('team proof score is the sum of its members', () => {
   assert.equal(teams[0].members.length, 3, 'a three-person team is fine');
 });
 
-test('combined = proof + guts, and a missing half is flagged provisional', () => {
+test('the maximum team proof follows the division', () => {
+  assert.equal(proofMaxFor('A', cfg), 4 * 3 * 7);
+  assert.equal(proofMaxFor('B', cfg), 4 * 5 * 7);
+});
+
+test('combined blends the two percentages, not the raw points', () => {
+  const div = new Map([[1, 'A']]);
+  // A perfect Division A proof score, and the top guts score.
+  const teams = [{ team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] }];
+  const [row] = combinedStandings(teams, [{ team: 1, score: 120 }], div, cfg);
+  assert.equal(row.proofPct, 100);
+  assert.equal(row.gutsPct, 100);
+  assert.equal(row.total, 100, 'perfect on both sides is a perfect combined score');
+  assert.equal(row.raw, 204, 'the raw points are still reported alongside');
+});
+
+test('80/20 means 80/20 in both divisions', () => {
+  // Perfect proofs, zero guts => exactly the proof weight, whatever the
+  // division's proof ceiling or the guts scale happens to be.
+  for (const [division, proof] of [['A', 84], ['B', 140]]) {
+    const div = new Map([[1, division], [2, division]]);
+    const teams = [
+      { team: 1, division, proof, complete: true, openFlags: 0, members: [] },
+      { team: 2, division, proof: 0, complete: true, openFlags: 0, members: [] },
+    ];
+    const rows = combinedStandings(teams, [{ team: 1, score: 0 }, { team: 2, score: 200 }], div, cfg);
+    const by = Object.fromEntries(rows.map((r) => [r.team, r]));
+    assert.equal(by[1].total, 80, `division ${division}: all proof, no guts`);
+    assert.equal(by[2].total, 20, `division ${division}: all guts, no proof`);
+  }
+});
+
+test('an explicit guts maximum overrides the observed one', () => {
+  const div = new Map([[1, 'A']]);
+  const teams = [{ team: 1, division: 'A', proof: 0, complete: true, openFlags: 0, members: [] }];
+  const observed = combinedStandings(teams, [{ team: 1, score: 60 }], div, cfg);
+  assert.equal(observed[0].total, 20, 'the only guts score is the reference');
+
+  const pinned = combinedStandings(teams, [{ team: 1, score: 60 }], div, { ...cfg, GUTS_MAX: 120 });
+  assert.equal(pinned[0].total, 10, 'half of a 120 ceiling is half the guts weight');
+});
+
+test('weights are taken as a ratio, so 8/2 matches 80/20', () => {
+  const div = new Map([[1, 'A']]);
+  const teams = [{ team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] }];
+  const a = combinedStandings(teams, [{ team: 1, score: 0 }], div, cfg)[0].total;
+  const b = combinedStandings(teams, [{ team: 1, score: 0 }],
+    div, { ...cfg, PROOF_WEIGHT: 8, GUTS_WEIGHT: 2 })[0].total;
+  assert.equal(a, b);
+});
+
+test('a missing half is still flagged provisional', () => {
   const grades = [grade('4A', 'A1', 6, 'g1', '2026-08-29T10:00:00Z')];
   const div = divisionByTeam(grades, [], []);
   const teams = teamProofStandings(individualStandings(grades, div, cfg), div, cfg);
 
-  const withGuts = combinedStandings(teams, [{ team: 4, score: 30 }], div);
-  assert.equal(withGuts[0].total, 36);
+  const withGuts = combinedStandings(teams, [{ team: 4, score: 30 }], div, cfg);
   assert.equal(withGuts[0].partial, true, 'proofs are not finished yet');
+  assert.equal(withGuts[0].status, 'grading');
 
-  const noGuts = combinedStandings(teams, [], div);
+  const noGuts = combinedStandings(teams, [], div, cfg);
   assert.equal(noGuts[0].guts, null);
-  assert.equal(noGuts[0].total, 6);
+  assert.equal(noGuts[0].gutsPct, 0);
   assert.equal(noGuts[0].partial, true);
 });
 
 test('a guts-only team still appears in the combined table', () => {
-  const rows = combinedStandings([], [{ team: 9, score: 50 }], new Map([[9, 'B']]));
+  const rows = combinedStandings([], [{ team: 9, score: 50 }], new Map([[9, 'B']]), cfg);
   assert.equal(rows.length, 1);
   assert.equal(rows[0].hasProof, false);
-  assert.equal(rows[0].total, 50);
+  assert.equal(rows[0].total, 20, 'top guts, no proofs => the full guts weight');
   assert.equal(rows[0].division, 'B');
+  assert.equal(rows[0].status, 'guts only');
 });
 
 test('combined ranks highest first', () => {
   const div = new Map([[1, 'A'], [2, 'A']]);
   const rows = combinedStandings(
     [{ team: 1, division: 'A', proof: 10, complete: true, openFlags: 0, members: [] },
-      { team: 2, division: 'A', proof: 5, complete: true, openFlags: 0, members: [] }],
-    [{ team: 1, score: 10 }, { team: 2, score: 40 }], div);
-  assert.deepEqual(rows.map((r) => r.team), [2, 1], 'guts can overturn the proof order');
+      { team: 2, division: 'A', proof: 8, complete: true, openFlags: 0, members: [] }],
+    [{ team: 1, score: 0 }, { team: 2, score: 80 }], div, cfg);
+  assert.deepEqual(rows.map((r) => r.team), [2, 1], 'a big guts win can overturn a small proof lead');
 });
 
 test('the queue puts conflicts first, then second reads, then unfinished people', () => {
@@ -298,7 +353,7 @@ test('combined status names exactly why a row is not final', () => {
     { team: 3, division: 'A', proof: 12, complete: true, openFlags: 0, members: [] },
   ];
   const rows = combinedStandings(
-    teams, [{ team: 1, score: 40 }, { team: 2, score: 40 }, { team: 4, score: 40 }], div);
+    teams, [{ team: 1, score: 40 }, { team: 2, score: 40 }, { team: 4, score: 40 }], div, cfg);
   const by = Object.fromEntries(rows.map((r) => [r.team, r]));
   assert.equal(by[1].status, 'final');
   assert.equal(by[2].status, 'grading', 'proofs still open');
@@ -306,4 +361,86 @@ test('combined status names exactly why a row is not final', () => {
   assert.equal(by[4].status, 'guts only');
   assert.equal(by[1].partial, false);
   assert.ok([2, 3, 4].every((t) => by[t].partial));
+});
+
+// ---------------------------------------------------------------------
+// Disqualification
+// ---------------------------------------------------------------------
+
+test('dqTeams reads the flag off the teams table', () => {
+  const dq = dqTeams([{ team: 3, disqualified: true }, { team: 4, disqualified: false },
+    { team: 5 }]);
+  assert.deepEqual([...dq], [3]);
+});
+
+test('a disqualified team keeps every point but always sorts last', () => {
+  const div = new Map([[1, 'A'], [2, 'A']]);
+  const teams = [
+    { team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] },
+    { team: 2, division: 'A', proof: 21, complete: true, openFlags: 0, members: [] },
+  ];
+  const rows = combinedStandings(teams, [{ team: 1, score: 100 }, { team: 2, score: 20 }],
+    div, cfg, new Set([1]));
+  assert.deepEqual(rows.map((r) => r.team), [2, 1], 'the top team is disqualified, so it drops');
+  const dqd = rows.find((r) => r.team === 1);
+  assert.equal(dqd.disqualified, true);
+  assert.equal(dqd.status, 'disqualified');
+  assert.equal(dqd.proof, 84, 'the score is preserved, not erased');
+  assert.equal(dqd.partial, false, 'disqualified is a verdict, not an unfinished state');
+});
+
+test('disqualification reaches the contestants on that team', () => {
+  const grades = [
+    grade('3A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z'),
+    grade('4A', 'A1', 5, 'g1', '2026-08-29T10:00:00Z'),
+  ];
+  const div = divisionByTeam(grades, [], []);
+  const people = individualStandings(grades, div, cfg, new Set([3]));
+  assert.deepEqual(people.map((p) => p.contestantId), ['4A', '3A'],
+    'the higher scorer is on the disqualified team, so it sorts last');
+  assert.equal(people.find((p) => p.contestantId === '3A').disqualified, true);
+  assert.equal(people.find((p) => p.contestantId === '4A').disqualified, false);
+
+  const teams = teamProofStandings(people, div, cfg, new Set([3]));
+  assert.equal(teams.find((t) => t.team === 3).disqualified, true);
+});
+
+test('the queue stops offering a disqualified team', () => {
+  const div = new Map([[1, 'A'], [2, 'A']]);
+  const roster = buildRoster(cfg, div, new Set(['1A', '2A']), new Set([1]));
+  assert.equal(roster.A.find((t) => t.team === 1).disqualified, true);
+
+  const queue = suggestQueue({
+    roster, byCell: new Map(), claims: new Map(), cfg, myGraderId: 'me', limit: 50,
+  });
+  assert.equal(queue.some((q) => q.contestantId.startsWith('1')), false,
+    'nothing from team 1 is worth grading any more');
+  assert.ok(queue.some((q) => q.contestantId.startsWith('2')));
+});
+
+test('coverage ignores a disqualified team entirely', () => {
+  const grades = [
+    grade('1A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z'),
+    grade('2A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z'),
+  ];
+  const div = divisionByTeam(grades, [], []);
+  const byCell = indexGrades(grades);
+  const seen = new Set(['1A', '2A']);
+
+  const before = progressFor('A', buildRoster(cfg, div, seen), byCell, cfg);
+  assert.deepEqual([before.done, before.expected], [2, 6]);
+
+  const after = progressFor('A', buildRoster(cfg, div, seen, new Set([1])), byCell, cfg);
+  assert.deepEqual([after.done, after.expected], [1, 3],
+    'the disqualified team leaves both sides of the fraction');
+});
+
+test('reinstating a team restores it exactly', () => {
+  const div = new Map([[1, 'A']]);
+  const teams = [{ team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] }];
+  const guts = [{ team: 1, score: 100 }];
+  const out = combinedStandings(teams, guts, div, cfg, new Set([1]));
+  const back = combinedStandings(teams, guts, div, cfg, new Set());
+  assert.equal(out[0].total, back[0].total, 'the number never changed, only the ranking');
+  assert.equal(back[0].status, 'final');
 });

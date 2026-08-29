@@ -31,6 +31,13 @@ export const CONFIG = {
   MAX_SCORE: 7,          // olympiad 0-7
   ALLOW_HALF_POINTS: false,
 
+  // Combined score = weighted blend of proof and guts. The weights apply
+  // to each side's PERCENTAGE of its own maximum, never to raw points —
+  // see README. GUTS_MAX 0 means "use the highest guts score present".
+  PROOF_WEIGHT: 80,
+  GUTS_WEIGHT: 20,
+  GUTS_MAX: 0,
+
   // A cell is offered for a second read when its single score is at or
   // above this. Two reads differing by DISAGREEMENT_DELTA or more are
   // flagged as a conflict for the head grader.

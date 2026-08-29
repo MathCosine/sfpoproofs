@@ -21,6 +21,17 @@ create table if not exists app_settings (
 );
 insert into app_settings (id) values (1) on conflict (id) do nothing;
 
+-- Combined-score weighting.
+--
+-- Proof and guts are on different scales (a Division B team can score 140
+-- on proofs; guts might top out anywhere), so the weights are applied to
+-- each component's PERCENTAGE of its own maximum, not to the raw points.
+-- Weighting raw points would silently hand guts a different share in each
+-- division. guts_max = 0 means "use the highest guts score present".
+alter table app_settings add column if not exists proof_weight numeric not null default 80;
+alter table app_settings add column if not exists guts_weight  numeric not null default 20;
+alter table app_settings add column if not exists guts_max     numeric not null default 0;
+
 -- ---------------------------------------------------------------------
 -- Teams.  Division is normally inferred from the first problem graded
 -- (A1-A3 => Division A, B1-B5 => Division B) but can be set by hand or
@@ -32,6 +43,14 @@ create table if not exists teams (
   note       text not null default '',
   updated_at timestamptz not null default now()
 );
+
+-- Disqualification. A DQ never deletes anything: the team's grades stay
+-- exactly where they are, the team simply stops ranking and drops out of
+-- the grading queue. Reinstating is one click and loses nothing.
+alter table teams add column if not exists disqualified boolean not null default false;
+alter table teams add column if not exists dq_reason    text    not null default '';
+alter table teams add column if not exists dq_by        text    not null default '';
+alter table teams add column if not exists dq_at        timestamptz;
 
 -- ---------------------------------------------------------------------
 -- Grades.  One row per (contestant, problem, grader) — so a second
