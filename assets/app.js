@@ -26,7 +26,14 @@ const el = (tag, cls, text) => {
 // ---------------------------------------------------------------------
 
 const cfg = { ...CONFIG };
-const store = createStore(cfg);
+
+// ?demo=1 runs a configured portal against browser-local storage instead
+// of the real database — for training graders, showing someone the tool,
+// and for the browser tests, which must never touch a live contest. The
+// top bar says "demo mode" in amber the whole time, so it cannot be
+// mistaken for the real thing.
+const forceDemo = new URLSearchParams(location.search).has('demo');
+const store = createStore(cfg, { forceDemo });
 
 const grader = {
   id: localStorage.getItem('sfpo-grader-id') || crypto.randomUUID(),

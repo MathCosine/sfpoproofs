@@ -155,11 +155,16 @@ data kept in `localStorage`, and a second browser tab acts as a second grader so
 can try the live locking without a database. **Guts & export → Load demo data** fills
 in a believable half-graded contest to click around in.
 
+Once credentials *are* configured, add `?demo=1` to the URL to get the same sandbox
+without touching the real database — useful for training a grader on the live site.
+The top bar reads **demo mode** in amber throughout, so it can't be mistaken for the
+real thing. The browser tests pin themselves to `?demo=1` for exactly this reason.
+
 ## Tests
 
 ```bash
 npm test                 # 28 unit tests over the scoring + CSV logic
-npm run test:e2e         # 54 browser checks, driving two tabs as two graders
+npm run test:e2e         # 55 browser checks, driving two tabs as two graders
                          # (set CHROMIUM_PATH to reuse a preinstalled browser)
 ```
 

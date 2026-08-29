@@ -356,7 +356,12 @@ function demoBackend() {
   };
 }
 
-export function createStore(cfg) {
+/**
+ * `forceDemo` keeps a configured deployment off its own database — used
+ * by ?demo=1 for training a grader or showing the portal to someone, and
+ * by the browser tests, which must never write into a live contest.
+ */
+export function createStore(cfg, { forceDemo = false } = {}) {
   const configured = Boolean(cfg.SUPABASE_URL && cfg.SUPABASE_ANON_KEY);
-  return configured ? supabaseBackend(cfg) : demoBackend();
+  return configured && !forceDemo ? supabaseBackend(cfg) : demoBackend();
 }

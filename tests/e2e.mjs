@@ -22,7 +22,9 @@ const server = createServer(async (req, res) => {
   }
 });
 await new Promise((r) => server.listen(0, '127.0.0.1', r));
-const BASE = `http://127.0.0.1:${server.address().port}/`;
+// ?demo=1 is mandatory here: assets/config.js carries real Supabase
+// credentials, and these tests must never write into the live contest.
+const BASE = `http://127.0.0.1:${server.address().port}/?demo=1`;
 const out = [];
 const check = (name, ok, detail = '') => {
   out.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
@@ -38,6 +40,10 @@ const ctx = await browser.newContext({ viewport: { width: 1500, height: 980 } })
 // exception is. Keep them apart.
 const jsErrors = [];
 const resourceErrors = [];
+// Nothing in this run may reach the real project. config.js holds live
+// credentials, so a single request to supabase.co means ?demo=1 stopped
+// working and the tests are writing into the contest.
+const liveRequests = [];
 const watch = (p, tag) => {
   p.on('pageerror', (e) => jsErrors.push(`${tag}: ${e}`));
   p.on('console', (m) => {
@@ -46,6 +52,9 @@ const watch = (p, tag) => {
       .push(`${tag}: ${m.text()}`);
   });
   p.on('requestfailed', (r) => resourceErrors.push(`${tag}: ${r.url()}`));
+  p.on('request', (r) => {
+    if (/supabase\.co|supabase\.in/.test(r.url())) liveRequests.push(`${tag}: ${r.url()}`);
+  });
 };
 
 const page = await ctx.newPage();
@@ -55,7 +64,8 @@ await page.goto(BASE, { waitUntil: 'networkidle' });
 
 // ---- gate -------------------------------------------------------
 check('gate is shown', await page.isVisible('#gate'));
-check('demo banner shown when unconfigured', await page.isVisible('#gateDemo'));
+check('?demo=1 forces the demo store even with credentials present',
+  await page.isVisible('#gateDemo'));
 check('password field hidden in demo mode', !(await page.isVisible('#passwordField')));
 
 await page.fill('#graderName', 'Priya Raman');
@@ -294,6 +304,8 @@ await page.waitForTimeout(400);
 await page.screenshot({ path: 'docs/screenshot-leaderboard.png' });
 
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));
+check('never touched the live Supabase project', liveRequests.length === 0,
+  liveRequests.slice(0, 2).join(' | '));
 if (resourceErrors.length) {
   out.push(`NOTE  ${resourceErrors.length} resource fetch(es) failed in this sandbox: `
     + [...new Set(resourceErrors.map((e) => e.split(': ').pop().split('?')[0]))].join(', '));
