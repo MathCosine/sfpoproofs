@@ -1,108 +1,131 @@
 -- =====================================================================
---  SFPO 2026 — Staff Grading Portal
---  Supabase / Postgres schema.  Paste this whole file into the Supabase
---  SQL Editor and hit RUN.  It is safe to run more than once.
+--  Answer-round contest portal — Supabase / Postgres schema
+--
+--  Individual round : 20 problems, non-negative integers, 1 point each
+--  Guts round       : 7 sets of 4, per-set point values, 75 minutes
+--
+--  Paste this whole file into the Supabase SQL Editor and hit RUN.
+--  Safe to run more than once.
+--
+--  NOTE: this replaces the SFPO proof-grading schema. If you are reusing
+--  an existing project, run the DROP block at the bottom of this file
+--  first, or start a fresh Supabase project.
 -- =====================================================================
 
 create extension if not exists "pgcrypto";
 
 -- ---------------------------------------------------------------------
--- Contest-wide settings.  Exactly one row (id = 1).
+-- Settings. One row (id = 1).
 -- ---------------------------------------------------------------------
 create table if not exists app_settings (
   id                    int primary key default 1,
-  team_count            int     not null default 100,  -- expected teams: 1..team_count
-  max_members           int     not null default 4,    -- A..D
-  max_score             numeric not null default 7,    -- olympiad 0-7
-  second_read_threshold numeric not null default 5,    -- >= this => suggest a 2nd read
-  disagreement_delta    numeric not null default 2,    -- 2 reads differing by >= this => conflict
+  team_count            int     not null default 100,
+  individual_weight     numeric not null default 80,
+  guts_weight           numeric not null default 20,
+  double_entry          boolean not null default false,
   updated_at            timestamptz not null default now(),
   constraint app_settings_singleton check (id = 1)
 );
 insert into app_settings (id) values (1) on conflict (id) do nothing;
 
--- Combined-score weighting.
+-- ---------------------------------------------------------------------
+-- Guts timer and freeze, read by the public leaderboard.
 --
--- Proof and guts are on different scales (a Division B team can score 140
--- on proofs; guts might top out anywhere), so the weights are applied to
--- each component's PERCENTAGE of its own maximum, not to the raw points.
--- Weighting raw points would silently hand guts a different share in each
--- division. guts_max = 0 means "use the highest guts score present".
-alter table app_settings add column if not exists proof_weight numeric not null default 80;
-alter table app_settings add column if not exists guts_weight  numeric not null default 20;
-alter table app_settings add column if not exists guts_max     numeric not null default 0;
+-- The clock is stored as an absolute end time while running and as a
+-- remaining count while paused, so a page that joins late computes the
+-- same number as everyone else without needing to have watched it tick.
+-- ---------------------------------------------------------------------
+create table if not exists contest_state (
+  id                 int primary key default 1,
+  contest_name       text    not null default 'Cowconuts 2026 Annual Math Contest',
+  guts_duration      int     not null default 4500,   -- 75 minutes
+  guts_ends_at       timestamptz,                     -- set while running
+  guts_remaining     int     not null default 4500,   -- meaningful while paused
+  guts_running       boolean not null default false,
+  freeze_minutes     int     not null default 10,
+  guts_frozen        boolean not null default false,
+  updated_at         timestamptz not null default now(),
+  constraint contest_state_singleton check (id = 1)
+);
+insert into contest_state (id) values (1) on conflict (id) do nothing;
 
 -- ---------------------------------------------------------------------
--- Teams.  Division is normally inferred from the first problem graded
--- (A1-A3 => Division A, B1-B5 => Division B) but can be set by hand or
--- by the guts CSV import.
+-- Answer key. One row per problem per round; guts point values live
+-- here too, so the key and the scoring are edited in one place.
+--   round = 'individual' -> problems 1..20
+--   round = 'guts'       -> problems 1..28  (set n covers 4n-3 .. 4n)
+-- ---------------------------------------------------------------------
+create table if not exists answer_key (
+  round      text    not null check (round in ('individual','guts')),
+  problem    int     not null check (problem >= 1),
+  answer     int     check (answer >= 0),   -- null until you set it
+  points     numeric not null default 1,
+  updated_at timestamptz not null default now(),
+  primary key (round, problem)
+);
+
+-- ---------------------------------------------------------------------
+-- Teams. Division and name live here; the name is captured the first
+-- time somebody enters that team's guts answers.
 -- ---------------------------------------------------------------------
 create table if not exists teams (
-  team       int primary key,
-  division   char(1) check (division in ('A','B')),
-  note       text not null default '',
-  updated_at timestamptz not null default now()
-);
-
--- Disqualification. A DQ never deletes anything: the team's grades stay
--- exactly where they are, the team simply stops ranking and drops out of
--- the grading queue. Reinstating is one click and loses nothing.
-alter table teams add column if not exists disqualified boolean not null default false;
-alter table teams add column if not exists dq_reason    text    not null default '';
-alter table teams add column if not exists dq_by        text    not null default '';
-alter table teams add column if not exists dq_at        timestamptz;
-
--- ---------------------------------------------------------------------
--- Grades.  One row per (contestant, problem, grader) — so a second
--- grader reading the same proof adds a row rather than overwriting.
--- A grader re-scoring their own read upserts their existing row.
--- ---------------------------------------------------------------------
-create table if not exists grades (
-  id            uuid primary key default gen_random_uuid(),
-  contestant_id text    not null,                     -- '12C'
-  team          int     not null,                     -- 12
-  member        char(1) not null,                     -- 'C'
-  division      char(1) not null check (division in ('A','B')),
-  problem       text    not null,                     -- 'A1'..'A3' | 'B1'..'B5'
-  score         numeric(4,1) not null check (score >= 0 and score <= 7),
-  feedback      text    not null default '',
-  grader_name   text    not null,
-  grader_id     text    not null,
-  created_at    timestamptz not null default now(),
-  updated_at    timestamptz not null default now()
-);
-
-create unique index if not exists grades_one_read_per_grader
-  on grades (contestant_id, problem, grader_id);
-create index if not exists grades_cell_idx on grades (contestant_id, problem);
-create index if not exists grades_recent_idx on grades (updated_at desc);
-
--- ---------------------------------------------------------------------
--- Guts round.  One row per team, imported from CSV (team,score).
--- ---------------------------------------------------------------------
-create table if not exists guts (
-  team       int primary key,
-  score      numeric(8,2) not null check (score >= 0),
-  updated_at timestamptz not null default now()
+  team         int primary key,
+  name         text not null default '',
+  division     char(1) check (division in ('A','B')),
+  disqualified boolean not null default false,
+  dq_reason    text not null default '',
+  dq_by        text not null default '',
+  dq_at        timestamptz,
+  updated_at   timestamptz not null default now()
 );
 
 -- ---------------------------------------------------------------------
--- Live claims — "I am grading this right now".  One claim per cell, so
--- two graders can never take the same submission.  Claims older than
--- CLAIM_TTL (see assets/config.js) are treated as abandoned.
+-- Contestants and their individual-round answers.
+--
+-- The 20 answers ride along as a jsonb array because they are always
+-- read and written as one sheet. Guts is stored per-problem instead
+-- (see below) because the public leaderboard has to score it in SQL.
+-- ---------------------------------------------------------------------
+create table if not exists contestants (
+  individual_id   text primary key,              -- '12C'
+  team            int  not null,
+  member          text not null default '',
+  division        char(1) check (division in ('A','B')),
+  name            text not null default '',
+  answers         jsonb not null default '[]',   -- [int|null] x 20
+  entered_by      text not null default '',
+  entered_by_name text not null default '',
+  entered_at      timestamptz,
+  updated_at      timestamptz not null default now()
+);
+create index if not exists contestants_team_idx on contestants (team);
+
+-- ---------------------------------------------------------------------
+-- Guts answers, one row per (team, problem).
+-- ---------------------------------------------------------------------
+create table if not exists guts_answers (
+  team            int not null,
+  problem         int not null check (problem >= 1),
+  answer          int check (answer >= 0),
+  entered_by      text not null default '',
+  entered_by_name text not null default '',
+  updated_at      timestamptz not null default now(),
+  primary key (team, problem)
+);
+
+-- ---------------------------------------------------------------------
+-- Live claims and grader presence (unchanged in spirit: two people must
+-- never key the same answer sheet).
 -- ---------------------------------------------------------------------
 create table if not exists claims (
-  contestant_id text not null,
-  problem       text not null,
+  scope         text not null,     -- 'individual' | 'guts'
+  ref           text not null,     -- individual_id, or 'team:set'
   grader_id     text not null,
   grader_name   text not null,
   claimed_at    timestamptz not null default now(),
-  primary key (contestant_id, problem)
+  primary key (scope, ref)
 );
 
--- ---------------------------------------------------------------------
--- Who is online, for the presence strip.
--- ---------------------------------------------------------------------
 create table if not exists graders (
   grader_id  text primary key,
   name       text not null,
@@ -110,7 +133,107 @@ create table if not exists graders (
 );
 
 -- ---------------------------------------------------------------------
--- Keep updated_at honest.
+-- The ONLY table the public leaderboard can read.
+--
+-- It holds finished standings — never raw answers and never the answer
+-- key — so the page can be world-readable during the contest without
+-- leaking anything a team could use.
+-- ---------------------------------------------------------------------
+create table if not exists guts_public (
+  team         int primary key,
+  name         text not null default '',
+  division     char(1),
+  score        numeric not null default 0,
+  solved       int not null default 0,
+  answered     int not null default 0,
+  disqualified boolean not null default false,
+  updated_at   timestamptz not null default now()
+);
+
+-- Recompute the public board from the private tables.
+-- Returns early while the board is frozen, which is what makes the
+-- freeze correct even for someone who loads the page mid-freeze: the
+-- stored rows simply stop moving.
+create or replace function refresh_guts_public() returns void
+language plpgsql security definer as $$
+begin
+  if (select guts_frozen from contest_state where id = 1) then
+    return;
+  end if;
+
+  insert into guts_public (team, name, division, score, solved, answered, disqualified, updated_at)
+  select t.team,
+         t.name,
+         t.division,
+         coalesce(sc.score, 0),
+         coalesce(sc.solved, 0),
+         coalesce(sc.answered, 0),
+         t.disqualified,
+         now()
+  from teams t
+  left join (
+    select ga.team,
+           sum(case when ak.answer is not null and ga.answer = ak.answer
+                    then ak.points else 0 end) as score,
+           count(*) filter (where ak.answer is not null and ga.answer = ak.answer) as solved,
+           count(*) filter (where ga.answer is not null) as answered
+      from guts_answers ga
+      left join answer_key ak on ak.round = 'guts' and ak.problem = ga.problem
+     group by ga.team
+  ) sc on sc.team = t.team
+  on conflict (team) do update set
+    name = excluded.name,
+    division = excluded.division,
+    score = excluded.score,
+    solved = excluded.solved,
+    answered = excluded.answered,
+    disqualified = excluded.disqualified,
+    updated_at = now()
+  -- Only write rows that actually changed. Without this guard a single
+  -- guts entry rewrites all ~100 rows and emits a realtime message per
+  -- team per save, which burns the free tier's message budget for no
+  -- reason. With it, one save moves one row.
+  where guts_public.score        is distinct from excluded.score
+     or guts_public.solved       is distinct from excluded.solved
+     or guts_public.answered     is distinct from excluded.answered
+     or guts_public.name         is distinct from excluded.name
+     or guts_public.division     is distinct from excluded.division
+     or guts_public.disqualified is distinct from excluded.disqualified;
+
+  delete from guts_public gp where not exists (select 1 from teams t where t.team = gp.team);
+end $$;
+
+create or replace function guts_public_trigger() returns trigger
+language plpgsql security definer as $$
+begin
+  perform refresh_guts_public();
+  return null;
+end $$;
+
+drop trigger if exists guts_answers_public on guts_answers;
+create trigger guts_answers_public after insert or update or delete on guts_answers
+  for each statement execute function guts_public_trigger();
+
+drop trigger if exists answer_key_public on answer_key;
+create trigger answer_key_public after insert or update or delete on answer_key
+  for each statement execute function guts_public_trigger();
+
+drop trigger if exists teams_public on teams;
+create trigger teams_public after insert or update or delete on teams
+  for each statement execute function guts_public_trigger();
+
+-- Unfreezing has to publish everything that happened during the freeze.
+create or replace function set_guts_frozen(frozen boolean) returns void
+language plpgsql security invoker as $$
+begin
+  update contest_state set guts_frozen = frozen, updated_at = now() where id = 1;
+  if not frozen then
+    perform refresh_guts_public();
+  end if;
+end $$;
+
+-- ---------------------------------------------------------------------
+-- updated_at upkeep
 -- ---------------------------------------------------------------------
 create or replace function touch_updated_at() returns trigger
 language plpgsql as $$
@@ -119,27 +242,31 @@ begin
   return new;
 end $$;
 
-drop trigger if exists grades_touch on grades;
-create trigger grades_touch before update on grades
-  for each row execute function touch_updated_at();
-
-drop trigger if exists teams_touch on teams;
-create trigger teams_touch before update on teams
-  for each row execute function touch_updated_at();
+do $$
+declare t text;
+begin
+  foreach t in array array['teams','contestants','guts_answers','answer_key'] loop
+    execute format('drop trigger if exists %I_touch on %I', t, t);
+    execute format('create trigger %I_touch before update on %I
+                    for each row execute function touch_updated_at()', t, t);
+  end loop;
+end $$;
 
 -- ---------------------------------------------------------------------
--- Row level security.
+-- Row level security
 --
--- Every table is closed to the anonymous key and open to any signed-in
--- session.  The portal signs in with ONE shared staff account whose
--- password is typed by the grader at the door and never stored in this
--- repo — so publishing the anon key (which is public by design) does
--- not expose a single score.
+-- Staff tables: signed-in only. The portal signs in with one shared
+-- account whose password is typed at the door and is not in the repo,
+-- so the published anon key reveals nothing.
+--
+-- guts_public and contest_state: readable by anyone, because the public
+-- leaderboard runs with no login. Neither holds an answer or a key.
 -- ---------------------------------------------------------------------
 do $$
 declare t text;
 begin
-  foreach t in array array['app_settings','teams','grades','guts','claims','graders'] loop
+  foreach t in array array['app_settings','teams','contestants','guts_answers',
+                           'answer_key','claims','graders','contest_state','guts_public'] loop
     execute format('alter table %I enable row level security', t);
     execute format('drop policy if exists staff_all on %I', t);
     execute format(
@@ -147,12 +274,15 @@ begin
   end loop;
 end $$;
 
+drop policy if exists anon_read on guts_public;
+create policy anon_read on guts_public for select to anon using (true);
+
+drop policy if exists anon_read_state on contest_state;
+create policy anon_read_state on contest_state for select to anon using (true);
+
 -- ---------------------------------------------------------------------
--- Realtime.  This is what makes the matrix, the leaderboards and the
--- claim locks update on every grader's screen at once.
+-- Realtime
 -- ---------------------------------------------------------------------
--- On a hosted Supabase project this publication already exists; create it
--- for a bare Postgres so the script is self-contained.
 do $$
 begin
   if not exists (select 1 from pg_publication where pubname = 'supabase_realtime') then
@@ -163,7 +293,8 @@ end $$;
 do $$
 declare t text;
 begin
-  foreach t in array array['app_settings','teams','grades','guts','claims','graders'] loop
+  foreach t in array array['app_settings','teams','contestants','guts_answers',
+                           'answer_key','claims','graders','contest_state','guts_public'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t
@@ -173,14 +304,28 @@ begin
   end loop;
 end $$;
 
--- Realtime sends old-row data on DELETE only with REPLICA IDENTITY FULL,
--- which the claim locks need in order to clear a released cell.
-alter table claims  replica identity full;
-alter table grades  replica identity full;
+alter table claims       replica identity full;
+alter table contestants  replica identity full;
+alter table guts_answers replica identity full;
+alter table guts_public  replica identity full;
 
 -- ---------------------------------------------------------------------
--- Housekeeping helper: drop claims nobody has touched in a while.
--- The portal calls this on load; you can also schedule it with pg_cron.
+-- Seed the key with the right number of blank rows, and give guts its
+-- default rising point values (set 1 = 1 point ... set 7 = 7 points).
+-- Existing rows are left exactly as they are.
+-- ---------------------------------------------------------------------
+insert into answer_key (round, problem, answer, points)
+select 'individual', g, null, 1 from generate_series(1, 20) g
+on conflict (round, problem) do nothing;
+
+insert into answer_key (round, problem, answer, points)
+select 'guts', g, null, ceil(g / 4.0) from generate_series(1, 28) g
+on conflict (round, problem) do nothing;
+
+select refresh_guts_public();
+
+-- ---------------------------------------------------------------------
+-- Housekeeping
 -- ---------------------------------------------------------------------
 create or replace function release_stale_claims(max_age_seconds int default 120)
 returns int language plpgsql security invoker as $$
@@ -190,3 +335,11 @@ begin
   get diagnostics n = row_count;
   return n;
 end $$;
+
+-- =====================================================================
+--  REUSING THE OLD SFPO PROJECT? Run this first, then the file above.
+--  It removes the proof-grading tables. Skip it on a fresh project.
+--
+--    drop table if exists grades, guts, claims, graders, teams,
+--                         app_settings cascade;
+-- =====================================================================

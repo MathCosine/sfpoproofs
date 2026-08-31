@@ -561,3 +561,111 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* =====================================================================
+   Answer-entry additions
+   ===================================================================== */
+
+.grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 12px; }
+
+.subhead {
+  font-size: 12px; font-weight: 800; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted); margin-bottom: 10px;
+}
+
+/* ---------- the answer grid --------------------------------------- */
+/* Kept tight and in reading order so a whole sheet is one glance and
+   one run of the fingers — the boxes are the job, everything else is
+   chrome around them. */
+.answers { display: grid; grid-template-columns: repeat(5, 1fr); gap: 7px; }
+.answers--guts { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 520px) { .answers { grid-template-columns: repeat(4, 1fr); } }
+
+.ans { position: relative; }
+.ans__no {
+  position: absolute; top: 3px; left: 6px;
+  font-family: var(--mono); font-size: 10px; font-weight: 800;
+  color: var(--muted); pointer-events: none;
+}
+.ans input {
+  width: 100%; padding: 18px 8px 7px;
+  font-family: var(--mono); font-size: 17px; font-weight: 700; text-align: center;
+  background: var(--card);
+  border: var(--bw) solid var(--line); border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-xs);
+  transition: box-shadow .1s ease, background .12s ease;
+  -moz-appearance: textfield;
+}
+.ans input::-webkit-outer-spin-button,
+.ans input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ans input:focus {
+  outline: none;
+  box-shadow: var(--shadow-sm), inset 0 0 0 3px var(--cyan);
+}
+.ans--filled input { background: color-mix(in srgb, var(--cyan) 15%, var(--card)); }
+.ans--bad input { box-shadow: var(--shadow-xs), inset 0 0 0 3px var(--red); }
+.ans--correct input { background: color-mix(in srgb, var(--lime) 42%, var(--card)); }
+.ans--wrong input   { background: color-mix(in srgb, var(--red) 30%, var(--card)); }
+.ans--unkeyed input { background: color-mix(in srgb, var(--amber) 30%, var(--card)); }
+
+/* ---------- guts key sets ------------------------------------------ */
+.keyset { border: 2px solid var(--line); border-radius: var(--radius-sm); padding: 11px; }
+.keyset + .keyset { margin-top: 10px; }
+.keyset__head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+.keyset__head b { font-size: 13px; }
+.keyset__points { display: flex; align-items: center; gap: 6px; margin-left: auto; }
+.keyset__points input { width: 68px; padding: 6px 8px; text-align: center; }
+.keyset__points span { font-size: 11px; font-weight: 800; text-transform: uppercase; color: var(--muted); }
+
+/* ---------- clock -------------------------------------------------- */
+.clockchip {
+  display: flex; align-items: center; gap: 8px;
+  padding: 5px 12px; border: 2px solid var(--paper); border-radius: 999px;
+  background: var(--lime); color: #10131a; font-weight: 800;
+}
+.clockchip--frozen { background: var(--violet); }
+.clockchip--stopped { background: var(--slate); color: var(--muted); }
+.clockchip__label { font-size: 10px; letter-spacing: .1em; opacity: .7; }
+.clockchip__time { font-size: 15px; font-variant-numeric: tabular-nums; }
+
+.clockbig {
+  font-size: clamp(48px, 11vw, 84px); font-weight: 800; letter-spacing: -.03em;
+  text-align: center; padding: 14px 0 18px; font-variant-numeric: tabular-nums;
+}
+
+/* ---------- per-contestant progress -------------------------------- */
+.roster { max-height: 470px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.rosterteam {
+  border: 2px solid var(--line); border-radius: var(--radius-sm);
+  padding: 8px 10px; background: var(--card);
+}
+.rosterteam--dq { border-color: var(--red); opacity: .7; }
+.rosterteam__head {
+  display: flex; align-items: center; gap: 9px; margin-bottom: 7px;
+  font-family: var(--mono); font-size: 11px; font-weight: 800; color: var(--muted);
+}
+.rosterteam__name { color: var(--ink); font-family: var(--font); }
+.rosterteam__head .spacer { margin-left: auto; }
+.people { display: flex; flex-wrap: wrap; gap: 6px; }
+.person {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 4px 9px; border: 2px solid var(--line); border-radius: 999px;
+  background: var(--slate); font-size: 12px; font-weight: 700; cursor: pointer;
+  font-family: var(--mono);
+}
+.person:hover { transform: translate(-1px, -1px); }
+.person:active { transform: translate(1px, 1px); }
+.person--done { background: var(--lime); }
+.person--partial { background: var(--amber); }
+.person--claimed { background: var(--violet); }
+.person__score { font-weight: 800; }
+
+.setpips { display: flex; gap: 3px; }
+.setpip {
+  width: 15px; height: 15px; border: 2px solid var(--line); border-radius: 4px;
+  background: var(--slate); font-size: 9px; display: grid; place-items: center;
+  font-family: var(--mono); font-weight: 800;
+}
+.setpip--done { background: var(--lime); }
+.setpip--partial { background: var(--amber); }
+.setpip--claimed { background: var(--violet); }

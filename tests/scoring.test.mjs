@@ -1,304 +1,219 @@
-// Run with:  node --test tests/
+// Run with:  npm test
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  parseContestantId, summariseCell, indexGrades, liveClaims, divisionByTeam,
-  buildRoster, individualStandings, teamProofStandings, combinedStandings,
-  splitByDivision, suggestQueue, progressFor, cellKey, dqTeams, proofMaxFor,
+  parseIndividualId, parseAnswer, problemsInSet, setOfProblem, gutsProblemCount,
+  indexKey, keyGaps, keyMaxPoints, scoreSheet, individualStandings, indexGutsAnswers,
+  scoreGutsTeam, gutsStandings, combinedStandings, splitByDivision, dqTeams,
+  liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
+  individualMaxPoints, gutsMaxPoints,
 } from '../assets/scoring.js';
-import { parseGutsCsv } from '../assets/csv.js';
+import { applyPatch } from '../assets/store.js';
+import { parseCsv, toCsv } from '../assets/csv.js';
 
 const cfg = {
-  PROBLEMS: { A: ['A1', 'A2', 'A3'], B: ['B1', 'B2', 'B3', 'B4', 'B5'] },
-  MAX_SCORE: 7,
-  PROOF_WEIGHT: 80,
+  INDIVIDUAL_PROBLEMS: 20,
+  INDIVIDUAL_POINTS: 1,
+  GUTS_SETS: 7,
+  GUTS_PER_SET: 4,
+  INDIVIDUAL_WEIGHT: 80,
   GUTS_WEIGHT: 20,
-  GUTS_MAX: 0,
-  SECOND_READ_THRESHOLD: 5,
-  DISAGREEMENT_DELTA: 2,
-  TEAM_COUNT: 5,
   MEMBERS: ['A', 'B', 'C', 'D'],
   CLAIM_TTL_MS: 120000,
 };
 
-const grade = (contestant, problem, score, graderId, at, extra = {}) => ({
-  contestant_id: contestant,
-  team: Number(contestant.match(/\d+/)[0]),
-  member: contestant.slice(-1),
-  division: problem[0],
-  problem,
-  score,
-  grader_id: graderId,
-  grader_name: graderId.toUpperCase(),
-  feedback: '',
-  created_at: at,
-  updated_at: at,
-  ...extra,
-});
-
-test('contestant IDs', () => {
-  assert.deepEqual(parseContestantId(' 12c ').id, '12C');
-  assert.equal(parseContestantId('12c').team, 12);
-  assert.equal(parseContestantId('7A').member, 'A');
-  assert.equal(parseContestantId('012B').id, '12B', 'leading zeros normalise');
-  assert.equal(parseContestantId('12').ok, false);
-  assert.equal(parseContestantId('AB').ok, false);
-  assert.equal(parseContestantId('0A').ok, false);
-});
-
-test('a single low score is simply graded', () => {
-  const s = summariseCell([grade('1A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z')], cfg);
-  assert.equal(s.state, 'graded');
-  assert.equal(s.reads, 1);
-  assert.equal(s.score, 3);
-});
-
-test('a single high score asks for a second read', () => {
-  assert.equal(summariseCell([grade('1A', 'A1', 5, 'g1', '2026-08-29T10:00:00Z')], cfg).state,
-    'needs-second');
-  assert.equal(summariseCell([grade('1A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z')], cfg).state,
-    'needs-second');
-  assert.equal(summariseCell([grade('1A', 'A1', 4, 'g1', '2026-08-29T10:00:00Z')], cfg).state,
-    'graded');
-});
-
-test('two close reads resolve to the later one', () => {
-  const s = summariseCell([
-    grade('1A', 'A1', 6, 'g1', '2026-08-29T10:00:00Z'),
-    grade('1A', 'A1', 7, 'g2', '2026-08-29T10:05:00Z'),
-  ], cfg);
-  assert.equal(s.state, 'graded');
-  assert.equal(s.score, 7, 'the second read settles it');
-  assert.deepEqual(s.scores, [6, 7]);
-});
-
-test('two distant reads are a conflict', () => {
-  const s = summariseCell([
-    grade('1A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z'),
-    grade('1A', 'A1', 2, 'g2', '2026-08-29T10:05:00Z'),
-  ], cfg);
-  assert.equal(s.state, 'conflict');
-  assert.equal(s.spread, 5);
-});
-
-test('stale claims stop counting as live', () => {
-  const now = Date.parse('2026-08-29T10:00:00Z');
-  const claims = liveClaims([
-    { contestant_id: '1A', problem: 'A1', grader_id: 'g1', claimed_at: '2026-08-29T09:59:30Z' },
-    { contestant_id: '2A', problem: 'A1', grader_id: 'g2', claimed_at: '2026-08-29T09:50:00Z' },
-  ], cfg, now);
-  assert.equal(claims.size, 1);
-  assert.ok(claims.has(cellKey('1A', 'A1')));
-});
-
-test('a team joins its division the moment one proof is graded', () => {
-  const div = divisionByTeam([grade('3B', 'B2', 4, 'g1', '2026-08-29T10:00:00Z')], [], []);
-  assert.equal(div.get(3), 'B');
-});
-
-test('an explicit teams row beats the inferred division', () => {
-  const div = divisionByTeam(
-    [grade('3B', 'B2', 4, 'g1', '2026-08-29T10:00:00Z')],
-    [{ team: 3, division: 'A' }], []);
-  assert.equal(div.get(3), 'A');
-});
-
-test('roster splits by division and quarantines the unknown', () => {
-  const roster = buildRoster(cfg, new Map([[1, 'A'], [2, 'B']]), new Set(['1A', '2C']));
-  assert.equal(roster.A.length, 1);
-  assert.equal(roster.B.length, 1);
-  assert.equal(roster.unassigned.length, 3, 'teams 3-5 have no division yet');
-  assert.equal(roster.A[0].members.length, 4);
-  assert.equal(roster.A[0].members.find((m) => m.contestantId === '1A').seen, true);
-  assert.equal(roster.A[0].members.find((m) => m.contestantId === '1D').seen, false);
-});
-
-test('a contestant graded outside the configured team range still shows up', () => {
-  const roster = buildRoster(cfg, new Map([[99, 'A']]), new Set(['99B']));
-  const extra = roster.A.find((t) => t.team === 99);
-  assert.ok(extra, 'team 99 is beyond TEAM_COUNT but was graded');
-  assert.equal(extra.beyondRange, true);
-  assert.equal(extra.members.length, 1);
-});
-
-test('individual totals sum a division’s problems', () => {
-  const grades = [
-    grade('1A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z'),
-    grade('1A', 'A2', 3, 'g1', '2026-08-29T10:01:00Z'),
-    grade('1A', 'A3', 5, 'g1', '2026-08-29T10:02:00Z'),
-  ];
-  const div = divisionByTeam(grades, [], []);
-  const [person] = individualStandings(grades, div, cfg);
-  assert.equal(person.total, 15);
-  assert.equal(person.complete, true);
-  assert.equal(person.openFlags, 2, 'the 7 and the 5 both want a second read');
-});
-
-test('an incomplete contestant is not marked complete', () => {
-  const grades = [grade('1A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z')];
-  const [person] = individualStandings(grades, divisionByTeam(grades, [], []), cfg);
-  assert.equal(person.complete, false);
-  assert.equal(person.expected, 3);
-});
-
-test('team proof score is the sum of its members', () => {
-  const grades = [
-    grade('4A', 'A1', 6, 'g1', '2026-08-29T10:00:00Z'),
-    grade('4B', 'A1', 4, 'g1', '2026-08-29T10:00:00Z'),
-    grade('4C', 'A1', 2, 'g1', '2026-08-29T10:00:00Z'),
-  ];
-  const div = divisionByTeam(grades, [], []);
-  const teams = teamProofStandings(individualStandings(grades, div, cfg), div, cfg);
-  assert.equal(teams.length, 1);
-  assert.equal(teams[0].proof, 12);
-  assert.equal(teams[0].members.length, 3, 'a three-person team is fine');
-});
-
-test('the maximum team proof follows the division', () => {
-  assert.equal(proofMaxFor('A', cfg), 4 * 3 * 7);
-  assert.equal(proofMaxFor('B', cfg), 4 * 5 * 7);
-});
-
-test('combined blends the two percentages, not the raw points', () => {
-  const div = new Map([[1, 'A']]);
-  // A perfect Division A proof score, and the top guts score.
-  const teams = [{ team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] }];
-  const [row] = combinedStandings(teams, [{ team: 1, score: 120 }], div, cfg);
-  assert.equal(row.proofPct, 100);
-  assert.equal(row.gutsPct, 100);
-  assert.equal(row.total, 100, 'perfect on both sides is a perfect combined score');
-  assert.equal(row.raw, 204, 'the raw points are still reported alongside');
-});
-
-test('80/20 means 80/20 in both divisions', () => {
-  // Perfect proofs, zero guts => exactly the proof weight, whatever the
-  // division's proof ceiling or the guts scale happens to be.
-  for (const [division, proof] of [['A', 84], ['B', 140]]) {
-    const div = new Map([[1, division], [2, division]]);
-    const teams = [
-      { team: 1, division, proof, complete: true, openFlags: 0, members: [] },
-      { team: 2, division, proof: 0, complete: true, openFlags: 0, members: [] },
-    ];
-    const rows = combinedStandings(teams, [{ team: 1, score: 0 }, { team: 2, score: 200 }], div, cfg);
-    const by = Object.fromEntries(rows.map((r) => [r.team, r]));
-    assert.equal(by[1].total, 80, `division ${division}: all proof, no guts`);
-    assert.equal(by[2].total, 20, `division ${division}: all guts, no proof`);
+/** A key where individual problem n has answer n, guts problem n has n*2. */
+const fullKey = () => {
+  const rows = [];
+  for (let p = 1; p <= 20; p += 1) rows.push({ round: 'individual', problem: p, answer: p, points: 1 });
+  for (let p = 1; p <= 28; p += 1) {
+    rows.push({ round: 'guts', problem: p, answer: p * 2, points: Math.ceil(p / 4) });
   }
+  return indexKey(rows);
+};
+
+// ---------------------------------------------------------------------
+test('individual IDs split into team and member', () => {
+  assert.deepEqual(
+    (({ id, team, member }) => ({ id, team, member }))(parseIndividualId(' 12c ')),
+    { id: '12C', team: 12, member: 'C' });
+  assert.equal(parseIndividualId('012B').id, '12B');
+  assert.equal(parseIndividualId('7A').team, 7);
 });
 
-test('an explicit guts maximum overrides the observed one', () => {
-  const div = new Map([[1, 'A']]);
-  const teams = [{ team: 1, division: 'A', proof: 0, complete: true, openFlags: 0, members: [] }];
-  const observed = combinedStandings(teams, [{ team: 1, score: 60 }], div, cfg);
-  assert.equal(observed[0].total, 20, 'the only guts score is the reference');
-
-  const pinned = combinedStandings(teams, [{ team: 1, score: 60 }], div, { ...cfg, GUTS_MAX: 120 });
-  assert.equal(pinned[0].total, 10, 'half of a 120 ceiling is half the guts weight');
+test('a bare team number is a partial ID, not an error', () => {
+  const partial = parseIndividualId('12');
+  assert.equal(partial.ok, false);
+  assert.equal(partial.partial, true);
+  assert.equal(partial.team, 12, 'so the team box can fill in while you are still typing');
 });
 
-test('weights are taken as a ratio, so 8/2 matches 80/20', () => {
-  const div = new Map([[1, 'A']]);
-  const teams = [{ team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] }];
-  const a = combinedStandings(teams, [{ team: 1, score: 0 }], div, cfg)[0].total;
-  const b = combinedStandings(teams, [{ team: 1, score: 0 }],
-    div, { ...cfg, PROOF_WEIGHT: 8, GUTS_WEIGHT: 2 })[0].total;
-  assert.equal(a, b);
+test('nonsense IDs are rejected outright', () => {
+  assert.equal(parseIndividualId('ABC').ok, false);
+  assert.equal(parseIndividualId('ABC').partial, undefined);
+  assert.equal(parseIndividualId('0A').ok, false);
 });
 
-test('a missing half is still flagged provisional', () => {
-  const grades = [grade('4A', 'A1', 6, 'g1', '2026-08-29T10:00:00Z')];
-  const div = divisionByTeam(grades, [], []);
-  const teams = teamProofStandings(individualStandings(grades, div, cfg), div, cfg);
-
-  const withGuts = combinedStandings(teams, [{ team: 4, score: 30 }], div, cfg);
-  assert.equal(withGuts[0].partial, true, 'proofs are not finished yet');
-  assert.equal(withGuts[0].status, 'grading');
-
-  const noGuts = combinedStandings(teams, [], div, cfg);
-  assert.equal(noGuts[0].guts, null);
-  assert.equal(noGuts[0].gutsPct, 0);
-  assert.equal(noGuts[0].partial, true);
+test('answers are blank or non-negative integers', () => {
+  assert.deepEqual(parseAnswer(''), { ok: true, value: null });
+  assert.deepEqual(parseAnswer('  '), { ok: true, value: null });
+  assert.deepEqual(parseAnswer('0'), { ok: true, value: 0 });
+  assert.deepEqual(parseAnswer('42'), { ok: true, value: 42 });
+  assert.equal(parseAnswer('-3').ok, false);
+  assert.equal(parseAnswer('3.5').ok, false);
+  assert.equal(parseAnswer('twelve').ok, false);
 });
 
-test('a guts-only team still appears in the combined table', () => {
-  const rows = combinedStandings([], [{ team: 9, score: 50 }], new Map([[9, 'B']]), cfg);
-  assert.equal(rows.length, 1);
-  assert.equal(rows[0].hasProof, false);
-  assert.equal(rows[0].total, 20, 'top guts, no proofs => the full guts weight');
-  assert.equal(rows[0].division, 'B');
-  assert.equal(rows[0].status, 'guts only');
+test('guts sets map to problem numbers', () => {
+  assert.deepEqual(problemsInSet(1, cfg), [1, 2, 3, 4]);
+  assert.deepEqual(problemsInSet(7, cfg), [25, 26, 27, 28]);
+  assert.equal(setOfProblem(5, cfg), 2);
+  assert.equal(setOfProblem(28, cfg), 7);
+  assert.equal(gutsProblemCount(cfg), 28);
 });
 
-test('combined ranks highest first', () => {
-  const div = new Map([[1, 'A'], [2, 'A']]);
-  const rows = combinedStandings(
-    [{ team: 1, division: 'A', proof: 10, complete: true, openFlags: 0, members: [] },
-      { team: 2, division: 'A', proof: 8, complete: true, openFlags: 0, members: [] }],
-    [{ team: 1, score: 0 }, { team: 2, score: 80 }], div, cfg);
-  assert.deepEqual(rows.map((r) => r.team), [2, 1], 'a big guts win can overturn a small proof lead');
+// ---------------------------------------------------------------------
+test('a perfect sheet scores every point', () => {
+  const answers = Array.from({ length: 20 }, (_, i) => i + 1);
+  const out = scoreSheet(answers, fullKey(), cfg);
+  assert.equal(out.score, 20);
+  assert.equal(out.correct, 20);
+  assert.equal(out.answered, 20);
 });
 
-test('the queue puts conflicts first, then second reads, then unfinished people', () => {
-  const grades = [
-    grade('1A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z'),   // wants a 2nd read
-    grade('1A', 'A2', 7, 'g1', '2026-08-29T10:00:00Z'),
-    grade('1A', 'A2', 1, 'g2', '2026-08-29T10:01:00Z'),   // conflict
-    grade('2A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z'),   // 2A now half done
+test('wrong and blank both score zero, and are told apart', () => {
+  const answers = [1, 999, null, 4, ...Array(16).fill(null)];
+  const out = scoreSheet(answers, fullKey(), cfg);
+  assert.equal(out.score, 2);
+  assert.equal(out.answered, 3);
+  assert.deepEqual(out.marks.slice(0, 4), ['correct', 'wrong', 'blank', 'correct']);
+});
+
+test('zero is a real answer, not a blank', () => {
+  const key = indexKey([{ round: 'individual', problem: 1, answer: 0, points: 1 }]);
+  const out = scoreSheet([0], key, { ...cfg, INDIVIDUAL_PROBLEMS: 1 });
+  assert.equal(out.score, 1);
+  assert.equal(out.answered, 1);
+  assert.equal(out.marks[0], 'correct');
+});
+
+test('an unset key entry never marks anybody right or wrong', () => {
+  const key = indexKey([{ round: 'individual', problem: 1, answer: null, points: 1 }]);
+  const out = scoreSheet([7], key, { ...cfg, INDIVIDUAL_PROBLEMS: 1 });
+  assert.equal(out.score, 0);
+  assert.equal(out.marks[0], 'unkeyed', 'the box is flagged, not silently counted');
+});
+
+test('an empty key scores nothing rather than everything', () => {
+  const out = scoreSheet(Array.from({ length: 20 }, (_, i) => i + 1), indexKey([]), cfg);
+  assert.equal(out.score, 0);
+  assert.ok(out.marks.every((m) => m === 'unkeyed'));
+});
+
+test('keyGaps names the problems still missing an answer', () => {
+  const key = indexKey([
+    { round: 'individual', problem: 1, answer: 5, points: 1 },
+    { round: 'individual', problem: 3, answer: null, points: 1 },
+  ]);
+  assert.deepEqual(keyGaps(key, 'individual', 4), [2, 3, 4]);
+});
+
+// ---------------------------------------------------------------------
+test('guts points rise with the set', () => {
+  const key = fullKey();
+  const answers = new Map();
+  for (const p of problemsInSet(1, cfg)) answers.set(p, p * 2);   // set 1: 1 pt each
+  const first = scoreGutsTeam(answers, key, cfg);
+  assert.equal(first.score, 4);
+
+  const late = new Map();
+  for (const p of problemsInSet(7, cfg)) late.set(p, p * 2);      // set 7: 7 pts each
+  assert.equal(scoreGutsTeam(late, key, cfg).score, 28);
+});
+
+test('a guts set knows whether it is finished', () => {
+  const answers = new Map([[1, 2], [2, 4]]);
+  const out = scoreGutsTeam(answers, fullKey(), cfg);
+  assert.equal(out.perSet[0].answered, 2);
+  assert.equal(out.perSet[0].complete, false);
+  assert.equal(out.perSet[1].answered, 0);
+});
+
+test('guts standings rank on points and keep the team name', () => {
+  const key = fullKey();
+  const rows = [
+    { team: 1, problem: 25, answer: 50 },   // set 7, 7 points
+    { team: 2, problem: 1, answer: 2 },     // set 1, 1 point
+    { team: 2, problem: 2, answer: 4 },
   ];
-  const div = divisionByTeam(grades, [], []);
-  const byCell = indexGrades(grades);
-  const roster = buildRoster(cfg, div, new Set(['1A', '2A']));
-  const queue = suggestQueue({ roster, byCell, claims: new Map(), cfg, myGraderId: 'g3' });
-
-  assert.deepEqual(queue[0], {
-    contestantId: '1A', problem: 'A2', division: 'A', priority: 0,
-    reason: 'two reads 7 vs 1 — settle it', score: 1,
-  });
-  assert.equal(queue[1].problem, 'A1');
-  assert.equal(queue[1].priority, 1);
-  assert.ok(queue.slice(2).every((q) => q.priority >= 2));
+  const board = gutsStandings(
+    [{ team: 1, name: 'Cowbell', division: 'A' }, { team: 2, name: 'Moo Point', division: 'A' }],
+    indexGutsAnswers(rows), key, cfg);
+  assert.deepEqual(board.map((r) => r.team), [1, 2]);
+  assert.equal(board[0].score, 7);
+  assert.equal(board[0].name, 'Cowbell');
+  assert.equal(board[1].score, 2);
 });
 
-test('the queue never hands you a cell you already read', () => {
-  const grades = [grade('1A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z')];
-  const div = divisionByTeam(grades, [], []);
-  const queue = suggestQueue({
-    roster: buildRoster(cfg, div, new Set(['1A'])),
-    byCell: indexGrades(grades),
-    claims: new Map(),
-    cfg,
-    myGraderId: 'g1',
-  });
-  assert.equal(queue.some((q) => q.contestantId === '1A' && q.problem === 'A1'), false);
+// ---------------------------------------------------------------------
+test('combined blends the two rounds by share of maximum', () => {
+  const key = fullKey();
+  assert.equal(individualMaxPoints(key, cfg), 20 * 4, 'four members of twenty points');
+  assert.equal(gutsMaxPoints(key, cfg), 4 * (1 + 2 + 3 + 4 + 5 + 6 + 7));
+
+  const individuals = [
+    { individualId: '1A', team: 1, member: 'A', division: 'A', score: 20, disqualified: false },
+    { individualId: '1B', team: 1, member: 'B', division: 'A', score: 20, disqualified: false },
+    { individualId: '1C', team: 1, member: 'C', division: 'A', score: 20, disqualified: false },
+    { individualId: '1D', team: 1, member: 'D', division: 'A', score: 20, disqualified: false },
+  ];
+  const guts = [{ team: 1, name: 'Cowbell', division: 'A', score: gutsMaxPoints(key, cfg), disqualified: false }];
+  const [row] = combinedStandings(individuals, guts, key, cfg,
+    [{ team: 1, division: 'A', name: 'Cowbell' }]);
+  assert.equal(row.indPct, 100);
+  assert.equal(row.gutsPct, 100);
+  assert.equal(row.total, 100);
 });
 
-test('the queue never hands you what someone else is holding', () => {
-  const div = new Map([[1, 'A']]);
-  const claims = new Map([[cellKey('1A', 'A1'),
-    { contestant_id: '1A', problem: 'A1', grader_id: 'someone-else' }]]);
-  const queue = suggestQueue({
-    roster: buildRoster(cfg, div, new Set(['1A'])),
-    byCell: new Map(),
-    claims,
-    cfg,
-    myGraderId: 'me',
-  });
-  assert.equal(queue.some((q) => q.contestantId === '1A' && q.problem === 'A1'), false);
-  assert.ok(queue.some((q) => q.contestantId === '1A' && q.problem === 'A2'));
+test('80/20 is a true 80/20 across the two rounds', () => {
+  const key = fullKey();
+  const perfectIndividual = ['A', 'B', 'C', 'D'].map((m) => ({
+    individualId: `1${m}`, team: 1, member: m, division: 'A', score: 20, disqualified: false,
+  }));
+  const noGuts = combinedStandings(perfectIndividual, [{ team: 1, division: 'A', score: 0 }],
+    key, cfg, [{ team: 1, division: 'A' }]);
+  assert.equal(noGuts[0].total, 80, 'a perfect individual round alone is worth the weight');
+
+  const onlyGuts = combinedStandings([], [{ team: 1, division: 'A', score: gutsMaxPoints(key, cfg) }],
+    key, cfg, [{ team: 1, division: 'A' }]);
+  assert.equal(onlyGuts[0].total, 20);
 });
 
-test('coverage counts only contestants somebody has touched', () => {
-  const grades = [grade('1A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z')];
-  const div = divisionByTeam(grades, [], []);
-  const roster = buildRoster(cfg, div, new Set(['1A']));
-  const p = progressFor('A', roster, indexGrades(grades), cfg);
-  assert.equal(p.expected, 3, 'one seen contestant, three problems — absent teammates excluded');
-  assert.equal(p.done, 1);
-  assert.equal(p.pct, 33);
+test('a disqualified team keeps its points but sorts last', () => {
+  const key = fullKey();
+  const individuals = [
+    { individualId: '1A', team: 1, member: 'A', division: 'A', score: 20, disqualified: true },
+    { individualId: '2A', team: 2, member: 'A', division: 'A', score: 5, disqualified: false },
+  ];
+  const rows = combinedStandings(individuals, [], key, cfg,
+    [{ team: 1, division: 'A', disqualified: true }, { team: 2, division: 'A' }]);
+  assert.deepEqual(rows.map((r) => r.team), [2, 1]);
+  assert.equal(rows.find((r) => r.team === 1).individual, 20, 'nothing was erased');
 });
 
-test('splitByDivision keeps the strays', () => {
+test('individual standings inherit their team disqualification', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: '1A', team: 1, member: 'A', division: 'A', answers: [1, 2], name: 'Ada' },
+    { individual_id: '2A', team: 2, member: 'A', division: 'A', answers: [1], name: 'Bo' },
+  ], key, cfg, dqTeams([{ team: 1, disqualified: true }]));
+  assert.deepEqual(people.map((p) => p.individualId), ['2A', '1A']);
+  assert.equal(people.find((p) => p.individualId === '1A').disqualified, true);
+  assert.equal(people.find((p) => p.individualId === '1A').score, 2, 'score is kept');
+});
+
+test('splitByDivision keeps teams with no division out of both', () => {
   const out = splitByDivision([{ division: 'A' }, { division: 'B' }, { division: null }]);
   assert.equal(out.A.length, 1);
   assert.equal(out.B.length, 1);
@@ -306,141 +221,125 @@ test('splitByDivision keeps the strays', () => {
 });
 
 // ---------------------------------------------------------------------
-// Guts CSV
-// ---------------------------------------------------------------------
-
-test('guts CSV: bare team,score with no header', () => {
-  const { rows, errors } = parseGutsCsv('1,84\n2,71\n3,66\n');
-  assert.equal(errors.length, 0);
-  assert.deepEqual(rows, [{ team: 1, score: 84 }, { team: 2, score: 71 }, { team: 3, score: 66 }]);
+test('claims key individual sheets and guts sets apart', () => {
+  assert.deepEqual(claimRef.individual('12C'), { scope: 'individual', ref: '12C' });
+  assert.deepEqual(claimRef.guts(12, 3), { scope: 'guts', ref: '12:3' });
 });
 
-test('guts CSV: a header is detected and columns found by name', () => {
-  const { rows } = parseGutsCsv('Score,Team\n84,1\n71,2\n');
-  assert.deepEqual(rows, [{ team: 1, score: 84 }, { team: 2, score: 71 }]);
-});
-
-test('guts CSV: an optional division column is honoured', () => {
-  const { rows } = parseGutsCsv('team,score,division\n1,84,A\n2,71,b\n');
-  assert.deepEqual(rows, [
-    { team: 1, score: 84, division: 'A' },
-    { team: 2, score: 71, division: 'B' },
-  ]);
-});
-
-test('guts CSV: bad rows are reported, good rows still import', () => {
-  const { rows, errors } = parseGutsCsv('team,score\n1,84\nnope,12\n3,notanumber\n4,20\n');
-  assert.deepEqual(rows, [{ team: 1, score: 84 }, { team: 4, score: 20 }]);
-  assert.equal(errors.length, 2);
-});
-
-test('guts CSV: a repeated team keeps the later row and says so', () => {
-  const { rows, errors } = parseGutsCsv('1,10\n1,90\n');
-  assert.deepEqual(rows, [{ team: 1, score: 90 }]);
-  assert.equal(errors.length, 1);
-});
-
-test('guts CSV: quoted fields and CRLF survive', () => {
-  const { rows } = parseGutsCsv('"team","score"\r\n"12","84.5"\r\n');
-  assert.deepEqual(rows, [{ team: 12, score: 84.5 }]);
-});
-
-test('combined status names exactly why a row is not final', () => {
-  const div = new Map([[1, 'A'], [2, 'A'], [3, 'A'], [4, 'A']]);
-  const teams = [
-    { team: 1, division: 'A', proof: 21, complete: true, openFlags: 0, members: [] },
-    { team: 2, division: 'A', proof: 10, complete: false, openFlags: 0, members: [] },
-    { team: 3, division: 'A', proof: 12, complete: true, openFlags: 0, members: [] },
-  ];
-  const rows = combinedStandings(
-    teams, [{ team: 1, score: 40 }, { team: 2, score: 40 }, { team: 4, score: 40 }], div, cfg);
-  const by = Object.fromEntries(rows.map((r) => [r.team, r]));
-  assert.equal(by[1].status, 'final');
-  assert.equal(by[2].status, 'grading', 'proofs still open');
-  assert.equal(by[3].status, 'awaiting guts');
-  assert.equal(by[4].status, 'guts only');
-  assert.equal(by[1].partial, false);
-  assert.ok([2, 3, 4].every((t) => by[t].partial));
+test('stale claims stop counting as live', () => {
+  const now = Date.parse('2026-08-29T10:00:00Z');
+  const live = liveClaims([
+    { scope: 'individual', ref: '1A', claimed_at: '2026-08-29T09:59:30Z' },
+    { scope: 'guts', ref: '2:1', claimed_at: '2026-08-29T09:50:00Z' },
+  ], cfg, now);
+  assert.equal(live.size, 1);
+  assert.ok(live.has('individual|1A'));
 });
 
 // ---------------------------------------------------------------------
-// Disqualification
-// ---------------------------------------------------------------------
+test('the clock reads the same whether running or paused', () => {
+  const now = Date.parse('2026-08-29T13:00:00Z');
+  const running = {
+    guts_running: true,
+    guts_ends_at: '2026-08-29T13:30:00Z',
+    guts_remaining: 0,
+  };
+  assert.equal(gutsRemaining(running, now), 1800);
 
-test('dqTeams reads the flag off the teams table', () => {
-  const dq = dqTeams([{ team: 3, disqualified: true }, { team: 4, disqualified: false },
-    { team: 5 }]);
-  assert.deepEqual([...dq], [3]);
+  const paused = { guts_running: false, guts_remaining: 900 };
+  assert.equal(gutsRemaining(paused, now), 900);
 });
 
-test('a disqualified team keeps every point but always sorts last', () => {
-  const div = new Map([[1, 'A'], [2, 'A']]);
-  const teams = [
-    { team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] },
-    { team: 2, division: 'A', proof: 21, complete: true, openFlags: 0, members: [] },
-  ];
-  const rows = combinedStandings(teams, [{ team: 1, score: 100 }, { team: 2, score: 20 }],
-    div, cfg, new Set([1]));
-  assert.deepEqual(rows.map((r) => r.team), [2, 1], 'the top team is disqualified, so it drops');
-  const dqd = rows.find((r) => r.team === 1);
-  assert.equal(dqd.disqualified, true);
-  assert.equal(dqd.status, 'disqualified');
-  assert.equal(dqd.proof, 84, 'the score is preserved, not erased');
-  assert.equal(dqd.partial, false, 'disqualified is a verdict, not an unfinished state');
+test('the clock never goes negative', () => {
+  const now = Date.parse('2026-08-29T13:00:00Z');
+  assert.equal(gutsRemaining(
+    { guts_running: true, guts_ends_at: '2026-08-29T12:00:00Z' }, now), 0);
 });
 
-test('disqualification reaches the contestants on that team', () => {
-  const grades = [
-    grade('3A', 'A1', 7, 'g1', '2026-08-29T10:00:00Z'),
-    grade('4A', 'A1', 5, 'g1', '2026-08-29T10:00:00Z'),
-  ];
-  const div = divisionByTeam(grades, [], []);
-  const people = individualStandings(grades, div, cfg, new Set([3]));
-  assert.deepEqual(people.map((p) => p.contestantId), ['4A', '3A'],
-    'the higher scorer is on the disqualified team, so it sorts last');
-  assert.equal(people.find((p) => p.contestantId === '3A').disqualified, true);
-  assert.equal(people.find((p) => p.contestantId === '4A').disqualified, false);
-
-  const teams = teamProofStandings(people, div, cfg, new Set([3]));
-  assert.equal(teams.find((t) => t.team === 3).disqualified, true);
-});
-
-test('the queue stops offering a disqualified team', () => {
-  const div = new Map([[1, 'A'], [2, 'A']]);
-  const roster = buildRoster(cfg, div, new Set(['1A', '2A']), new Set([1]));
-  assert.equal(roster.A.find((t) => t.team === 1).disqualified, true);
-
-  const queue = suggestQueue({
-    roster, byCell: new Map(), claims: new Map(), cfg, myGraderId: 'me', limit: 50,
+test('the freeze engages inside the threshold, and only while running', () => {
+  const now = Date.parse('2026-08-29T13:00:00Z');
+  const at = (minutes) => ({
+    guts_running: true,
+    guts_ends_at: new Date(now + minutes * 60000).toISOString(),
+    freeze_minutes: 10,
   });
-  assert.equal(queue.some((q) => q.contestantId.startsWith('1')), false,
-    'nothing from team 1 is worth grading any more');
-  assert.ok(queue.some((q) => q.contestantId.startsWith('2')));
+  assert.equal(shouldFreeze(at(11), now), false);
+  assert.equal(shouldFreeze(at(10), now), true);
+  assert.equal(shouldFreeze(at(2), now), true);
+  assert.equal(shouldFreeze({ ...at(2), guts_running: false }, now), false,
+    'a paused clock is not a freeze');
 });
 
-test('coverage ignores a disqualified team entirely', () => {
-  const grades = [
-    grade('1A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z'),
-    grade('2A', 'A1', 3, 'g1', '2026-08-29T10:00:00Z'),
-  ];
-  const div = divisionByTeam(grades, [], []);
-  const byCell = indexGrades(grades);
-  const seen = new Set(['1A', '2A']);
-
-  const before = progressFor('A', buildRoster(cfg, div, seen), byCell, cfg);
-  assert.deepEqual([before.done, before.expected], [2, 6]);
-
-  const after = progressFor('A', buildRoster(cfg, div, seen, new Set([1])), byCell, cfg);
-  assert.deepEqual([after.done, after.expected], [1, 3],
-    'the disqualified team leaves both sides of the fraction');
+test('the clock formats as mm:ss', () => {
+  assert.equal(formatClock(4500), '75:00');
+  assert.equal(formatClock(65), '01:05');
+  assert.equal(formatClock(0), '00:00');
+  assert.equal(formatClock(-5), '00:00');
 });
 
-test('reinstating a team restores it exactly', () => {
-  const div = new Map([[1, 'A']]);
-  const teams = [{ team: 1, division: 'A', proof: 84, complete: true, openFlags: 0, members: [] }];
-  const guts = [{ team: 1, score: 100 }];
-  const out = combinedStandings(teams, guts, div, cfg, new Set([1]));
-  const back = combinedStandings(teams, guts, div, cfg, new Set());
-  assert.equal(out[0].total, back[0].total, 'the number never changed, only the ranking');
-  assert.equal(back[0].status, 'final');
+// ---------------------------------------------------------------------
+// Incremental realtime — the thing that keeps the free tier alive
+// ---------------------------------------------------------------------
+
+const base = () => ({
+  settings: null, state: null, key: [], teams: [],
+  contestants: [], gutsAnswers: [], claims: [], graders: [],
+});
+
+test('an inserted row lands in the cache', () => {
+  const next = applyPatch(base(), 'contestants',
+    { eventType: 'INSERT', new: { individual_id: '1A', team: 1 } });
+  assert.equal(next.contestants.length, 1);
+});
+
+test('an updated row replaces the one already there, not appended', () => {
+  let cache = applyPatch(base(), 'contestants',
+    { eventType: 'INSERT', new: { individual_id: '1A', team: 1, name: 'Ada' } });
+  cache = applyPatch(cache, 'contestants',
+    { eventType: 'UPDATE', new: { individual_id: '1A', team: 1, name: 'Ada L' } });
+  assert.equal(cache.contestants.length, 1);
+  assert.equal(cache.contestants[0].name, 'Ada L');
+});
+
+test('a deleted row leaves', () => {
+  let cache = applyPatch(base(), 'claims',
+    { eventType: 'INSERT', new: { scope: 'guts', ref: '1:2' } });
+  cache = applyPatch(cache, 'claims',
+    { eventType: 'DELETE', old: { scope: 'guts', ref: '1:2' } });
+  assert.equal(cache.claims.length, 0);
+});
+
+test('composite keys do not collide', () => {
+  let cache = applyPatch(base(), 'guts_answers',
+    { eventType: 'INSERT', new: { team: 1, problem: 1, answer: 5 } });
+  cache = applyPatch(cache, 'guts_answers',
+    { eventType: 'INSERT', new: { team: 1, problem: 2, answer: 6 } });
+  cache = applyPatch(cache, 'guts_answers',
+    { eventType: 'INSERT', new: { team: 2, problem: 1, answer: 7 } });
+  assert.equal(cache.gutsAnswers.length, 3);
+  cache = applyPatch(cache, 'guts_answers',
+    { eventType: 'UPDATE', new: { team: 1, problem: 2, answer: 99 } });
+  assert.equal(cache.gutsAnswers.length, 3);
+  assert.equal(cache.gutsAnswers.find((g) => g.team === 1 && g.problem === 2).answer, 99);
+});
+
+test('single-row tables are replaced rather than collected', () => {
+  let cache = applyPatch(base(), 'contest_state',
+    { eventType: 'UPDATE', new: { id: 1, guts_running: true } });
+  assert.equal(cache.state.guts_running, true);
+  cache = applyPatch(cache, 'contest_state',
+    { eventType: 'UPDATE', new: { id: 1, guts_running: false } });
+  assert.equal(cache.state.guts_running, false);
+});
+
+test('an unknown table is ignored rather than corrupting the cache', () => {
+  const cache = base();
+  assert.equal(applyPatch(cache, 'nope', { eventType: 'INSERT', new: {} }), cache);
+});
+
+// ---------------------------------------------------------------------
+test('CSV round-trips through the exporter', () => {
+  const csv = toCsv(['a', 'b'], [['x,1', 'y"2']]);
+  const rows = parseCsv(csv);
+  assert.deepEqual(rows[1], ['x,1', 'y"2']);
 });

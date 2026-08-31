@@ -1,60 +1,53 @@
 // =====================================================================
-//  SFPO 2026 staff grading portal
+//  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG } from './config.js';
+import { CONFIG, resolvedConfig, readOverride, writeOverride } from './config.js';
 import { createStore } from './store.js';
-import { parseGutsCsv, toCsv, downloadCsv } from './csv.js';
+import { toCsv, downloadCsv } from './csv.js';
 import {
-  parseContestantId, divisionOfProblem, problemsFor, cellKey,
-  indexGrades, summariseCell, liveClaims, divisionByTeam, buildRoster,
-  individualStandings, teamProofStandings, gutsStandings, combinedStandings,
-  splitByDivision, suggestQueue, progressFor, dqTeams, proofMaxFor,
+  parseIndividualId, parseAnswer, problemsInSet, gutsProblemCount, indexKey, keyGaps,
+  scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
+  combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
+  gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
 } from './scoring.js';
 
-const $ = (sel) => document.querySelector(sel);
-const $$ = (sel) => [...document.querySelectorAll(sel)];
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
 const el = (tag, cls, text) => {
-  const node = document.createElement(tag);
-  if (cls) node.className = cls;
-  if (text != null) node.textContent = text;
-  return node;
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
 };
 
-// ---------------------------------------------------------------------
-// State
-// ---------------------------------------------------------------------
-
-const cfg = { ...CONFIG };
-
-// ?demo=1 runs a configured portal against browser-local storage instead
-// of the real database — for training graders, showing someone the tool,
-// and for the browser tests, which must never touch a live contest. The
-// top bar says "demo mode" in amber the whole time, so it cannot be
-// mistaken for the real thing.
 const forceDemo = new URLSearchParams(location.search).has('demo');
+const cfg = resolvedConfig(location.search);
 const store = createStore(cfg, { forceDemo });
 
 const grader = {
-  id: localStorage.getItem('sfpo-grader-id') || crypto.randomUUID(),
-  name: localStorage.getItem('sfpo-grader-name') || '',
+  id: localStorage.getItem('contest-grader-id') || crypto.randomUUID(),
+  name: localStorage.getItem('contest-grader-name') || '',
 };
-localStorage.setItem('sfpo-grader-id', grader.id);
+localStorage.setItem('contest-grader-id', grader.id);
 
+const GUTS_N = gutsProblemCount(cfg);
 const QUEUE_LIMIT = 12;
-const form = { contestant: null, problem: null, score: null, blockedBy: null };
 
-let data = { settings: null, teams: [], grades: [], guts: [], claims: [], graders: [] };
+let data = {
+  settings: null, state: null, key: [], teams: [],
+  contestants: [], gutsAnswers: [], claims: [], graders: [],
+};
 let derived = null;
-let activeTab = 'matrix';
+let entryMode = 'individual';
+let activeTab = 'progress';
 let activeBoard = 'combined';
-let heldClaim = null;
+let held = null;           // { scope, ref }
+let blockedBy = null;
 let connected = false;
+let clockTimer = null;
 
 // ---------------------------------------------------------------------
-// Toasts
-// ---------------------------------------------------------------------
-
 function toast(message, kind = 'ok') {
   const node = el('div', `toast${kind === 'ok' ? '' : ` toast--${kind}`}`, message);
   $('#toasts').appendChild(node);
@@ -66,364 +59,449 @@ function toast(message, kind = 'ok') {
 }
 
 // ---------------------------------------------------------------------
-// Derivation — everything the UI paints comes from here
-// ---------------------------------------------------------------------
-
 function recompute() {
-  // Settings saved in the database win over the file defaults, so a
-  // head grader can retune mid-contest for everyone at once.
-  if (data.settings) {
-    if (data.settings.team_count) cfg.TEAM_COUNT = Number(data.settings.team_count);
-    if (data.settings.second_read_threshold != null) {
-      cfg.SECOND_READ_THRESHOLD = Number(data.settings.second_read_threshold);
-    }
-    if (data.settings.disagreement_delta != null) {
-      cfg.DISAGREEMENT_DELTA = Number(data.settings.disagreement_delta);
-    }
-    if (data.settings.proof_weight != null) cfg.PROOF_WEIGHT = Number(data.settings.proof_weight);
-    if (data.settings.guts_weight != null) cfg.GUTS_WEIGHT = Number(data.settings.guts_weight);
-    if (data.settings.guts_max != null) cfg.GUTS_MAX = Number(data.settings.guts_max);
-  }
+  const s = data.settings ?? {};
+  if (s.team_count) cfg.TEAM_COUNT = Number(s.team_count);
+  if (s.individual_weight != null) cfg.INDIVIDUAL_WEIGHT = Number(s.individual_weight);
+  if (s.guts_weight != null) cfg.GUTS_WEIGHT = Number(s.guts_weight);
 
-  const byCell = indexGrades(data.grades);
-  const claims = liveClaims(data.claims, cfg);
-  const divByTeam = divisionByTeam(data.grades, data.teams, data.guts);
-  const seen = new Set(data.grades.map((g) => g.contestant_id));
-  for (const key of claims.keys()) seen.add(key.split('|')[0]);
-
+  const key = indexKey(data.key);
   const dq = dqTeams(data.teams);
-  const roster = buildRoster(cfg, divByTeam, seen, dq);
-  const individuals = individualStandings(data.grades, divByTeam, cfg, dq);
-  const teamProof = teamProofStandings(individuals, divByTeam, cfg, dq);
-  const guts = gutsStandings(data.guts, divByTeam);
-  const combined = combinedStandings(teamProof, data.guts, divByTeam, cfg, dq);
+  const claims = liveClaims(data.claims, cfg);
+  const gutsByTeam = indexGutsAnswers(data.gutsAnswers);
+  const individuals = individualStandings(data.contestants, key, cfg, dq);
+  const guts = gutsStandings(data.teams, gutsByTeam, key, cfg, dq);
+  const combined = combinedStandings(individuals, guts, key, cfg, data.teams);
 
   derived = {
-    byCell,
-    claims,
-    seen,
-    dq,
-    divByTeam,
-    roster,
-    individuals,
-    teamProof,
-    guts,
-    combined,
-    progress: { A: progressFor('A', roster, byCell, cfg), B: progressFor('B', roster, byCell, cfg) },
-    queue: suggestQueue({ roster, byCell, claims, cfg, myGraderId: grader.id, limit: QUEUE_LIMIT }),
+    key, dq, claims, gutsByTeam, individuals, guts, combined,
+    byId: new Map(individuals.map((p) => [p.individualId, p])),
+    keyGapsIndividual: keyGaps(key, 'individual', cfg.INDIVIDUAL_PROBLEMS),
+    keyGapsGuts: keyGaps(key, 'guts', GUTS_N),
+    teamsByNo: new Map(data.teams.map((t) => [Number(t.team), t])),
+    queue: buildQueue(claims, dq, gutsByTeam),
   };
 }
 
-// ---------------------------------------------------------------------
-// The grading form
-// ---------------------------------------------------------------------
-
-function currentCellSummary() {
-  if (!form.contestant || !form.problem) return null;
-  return summariseCell(derived.byCell.get(cellKey(form.contestant.id, form.problem)), cfg);
-}
-
-function myExistingRead() {
-  if (!form.contestant || !form.problem) return null;
-  return (derived.byCell.get(cellKey(form.contestant.id, form.problem)) ?? [])
-    .find((g) => g.grader_id === grader.id) ?? null;
-}
-
-function renderProblemChips() {
-  for (const division of ['A', 'B']) {
-    const host = $(`#problems${division}`);
-    host.replaceChildren();
-    for (const problem of problemsFor(division, cfg)) {
-      const chip = el('button', 'chip', problem);
-      chip.type = 'button';
-      chip.setAttribute('aria-pressed', String(form.problem === problem));
-      if (form.contestant) {
-        const summary = summariseCell(
-          derived?.byCell.get(cellKey(form.contestant.id, problem)), cfg);
-        if (summary.state !== 'ungraded') chip.classList.add('chip--done');
+/**
+ * What to enter next. Sheets in hand come first: any contestant a team
+ * has started but not finished, then teams with guts sets missing.
+ * Anything somebody else is holding is left out.
+ */
+function buildQueue(claims, dq, gutsByTeam) {
+  const out = [];
+  if (entryMode === 'individual') {
+    const seenTeams = new Set(data.contestants.map((c) => Number(c.team)));
+    for (const team of [...seenTeams].sort((a, b) => a - b)) {
+      if (dq.has(team)) continue;
+      for (const member of cfg.MEMBERS) {
+        const id = `${team}${member}`;
+        if (data.contestants.some((c) => c.individual_id === id)) continue;
+        if (claims.has(`individual|${id}`)) continue;
+        out.push({ kind: 'individual', id, label: id, why: `team ${team} is part-entered` });
       }
-      chip.addEventListener('click', () => selectProblem(problem));
-      host.appendChild(chip);
+    }
+  } else {
+    for (const t of [...data.teams].sort((a, b) => a.team - b.team)) {
+      if (dq.has(Number(t.team))) continue;
+      const answers = gutsByTeam.get(Number(t.team));
+      for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+        const problems = problemsInSet(set, cfg);
+        const done = problems.every((p) => answers?.get(p) != null);
+        if (done) continue;
+        if (claims.has(`guts|${t.team}:${set}`)) continue;
+        out.push({
+          kind: 'guts', team: Number(t.team), set,
+          label: `Team ${t.team} · set ${set}`,
+          why: t.name || 'no team name yet',
+        });
+        break;                       // one open set per team keeps it fair
+      }
     }
   }
+  return out.slice(0, QUEUE_LIMIT);
 }
 
-function renderScorepad() {
-  const host = $('#scorepad');
+// ---------------------------------------------------------------------
+// Answer boxes
+// ---------------------------------------------------------------------
+
+/**
+ * A run of numbered boxes that behaves like a keypad: typing moves you
+ * on, arrows and backspace move you back, and paste spreads a whole row
+ * of numbers across the grid.
+ */
+function buildAnswerGrid(host, count, { offset = 0, onChange } = {}) {
   host.replaceChildren();
-  for (let s = 0; s <= cfg.MAX_SCORE; s += 1) {
-    const btn = el('button', 'score', String(s));
-    btn.type = 'button';
-    btn.setAttribute('aria-pressed', String(form.score === s));
-    btn.addEventListener('click', () => {
-      form.score = form.score === s ? null : s;
-      renderScorepad();
+  const inputs = [];
+  for (let i = 0; i < count; i += 1) {
+    const wrap = el('div', 'ans');
+    wrap.appendChild(el('span', 'ans__no', String(offset + i + 1)));
+    const input = el('input');
+    input.type = 'text';
+    input.inputMode = 'numeric';
+    input.autocomplete = 'off';
+    input.dataset.index = String(i);
+    input.setAttribute('aria-label', `Problem ${offset + i + 1}`);
+
+    input.addEventListener('input', () => {
+      const parsed = parseAnswer(input.value);
+      wrap.classList.toggle('ans--bad', !parsed.ok);
+      wrap.classList.toggle('ans--filled', parsed.ok && parsed.value != null);
+      onChange?.();
     });
-    host.appendChild(btn);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); inputs[i + 1]?.focus(); }
+      if (e.key === 'ArrowRight' && input.selectionStart === input.value.length) inputs[i + 1]?.focus();
+      if (e.key === 'ArrowLeft' && input.selectionStart === 0) inputs[i - 1]?.focus();
+      if (e.key === 'ArrowDown') { e.preventDefault(); inputs[i + 5]?.focus(); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); inputs[i - 5]?.focus(); }
+      if (e.key === 'Backspace' && input.value === '') inputs[i - 1]?.focus();
+    });
+    input.addEventListener('paste', (e) => {
+      const text = e.clipboardData?.getData('text') ?? '';
+      const parts = text.split(/[\s,;\t\n]+/).filter(Boolean);
+      if (parts.length < 2) return;
+      e.preventDefault();
+      parts.forEach((value, k) => {
+        const target = inputs[i + k];
+        if (!target) return;
+        target.value = value.replace(/[^0-9]/g, '');
+        target.dispatchEvent(new Event('input'));
+      });
+      inputs[Math.min(i + parts.length, inputs.length - 1)]?.focus();
+    });
+    wrap.appendChild(input);
+    host.appendChild(wrap);
+    inputs.push(input);
   }
+  return inputs;
 }
 
-function renderCellBanner() {
-  const host = $('#cellBanner');
+function readGrid(inputs) {
+  const values = [];
+  let bad = false;
+  for (const input of inputs) {
+    const parsed = parseAnswer(input.value);
+    if (!parsed.ok) { bad = true; values.push(null); } else values.push(parsed.value);
+  }
+  return { values, bad };
+}
+
+function fillGrid(inputs, values) {
+  inputs.forEach((input, i) => {
+    const v = values?.[i];
+    input.value = v == null ? '' : String(v);
+    input.dispatchEvent(new Event('input'));
+  });
+}
+
+// ---------------------------------------------------------------------
+// Individual entry
+// ---------------------------------------------------------------------
+
+let sheetInputs = [];
+let gutsInputs = [];
+
+function currentIndividualId() {
+  const team = Number($('#teamNo').value);
+  const member = $('#memberLetter').value.trim().toUpperCase();
+  if (!Number.isInteger(team) || team < 1 || !member) return null;
+  return { id: `${team}${member}`, team, member };
+}
+
+function onIdTyped() {
+  const input = $('#individualId');
+  input.value = input.value.toUpperCase();
+  const parsed = parseIndividualId(input.value);
+  const echo = $('#idEcho');
+  echo.classList.remove('field__hint--error');
+
+  if (parsed.ok) {
+    $('#teamNo').value = parsed.team;
+    $('#memberLetter').value = parsed.member;
+    echo.textContent = `Team ${parsed.team}, member ${parsed.member}. Both boxes below stay editable.`;
+    loadExistingSheet();
+    claimCurrent();
+  } else if (parsed.partial) {
+    $('#teamNo').value = parsed.team;
+    echo.textContent = parsed.error;
+  } else if (input.value.trim()) {
+    echo.textContent = parsed.error;
+    echo.classList.add('field__hint--error');
+  } else {
+    echo.textContent = 'Type 12C and the team and member fill themselves in.';
+  }
+  refreshIndividualContext();
+}
+
+/** Pull back a sheet that has already been entered, so it can be fixed. */
+function loadExistingSheet() {
+  const current = currentIndividualId();
+  if (!current) return;
+  const existing = data.contestants.find((c) => c.individual_id === current.id);
+  if (!existing) return;
+  fillGrid(sheetInputs, existing.answers ?? []);
+  $('#contestantName').value = existing.name ?? '';
+  const team = derived.teamsByNo.get(current.team);
+  $('#divisionPick').value = existing.division ?? team?.division ?? '';
+}
+
+function refreshIndividualContext() {
+  const current = currentIndividualId();
+  const host = $('#individualBanner');
   host.replaceChildren();
-  $('#editingTag').hidden = true;
+  $('#sheetState').textContent = '';
+  $('#sheetState').hidden = true;
 
-  if (!form.contestant || !form.problem) return;
+  const gaps = derived?.keyGapsIndividual ?? [];
+  $('#answersHint').textContent = gaps.length
+    ? `— ${gaps.length} of ${cfg.INDIVIDUAL_PROBLEMS} not in the key yet`
+    : `— out of ${cfg.INDIVIDUAL_PROBLEMS}`;
 
-  const key = cellKey(form.contestant.id, form.problem);
-  const live = derived.claims.get(key);
-  const claim = (live && live.grader_id !== grader.id) ? live : form.blockedBy;
-  const summary = currentCellSummary();
-  const mine = myExistingRead();
+  if (!current) return;
 
+  const team = derived.teamsByNo.get(current.team);
+  if (team?.division && !$('#divisionPick').value) $('#divisionPick').value = team.division;
+
+  const claim = derived.claims.get(`individual|${current.id}`) ?? blockedBy;
   if (claim && claim.grader_id !== grader.id) {
     const b = el('div', 'banner banner--warn');
-    b.append(
-      el('div', null, '✋'),
-      (() => {
-        const d = el('div');
-        d.append(
-          el('b', null, `${claim.grader_name} is grading this right now`),
-          el('span', null, 'Pick something else from “Grade these next” so you are not doing the same proof twice.'),
-        );
-        return d;
-      })(),
-    );
+    const d = el('div');
+    d.append(el('b', null, `${claim.grader_name} is entering this sheet right now`),
+      el('span', null, 'Take another one from the list so it is not keyed twice.'));
+    b.append(el('div', null, '✋'), d);
     host.appendChild(b);
   }
 
-  // A Division B team being scored on an A problem is almost always a
-  // mistyped ID — and submitting it would drag the whole team into the
-  // other division. Say so before that happens.
-  const teamDivision = derived.divByTeam.get(form.contestant.team);
-  const problemDivision = divisionOfProblem(form.problem);
-  if (teamDivision && teamDivision !== problemDivision) {
+  if (derived.dq.has(current.team)) {
     const b = el('div', 'banner banner--error');
     const d = el('div');
-    d.append(
-      el('b', null, `Team ${form.contestant.team} is in Division ${teamDivision}, but ${form.problem} is a Division ${problemDivision} problem`),
-      el('span', null, 'Check the contestant ID. Submitting this moves the whole team into '
-        + `Division ${problemDivision}.`),
-    );
+    d.append(el('b', null, `Team ${current.team} is disqualified`),
+      el('span', null, team?.dq_reason || 'It will not appear in the standings.'));
     b.append(el('div', null, '⛔'), d);
     host.appendChild(b);
   }
 
-  if (mine) {
-    $('#editingTag').hidden = false;
+  const existing = data.contestants.find((c) => c.individual_id === current.id);
+  if (existing) {
+    const person = derived.byId.get(current.id);
+    $('#sheetState').hidden = false;
+    $('#sheetState').textContent = `already entered · ${person?.score ?? 0} pts`;
     const b = el('div', 'banner banner--info');
     const d = el('div');
-    d.append(
-      el('b', null, `You already scored this ${mine.score}`),
-      el('span', null, 'Submitting again replaces your own read rather than adding a second one.'),
-    );
+    d.append(el('b', null, `Entered by ${existing.entered_by_name || 'someone'}`),
+      el('span', null, 'Saving again replaces that sheet.'));
     b.append(el('div', null, '✎'), d);
     host.appendChild(b);
-  } else if (summary.state === 'conflict') {
-    const b = el('div', 'banner banner--error');
-    const d = el('div');
-    d.append(
-      el('b', null, `Two reads disagree: ${summary.scores.join(' and ')}`),
-      el('span', null, `${summary.graders.join(', ')} — your score settles it.`),
-    );
-    b.append(el('div', null, '⚠'), d);
-    host.appendChild(b);
-  } else if (summary.state === 'needs-second') {
-    const b = el('div', 'banner banner--warn');
-    const d = el('div');
-    d.append(
-      el('b', null, `${summary.graders[0]} scored this ${summary.score} — second read`),
-      el('span', null, `Scores of ${cfg.SECOND_READ_THRESHOLD} and up get a second pair of eyes. Grade it blind, then compare.`),
-    );
-    b.append(el('div', null, '👀'), d);
-    host.appendChild(b);
-  } else if (summary.state === 'graded') {
-    const b = el('div', 'banner banner--ok');
-    const d = el('div');
-    d.append(
-      el('b', null, `${summary.graders[0]} already scored this ${summary.score}`),
-      el('span', null, 'Adding your read turns it into a two-read cell.'),
-    );
-    b.append(el('div', null, '✓'), d);
-    host.appendChild(b);
   }
+  markSheetAgainstKey();
 }
 
-function renderIdEcho() {
-  const echo = $('#idEcho');
-  const input = $('#contestantId');
-  const raw = input.value.trim();
-
-  if (!raw) {
-    echo.textContent = 'Team number, then the member letter.';
-    echo.classList.remove('field__hint--error');
-    input.classList.remove('input--error');
-    return;
-  }
-  const parsed = parseContestantId(raw);
-  if (!parsed.ok) {
-    echo.textContent = parsed.error;
-    echo.classList.add('field__hint--error');
-    input.classList.add('input--error');
-    return;
-  }
-  echo.classList.remove('field__hint--error');
-  input.classList.remove('input--error');
-
-  const division = derived?.divByTeam.get(parsed.team);
-  const done = data.grades.filter((g) => g.contestant_id === parsed.id).length;
-  const bits = [`Team ${parsed.team}, member ${parsed.member}`];
-  if (division) {
-    bits.push(`Division ${division} — ${problemsFor(division, cfg).length} problems`);
-  } else {
-    bits.push('division not set yet — the problem you pick will set it');
-  }
-  if (done) bits.push(`${done} already graded`);
-  echo.textContent = bits.join(' · ');
+/** Tint each box green/red once the key knows that problem. */
+function markSheetAgainstKey() {
+  const { values } = readGrid(sheetInputs);
+  const result = scoreSheet(values, derived.key, cfg);
+  sheetInputs.forEach((input, i) => {
+    const wrap = input.parentElement;
+    wrap.classList.remove('ans--correct', 'ans--wrong', 'ans--unkeyed');
+    if (values[i] == null) return;
+    const mark = result.marks[i];
+    if (mark === 'correct') wrap.classList.add('ans--correct');
+    else if (mark === 'wrong') wrap.classList.add('ans--wrong');
+    else if (mark === 'unkeyed') wrap.classList.add('ans--unkeyed');
+  });
+  $('#myCount').textContent = `${result.correct} correct · ${result.score} pts`;
 }
 
-function setContestant(raw, { focusNext = false } = {}) {
-  const parsed = parseContestantId(raw);
-  const changed = parsed.ok ? parsed.id !== form.contestant?.id : form.contestant !== null;
-  form.contestant = parsed.ok ? parsed : null;
-  if (changed) releaseHeldClaim();
-  renderIdEcho();
-  renderProblemChips();
-  renderCellBanner();
-  maybeClaim();
-  if (focusNext && parsed.ok) $('#feedback').focus();
-}
+async function saveSheet() {
+  const current = currentIndividualId();
+  if (!current) { toast('Enter an individual ID, like 12C.', 'error'); $('#individualId').focus(); return; }
+  const division = $('#divisionPick').value;
+  if (!division) { toast('Pick a division.', 'error'); $('#divisionPick').focus(); return; }
+  const { values, bad } = readGrid(sheetInputs);
+  if (bad) { toast('One of the answers is not a whole number.', 'error'); return; }
 
-function selectProblem(problem) {
-  if (form.problem === problem) return;
-  releaseHeldClaim();
-  form.problem = problem;
-  renderProblemChips();
-  renderCellBanner();
-  prefillFromMyRead();
-  maybeClaim();
-}
-
-function prefillFromMyRead() {
-  const mine = myExistingRead();
-  if (mine) {
-    form.score = Number(mine.score);
-    $('#feedback').value = mine.feedback ?? '';
-  }
-  renderScorepad();
-}
-
-function clearForm({ keepContestant = false } = {}) {
-  releaseHeldClaim();
-  if (!keepContestant) {
-    form.contestant = null;
-    $('#contestantId').value = '';
-  }
-  form.problem = null;
-  form.score = null;
-  $('#feedback').value = '';
-  renderIdEcho();
-  renderProblemChips();
-  renderScorepad();
-  renderCellBanner();
-}
-
-// ---------------------------------------------------------------------
-// Claims — "I am on this one"
-// ---------------------------------------------------------------------
-
-async function maybeClaim() {
-  if (!form.contestant || !form.problem) return;
-  const key = cellKey(form.contestant.id, form.problem);
-  if (heldClaim === key) return;
-  try {
-    const result = await store.claim(form.contestant.id, form.problem, grader, cfg.CLAIM_TTL_MS);
-    if (result?.ok === false) {
-      // Somebody is already reading this one. We do not block the form —
-      // a head grader sometimes has to go in anyway — but the warning
-      // stays up until they move off the cell.
-      form.blockedBy = result.heldBy ?? null;
-      heldClaim = null;
-      renderCellBanner();
-      return;
-    }
-    form.blockedBy = null;
-    heldClaim = key;
-    renderCellBanner();
-  } catch (err) {
-    console.warn('claim failed', err);
-  }
-}
-
-async function releaseHeldClaim() {
-  form.blockedBy = null;
-  if (!heldClaim) return;
-  const [contestantId, problem] = heldClaim.split('|');
-  heldClaim = null;
-  try {
-    await store.releaseClaim(contestantId, problem, grader.id);
-  } catch (err) {
-    console.warn('release failed', err);
-  }
-}
-
-// ---------------------------------------------------------------------
-// Submit
-// ---------------------------------------------------------------------
-
-async function submitGrade() {
-  if (!form.contestant) {
-    toast('Enter a contestant ID first, like 12C.', 'error');
-    $('#contestantId').focus();
-    return;
-  }
-  if (!form.problem) { toast('Pick a problem.', 'error'); return; }
-  if (form.score == null) { toast('Pick a score from 0 to 7.', 'error'); return; }
-
-  const division = divisionOfProblem(form.problem);
-  const button = $('#submitGrade');
+  const button = $('#saveSheet');
   button.disabled = true;
-
   try {
-    await store.saveGrade({
-      contestant_id: form.contestant.id,
-      team: form.contestant.team,
-      member: form.contestant.member,
+    await store.saveContestant({
+      individual_id: current.id,
+      team: current.team,
+      member: current.member,
       division,
-      problem: form.problem,
-      score: form.score,
-      feedback: $('#feedback').value.trim(),
-      grader_name: grader.name,
-      grader_id: grader.id,
+      name: $('#contestantName').value.trim(),
+      answers: values,
+      entered_by: grader.id,
+      entered_by_name: grader.name,
+      entered_at: new Date().toISOString(),
     });
-    toast(`${form.contestant.id} · ${form.problem} → ${form.score}`);
-
-    const contestant = form.contestant;
-    const justDid = form.problem;
-    await releaseHeldClaim();
+    const result = scoreSheet(values, derived.key, cfg);
+    toast(`${current.id} saved · ${result.correct}/${cfg.INDIVIDUAL_PROBLEMS} · ${result.score} pts`);
+    await releaseHeld();
+    clearSheet({ keepTeam: true });
     await refresh();
-
-    // Stay on the same contestant and hop to their next ungraded
-    // problem — that is how graders actually move through a stack.
-    form.score = null;
-    $('#feedback').value = '';
-    const remaining = problemsFor(division, cfg).filter((p) => {
-      if (p === justDid) return false;
-      const s = summariseCell(derived.byCell.get(cellKey(contestant.id, p)), cfg);
-      return s.state === 'ungraded';
-    });
-    form.problem = remaining[0] ?? null;
-    renderProblemChips();
-    renderScorepad();
-    renderCellBanner();
-    renderIdEcho();
-    if (form.problem) maybeClaim();
-    else toast(`${contestant.id} is fully graded.`, 'info');
   } catch (err) {
-    toast(err.message || 'Could not save that grade.', 'error');
+    toast(err.message || 'Could not save that sheet.', 'error');
   } finally {
     button.disabled = false;
   }
+}
+
+function clearSheet({ keepTeam = false } = {}) {
+  releaseHeld();
+  $('#individualId').value = '';
+  if (!keepTeam) { $('#teamNo').value = ''; $('#divisionPick').value = ''; }
+  $('#memberLetter').value = '';
+  $('#contestantName').value = '';
+  fillGrid(sheetInputs, []);
+  $('#idEcho').textContent = 'Type 12C and the team and member fill themselves in.';
+  refreshIndividualContext();
+  $('#individualId').focus();
+}
+
+// ---------------------------------------------------------------------
+// Guts entry
+// ---------------------------------------------------------------------
+
+function currentGuts() {
+  const team = Number($('#gutsTeam').value);
+  const set = Number($('#gutsSet').value);
+  if (!Number.isInteger(team) || team < 1 || !set) return null;
+  return { team, set };
+}
+
+function refreshGutsContext() {
+  const host = $('#gutsBanner');
+  host.replaceChildren();
+  const current = currentGuts();
+  const gaps = derived?.keyGapsGuts ?? [];
+  $('#gutsState').textContent = gaps.length ? `${gaps.length} guts answers unkeyed` : 'key complete';
+
+  if (!current) { $('#gutsPointsHint').textContent = ''; $('#gutsProgress').textContent = ''; return; }
+
+  const problems = problemsInSet(current.set, cfg);
+  const points = derived.key.guts.get(problems[0])?.points ?? 1;
+  $('#gutsPointsHint').textContent =
+    `— problems ${problems[0]}–${problems[problems.length - 1]}, ${points} point(s) each`;
+
+  const team = derived.teamsByNo.get(current.team);
+  const nameInput = $('#gutsTeamName');
+  if (team?.name && !nameInput.dataset.dirty) nameInput.value = team.name;
+  $('#gutsNameHint').textContent = team?.name
+    ? 'Recorded already — edit only if it is wrong.'
+    : 'First time this team is scored, so give it a name for the public board.';
+  if (team?.division && !$('#gutsDivision').value) $('#gutsDivision').value = team.division;
+
+  const answers = derived.gutsByTeam.get(current.team);
+  fillGrid(gutsInputs, problems.map((p) => answers?.get(p) ?? null));
+
+  const result = scoreGutsTeam(answers, derived.key, cfg);
+  $('#gutsProgress').textContent =
+    `${result.perSet.filter((s) => s.complete).length}/${cfg.GUTS_SETS} sets · ${result.score} pts`;
+
+  const claim = derived.claims.get(`guts|${current.team}:${current.set}`) ?? blockedBy;
+  if (claim && claim.grader_id !== grader.id) {
+    const b = el('div', 'banner banner--warn');
+    const d = el('div');
+    d.append(el('b', null, `${claim.grader_name} is entering this set right now`),
+      el('span', null, 'Pick a different team or set.'));
+    b.append(el('div', null, '✋'), d);
+    host.appendChild(b);
+  }
+  if (derived.dq.has(current.team)) {
+    const b = el('div', 'banner banner--error');
+    const d = el('div');
+    d.append(el('b', null, `Team ${current.team} is disqualified`),
+      el('span', null, 'It is off the public board.'));
+    b.append(el('div', null, '⛔'), d);
+    host.appendChild(b);
+  }
+}
+
+async function saveGutsSet() {
+  const current = currentGuts();
+  if (!current) { toast('Enter a team number and pick a set.', 'error'); return; }
+  const { values, bad } = readGrid(gutsInputs);
+  if (bad) { toast('One of the answers is not a whole number.', 'error'); return; }
+
+  const team = derived.teamsByNo.get(current.team);
+  const typedName = $('#gutsTeamName').value.trim();
+  if (!team?.name && !typedName) {
+    toast('Give the team a name — it is what the public board shows.', 'error');
+    $('#gutsTeamName').focus();
+    return;
+  }
+
+  const problems = problemsInSet(current.set, cfg);
+  const button = $('#saveGuts');
+  button.disabled = true;
+  try {
+    await store.saveGutsSet(
+      current.team,
+      problems.map((p, i) => ({ problem: p, answer: values[i] })),
+      grader.id, grader.name,
+      typedName || null,
+    );
+    const division = $('#gutsDivision').value;
+    if (division && division !== team?.division) await store.setTeam(current.team, { division });
+    toast(`Team ${current.team} set ${current.set} saved.`);
+    await releaseHeld();
+    $('#gutsTeamName').dataset.dirty = '';
+    const next = current.set < cfg.GUTS_SETS ? current.set + 1 : current.set;
+    $('#gutsSet').value = String(next);
+    fillGrid(gutsInputs, []);
+    await refresh();
+    gutsInputs[0]?.focus();
+  } catch (err) {
+    toast(err.message || 'Could not save that set.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Claims
+// ---------------------------------------------------------------------
+
+function wantedClaim() {
+  if (entryMode === 'individual') {
+    const current = currentIndividualId();
+    return current ? claimRef.individual(current.id) : null;
+  }
+  const current = currentGuts();
+  return current ? claimRef.guts(current.team, current.set) : null;
+}
+
+let claiming = false;
+
+async function claimCurrent() {
+  const want = wantedClaim();
+  if (!want || claiming) return;
+  if (held && held.scope === want.scope && held.ref === want.ref) return;
+  claiming = true;
+  try {
+    const result = await store.claim(want.scope, want.ref, grader, cfg.CLAIM_TTL_MS);
+    if (result?.ok === false) {
+      blockedBy = result.heldBy ?? null;
+      held = null;
+      claiming = false;
+      refreshIndividualContext();
+      return;
+    }
+    blockedBy = null;
+    held = want;
+  } catch { /* a lost claim must never block entry */ } finally {
+    claiming = false;
+  }
+}
+
+async function releaseHeld() {
+  blockedBy = null;
+  if (!held) return;
+  const { scope, ref } = held;
+  held = null;
+  try { await store.releaseClaim(scope, ref, grader.id); } catch { /* best effort */ }
 }
 
 // ---------------------------------------------------------------------
@@ -435,191 +513,122 @@ function renderSuggestions() {
   host.replaceChildren();
   $('#queueCount').textContent = derived.queue.length >= QUEUE_LIMIT
     ? `${QUEUE_LIMIT}+` : String(derived.queue.length);
-
   if (!derived.queue.length) {
-    const anyDivision = derived.roster.A.length + derived.roster.B.length;
-    host.appendChild(el('div', 'empty', anyDivision
-      ? 'Nothing waiting. Every cell is graded or already claimed.'
-      : 'No teams have a division yet. Grade one proof and this queue fills itself in.'));
+    host.appendChild(el('div', 'empty', entryMode === 'individual'
+      ? 'Nothing outstanding. Enter any ID directly above.'
+      : 'Every team has a complete set of guts answers.'));
     return;
   }
-
   for (const item of derived.queue) {
-    const btn = el('button', `suggest__item suggest__item--p${item.priority}`);
+    const btn = el('button', 'suggest__item');
     btn.type = 'button';
-    btn.append(
-      el('span', 'suggest__id', item.contestantId),
-      el('span', `tag tag--${item.division.toLowerCase()}`, item.problem),
-      el('span', 'suggest__why', item.reason),
-    );
+    btn.append(el('span', 'suggest__id', item.label), el('span', 'suggest__why', item.why));
     btn.addEventListener('click', () => {
-      $('#contestantId').value = item.contestantId;
-      setContestant(item.contestantId);
-      selectProblem(item.problem);
-      $('#feedback').focus();
+      if (item.kind === 'individual') {
+        $('#individualId').value = item.id;
+        onIdTyped();
+        sheetInputs[0]?.focus();
+      } else {
+        $('#gutsTeam').value = String(item.team);
+        $('#gutsSet').value = String(item.set);
+        $('#gutsTeamName').dataset.dirty = '';
+        refreshGutsContext();
+        claimCurrent();
+        gutsInputs[0]?.focus();
+      }
     });
     host.appendChild(btn);
   }
 }
 
 // ---------------------------------------------------------------------
-// Coverage matrix
+// Progress — individual by individual, never twenty boxes
 // ---------------------------------------------------------------------
 
-// The matrix is the expensive thing on the page: at 100 teams it is
-// ~1,600 cells, and a realtime event arrives every time any grader
-// submits. So the DOM is built once per *shape* change (a team joining a
-// division, a new member letter appearing) and every data change after
-// that only repaints classes and tooltips on cells that already exist.
-let matrixShape = null;
-const matrixCells = new Map();
-const matrixBars = new Map();
-
-function shapeSignature() {
-  return ['A', 'B'].map((division) => derived.roster[division]
-    .map((t) => `${t.team}.${t.members.map((m) => m.member).join('')}${t.disqualified ? '!' : ''}`)
-    .join(',')).join('|');
-}
-
-function buildMatrix() {
-  const host = $('#matrix');
+function renderProgress() {
+  const host = $('#progressPanel');
   host.replaceChildren();
-  matrixCells.clear();
-  matrixBars.clear();
 
-  for (const division of ['A', 'B']) {
-    const entries = derived.roster[division];
-    const problems = problemsFor(division, cfg);
-    const section = el('div', 'matrix__division');
+  const teams = [...new Set([
+    ...data.teams.map((t) => Number(t.team)),
+    ...data.contestants.map((c) => Number(c.team)),
+  ])].sort((a, b) => a - b);
 
-    const bar = el('div', 'matrix__bar');
-    const flagged = el('span', 'tag tag--flag');
-    const counter = el('span', 'muted');
-    const track = el('div', 'progress');
-    const fill = el('div', 'progress__fill');
-    track.appendChild(fill);
-    bar.append(
-      el('span', `tag tag--${division.toLowerCase()}`, `Division ${division}`),
-      el('span', 'muted', `${entries.length} teams · ${problems.join(' ')}`),
-      el('span', 'spacer'), flagged, counter, track,
-    );
-    matrixBars.set(division, { flagged, counter, fill });
-    section.appendChild(bar);
+  const totalPeople = data.contestants.length;
+  const donePeople = derived.individuals.filter((p) => p.answered > 0).length;
+  const bar = el('div', 'matrix__bar');
+  bar.append(
+    el('span', 'tag tag--a', `${teams.length} teams`),
+    el('span', 'muted', `${donePeople}/${totalPeople} sheets entered`),
+  );
+  bar.appendChild(el('span', 'spacer'));
+  const gutsDone = derived.guts.reduce(
+    (n, g) => n + g.perSet.filter((s) => s.complete).length, 0);
+  bar.appendChild(el('span', 'muted', `${gutsDone}/${teams.length * cfg.GUTS_SETS} guts sets`));
+  host.appendChild(bar);
 
-    const grid = el('div', 'matrix__grid');
-    if (!entries.length) {
-      grid.appendChild(el('div', 'empty',
-        `No teams in Division ${division} yet. A team joins the moment one of its ${division} problems is graded.`));
+  if (!teams.length) {
+    host.appendChild(el('div', 'empty',
+      'Nothing entered yet. Type an individual ID on the left to begin.'));
+    return;
+  }
+
+  const roster = el('div', 'roster');
+  for (const teamNo of teams) {
+    const team = derived.teamsByNo.get(teamNo);
+    const card = el('div', `rosterteam${team?.disqualified ? ' rosterteam--dq' : ''}`);
+
+    const head = el('div', 'rosterteam__head');
+    head.append(el('span', null, `TEAM ${teamNo}`));
+    if (team?.name) head.append(el('span', 'rosterteam__name', team.name));
+    if (team?.division) head.append(el('span', `tag tag--${team.division.toLowerCase()}`, team.division));
+    if (team?.disqualified) head.append(el('span', 'tag tag--flag', 'DQ'));
+    head.appendChild(el('span', 'spacer'));
+
+    const answers = derived.gutsByTeam.get(teamNo);
+    const gutsResult = scoreGutsTeam(answers, derived.key, cfg);
+    const pips = el('div', 'setpips');
+    for (const set of gutsResult.perSet) {
+      const claimed = derived.claims.has(`guts|${teamNo}:${set.set}`);
+      let cls = 'setpip';
+      if (set.complete) cls += ' setpip--done';
+      else if (set.answered) cls += ' setpip--partial';
+      else if (claimed) cls += ' setpip--claimed';
+      const pip = el('div', cls, String(set.set));
+      pip.title = `Guts set ${set.set} — ${set.answered}/${cfg.GUTS_PER_SET} entered, ${set.score} pts`;
+      pips.appendChild(pip);
     }
-    for (const entry of entries) {
-      const teamCard = el('div', `matrix__team${entry.disqualified ? ' matrix__team--dq' : ''}`);
-      const label = el('div', 'matrix__team-no',
-        `TEAM ${entry.team}${entry.beyondRange ? ' ⚠' : ''}${entry.disqualified ? ' · DQ' : ''}`);
-      if (entry.disqualified) label.title = teamNote(entry.team) || 'Disqualified';
-      teamCard.appendChild(label);
-      for (const member of entry.members) {
-        const row = el('div', 'matrix__row');
-        row.appendChild(el('span', 'matrix__who', member.member));
-        for (const problem of problems) {
-          const cell = el('button', 'cell');
-          cell.type = 'button';
-          cell.dataset.cid = member.contestantId;
-          cell.dataset.problem = problem;
-          matrixCells.set(cellKey(member.contestantId, problem), cell);
-          row.appendChild(cell);
-        }
-        teamCard.appendChild(row);
-      }
-      grid.appendChild(teamCard);
-    }
-    section.appendChild(grid);
-    host.appendChild(section);
-  }
-}
+    head.appendChild(pips);
+    card.appendChild(head);
 
-function paintMatrix() {
-  for (const [key, cell] of matrixCells) {
-    const [contestantId, problem] = key.split('|');
-    const summary = summariseCell(derived.byCell.get(key), cfg);
-    const claim = derived.claims.get(key);
-    const seen = derived.seen.has(contestantId);
+    const people = el('div', 'people');
+    for (const member of cfg.MEMBERS) {
+      const id = `${teamNo}${member}`;
+      const person = derived.byId.get(id);
+      const claimed = derived.claims.get(`individual|${id}`);
+      let cls = 'person';
+      if (person && person.answered === cfg.INDIVIDUAL_PROBLEMS) cls += ' person--done';
+      else if (person && person.answered > 0) cls += ' person--partial';
+      else if (claimed) cls += ' person--claimed';
 
-    let cls = 'cell';
-    if (summary.state !== 'ungraded') cls += ` cell--${summary.state}`;
-    else if (claim) cls += ' cell--claimed';
-    else if (!seen) cls += ' cell--absent';
-    if (claim?.grader_id === grader.id) cls += ' cell--mine';
-    if (cell.className !== cls) cell.className = cls;
-
-    const detail = summary.state === 'ungraded'
-      ? (claim ? `${claim.grader_name} is on it` : 'not graded')
-      : `${summary.scores.join(' → ')} by ${summary.graders.join(', ')}`;
-    const title = `${contestantId} · ${problem} — ${detail}`;
-    if (cell.title !== title) {
-      cell.title = title;
-      cell.setAttribute('aria-label', title);
-    }
-  }
-
-  for (const division of ['A', 'B']) {
-    const bar = matrixBars.get(division);
-    if (!bar) continue;
-    const progress = derived.progress[division];
-    bar.fill.style.width = `${progress.pct}%`;
-    bar.counter.textContent = `${progress.done}/${progress.expected}`;
-    bar.flagged.textContent = `${progress.flagged} flagged`;
-    bar.flagged.hidden = progress.flagged === 0;
-  }
-}
-
-function renderMatrix() {
-  const shape = shapeSignature();
-  if (shape !== matrixShape) {
-    matrixShape = shape;
-    buildMatrix();
-  }
-  paintMatrix();
-  renderUnassigned();
-}
-
-function renderUnassigned() {
-  const host = $('#unassigned');
-  host.replaceChildren();
-  const pending = derived.roster.unassigned.filter((t) => t.members.some((m) => m.seen));
-  const untouched = derived.roster.unassigned.length - pending.length;
-
-  const note = el('p', 'field__hint');
-  note.style.marginTop = '14px';
-  note.textContent = untouched
-    ? `${untouched} of the ${cfg.TEAM_COUNT} team slots have no grades yet, so they have no division and are not shown. They appear here the moment anyone grades them. Teams that came with fewer than four members simply leave the extra letters blank — that never counts against coverage.`
-    : 'Every team slot has been placed in a division.';
-  host.appendChild(note);
-
-  if (!pending.length) return;
-
-  const box = el('div', 'banner banner--warn');
-  box.style.marginTop = '12px';
-  const inner = el('div');
-  inner.append(el('b', null, `${pending.length} team(s) graded but with no division`));
-  const chips = el('div', 'grader-chips');
-  chips.style.marginTop = '8px';
-  for (const entry of pending) {
-    const chip = el('span', 'grader-chip');
-    chip.append(el('span', 'mono', `Team ${entry.team}`));
-    for (const division of ['A', 'B']) {
-      const btn = el('button', 'btn btn--ghost', division);
-      btn.type = 'button';
-      btn.addEventListener('click', async () => {
-        await store.setTeamDivision(entry.team, division);
-        await refresh();
+      const chip = el('button', cls);
+      chip.type = 'button';
+      chip.append(el('span', null, id));
+      if (person) chip.append(el('span', 'person__score', String(person.score)));
+      chip.title = person
+        ? `${person.name || id} — ${person.answered}/${cfg.INDIVIDUAL_PROBLEMS} answered, ${person.score} pts`
+        : (claimed ? `${claimed.grader_name} is entering this` : 'not entered');
+      chip.addEventListener('click', () => {
+        setEntryMode('individual');
+        $('#individualId').value = id;
+        onIdTyped();
       });
-      chip.appendChild(btn);
+      people.appendChild(chip);
     }
-    chips.appendChild(chip);
+    card.appendChild(people);
+    roster.appendChild(card);
   }
-  inner.appendChild(chips);
-  box.appendChild(inner);
-  host.appendChild(box);
+  host.appendChild(roster);
 }
 
 // ---------------------------------------------------------------------
@@ -631,20 +640,15 @@ function table(headers, rows) {
   const t = el('table');
   const thead = el('thead');
   const hr = el('tr');
-  for (const h of headers) {
-    const th = el('th', h.num ? 'num' : null, h.label ?? h);
-    hr.appendChild(th);
-  }
+  for (const h of headers) hr.appendChild(el('th', h.num ? 'num' : null, h.label ?? h));
   thead.appendChild(hr);
   t.appendChild(thead);
-
   const tbody = el('tbody');
   for (const row of rows) {
     const tr = el('tr');
     for (const cell of row) {
       const td = el('td', cell.cls ?? null);
-      if (cell.node) td.appendChild(cell.node);
-      else td.textContent = cell.text ?? cell;
+      if (cell.node) td.appendChild(cell.node); else td.textContent = cell.text ?? cell;
       tr.appendChild(td);
     }
     tbody.appendChild(tr);
@@ -653,106 +657,7 @@ function table(headers, rows) {
   wrap.appendChild(t);
   return wrap;
 }
-
 const rankCls = (i) => `rank${i < 3 ? ` rank--${i + 1}` : ''}`;
-
-function teamNote(team) {
-  return data.teams.find((t) => t.team === team)?.dq_reason ?? '';
-}
-
-/** The combined figure, with its two halves spelled out on hover. */
-function combinedCell(r) {
-  const cell = el('span', 'mono', r.total.toFixed(2));
-  cell.title = `proof ${r.proof}/${r.proofMax} = ${r.proofPct.toFixed(1)}% × ${cfg.PROOF_WEIGHT}\n`
-    + `guts ${r.guts ?? 0}/${r.gutsMax || '—'} = ${r.gutsPct.toFixed(1)}% × ${cfg.GUTS_WEIGHT}`;
-  return cell;
-}
-
-/** Disqualified teams sit below the ranking, scores intact and reasons shown. */
-function dqTable(rows, division) {
-  const wrap = el('div');
-  const head = el('p', 'field__hint');
-  head.style.margin = '16px 0 8px';
-  head.textContent = `Disqualified in Division ${division} — scores kept for the record, not ranked.`;
-  wrap.appendChild(head);
-  const t = table(
-    ['', 'Team', { label: 'Proof', num: true }, { label: 'Guts', num: true },
-      { label: 'Combined', num: true }, 'Reason'],
-    rows.map((r) => [
-      { text: 'DQ', cls: 'rank' },
-      { text: `Team ${r.team}` },
-      { text: r.proof.toFixed(1), cls: 'num' },
-      { text: r.guts == null ? '—' : r.guts.toFixed(1), cls: 'num' },
-      { text: r.total.toFixed(2), cls: 'num' },
-      { text: teamNote(r.team) || '—', cls: 'muted' },
-    ]),
-  );
-  t.classList.add('table-wrap--dq');
-  wrap.appendChild(t);
-  return wrap;
-}
-
-function renderWeightPreview() {
-  const proof = Number($('#proofWeight').value) || 0;
-  const guts = Number($('#gutsWeight').value) || 0;
-  const pinned = Number($('#gutsMax').value) || 0;
-  const observed = data.guts.length ? Math.max(...data.guts.map((g) => Number(g.score))) : 0;
-  const gutsMax = pinned > 0 ? pinned : observed;
-  const sum = proof + guts;
-
-  const host = $('#weightPreview');
-  host.replaceChildren();
-  const d = el('div');
-  if (!sum) {
-    host.className = 'banner banner--error';
-    d.append(el('b', null, 'Both weights are zero'), el('span', null, 'Nothing would be scored.'));
-  } else {
-    host.className = 'banner banner--info';
-    const pp = Math.round((proof / sum) * 100);
-    d.append(
-      el('b', null, `A perfect team scores ${pp} from proofs and ${100 - pp} from guts.`),
-      el('span', null, gutsMax
-        ? `Guts is measured out of ${gutsMax}${pinned > 0 ? ' (set by hand)' : ' — the highest score imported so far'}.`
-        : 'No guts scores imported yet, so the guts half scores zero for everyone until you import them.'),
-    );
-  }
-  host.appendChild(d);
-}
-
-function renderDqList() {
-  const host = $('#dqList');
-  host.replaceChildren();
-  const out = data.teams.filter((t) => t.disqualified).sort((a, b) => a.team - b.team);
-  if (!out.length) {
-    host.appendChild(el('p', 'field__hint', 'No teams are disqualified.'));
-    return;
-  }
-  for (const team of out) {
-    const chip = el('div', 'dq-row');
-    const info = el('div');
-    info.append(
-      el('b', null, `Team ${team.team}`),
-      el('span', 'muted', team.dq_reason
-        ? `${team.dq_reason}${team.dq_by ? ` — ${team.dq_by}` : ''}`
-        : 'no reason recorded'),
-    );
-    const undo = el('button', 'btn btn--ghost', 'Reinstate');
-    undo.type = 'button';
-    undo.addEventListener('click', async () => {
-      undo.disabled = true;
-      try {
-        await store.setTeamDq(team.team, { disqualified: false });
-        await refresh();
-        toast(`Team ${team.team} is back in the standings.`);
-      } catch (err) {
-        toast(err.message || 'Could not reinstate that team.', 'error');
-        undo.disabled = false;
-      }
-    });
-    chip.append(info, undo);
-    host.appendChild(chip);
-  }
-}
 
 function renderBoards() {
   const host = $('#boards');
@@ -761,283 +666,382 @@ function renderBoards() {
   const note = el('p', 'field__hint');
   note.style.marginBottom = '14px';
   if (activeBoard === 'combined') {
-    const gutsMax = derived.combined[0]?.gutsMax || 0;
-    note.textContent = `Combined = ${cfg.PROOF_WEIGHT}% of the proof score plus `
-      + `${cfg.GUTS_WEIGHT}% of the guts score, each as a share of its own maximum, out of 100. `
-      + `Proof is out of ${proofMaxFor('A', cfg)} in Division A and ${proofMaxFor('B', cfg)} in `
-      + `Division B; guts is out of ${gutsMax || '—'}`
-      + `${cfg.GUTS_MAX > 0 ? ' (set by hand)' : ' (the highest score imported)'}. `
-      + 'Hover a combined score to see its two halves.';
+    note.textContent = `Combined = ${cfg.INDIVIDUAL_WEIGHT}% individual + ${cfg.GUTS_WEIGHT}% guts, `
+      + `each as a share of its own maximum, out of 100. A full team can bank `
+      + `${individualMaxPoints(derived.key, cfg)} individual points and `
+      + `${gutsMaxPoints(derived.key, cfg)} from guts.`;
   } else if (activeBoard === 'individual') {
-    note.textContent = 'One row per contestant, summed across their division’s problems. '
-      + 'Two-read cells use the later read.';
+    note.textContent = `One row per contestant, out of ${cfg.INDIVIDUAL_PROBLEMS}.`;
   } else {
-    note.textContent = 'Straight from the guts CSV import.';
+    note.textContent = 'Team guts scores, with points rising by set.';
   }
   host.appendChild(note);
 
   for (const division of ['A', 'B']) {
-    host.appendChild(el('h3', null, `Division ${division}`)).style.cssText =
-      'font-size:13px;text-transform:uppercase;letter-spacing:.07em;margin:18px 0 9px';
+    const heading = el('h3', null, `Division ${division}`);
+    heading.style.cssText = 'font-size:13px;text-transform:uppercase;letter-spacing:.07em;margin:18px 0 9px';
+    host.appendChild(heading);
+
+    const source = activeBoard === 'combined' ? derived.combined
+      : activeBoard === 'individual' ? derived.individuals : derived.guts;
+    const all = splitByDivision(source)[division];
+    const ranked = all.filter((r) => !r.disqualified);
+    const out = all.filter((r) => r.disqualified);
+
+    if (!ranked.length && !out.length) { host.appendChild(el('div', 'empty', 'Nothing here yet.')); continue; }
 
     if (activeBoard === 'combined') {
-      const all = splitByDivision(derived.combined)[division];
-      const ranked = all.filter((r) => !r.disqualified);
-      const out = all.filter((r) => r.disqualified);
-      host.appendChild(ranked.length ? table(
-        ['#', 'Team', { label: 'Proof', num: true }, { label: 'Guts', num: true },
-          { label: 'Combined', num: true }, 'Status'],
-        ranked.map((r, i) => [
-          { text: String(i + 1), cls: rankCls(i) },
-          { text: `Team ${r.team}` },
-          { text: r.proof.toFixed(1), cls: 'num' },
-          { text: r.guts == null ? '—' : r.guts.toFixed(1), cls: 'num' },
-          { node: combinedCell(r), cls: 'num' },
-          { text: r.status, cls: 'muted' },
-        ]),
-      ) : el('div', 'empty', 'Nothing here yet.'));
-      if (out.length) host.appendChild(dqTable(out, division));
-    } else if (activeBoard === 'individual') {
-      const all = splitByDivision(derived.individuals)[division];
-      const ranked = all.filter((r) => !r.disqualified);
-      const out = all.filter((r) => r.disqualified);
-      const problems = problemsFor(division, cfg);
-      const header = ['#', 'Contestant', ...problems.map((p) => ({ label: p, num: true })),
-        { label: 'Total', num: true }, 'Status'];
+      const cell = (r) => {
+        const n = el('span', 'mono', r.total.toFixed(2));
+        n.title = `individual ${r.individual}/${r.indMax} = ${r.indPct.toFixed(1)}% × ${cfg.INDIVIDUAL_WEIGHT}\n`
+          + `guts ${r.guts ?? 0}/${r.gutsMax} = ${r.gutsPct.toFixed(1)}% × ${cfg.GUTS_WEIGHT}`;
+        return n;
+      };
       const row = (r, i) => [
         { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
-        { text: r.contestantId },
-        ...problems.map((p) => ({
-          text: r.byProblem[p] ? String(r.byProblem[p].score) : '·', cls: 'num',
-        })),
-        { text: r.total.toFixed(1), cls: 'num' },
-        { text: i == null ? 'disqualified'
-          : (r.complete ? (r.openFlags ? `${r.openFlags} flagged` : 'complete') : 'in progress'),
-        cls: 'muted' },
+        { text: r.name ? `${r.team} · ${r.name}` : `Team ${r.team}` },
+        { text: String(r.individual), cls: 'num' },
+        { text: r.guts == null ? '—' : String(r.guts), cls: 'num' },
+        { node: cell(r), cls: 'num' },
+        { text: `${r.entered} entered`, cls: 'muted' },
       ];
-      host.appendChild(ranked.length ? table(header, ranked.map(row))
-        : el('div', 'empty', 'Nothing here yet.'));
+      const header = ['#', 'Team', { label: 'Individual', num: true }, { label: 'Guts', num: true },
+        { label: 'Combined', num: true }, 'Sheets'];
+      if (ranked.length) host.appendChild(table(header, ranked.map(row)));
       if (out.length) {
-        const wrap = table(header, out.map((r) => row(r, null)));
-        wrap.classList.add('table-wrap--dq');
-        host.appendChild(wrap);
+        const w = table(header, out.map((r) => row(r, null)));
+        w.classList.add('table-wrap--dq');
+        host.appendChild(w);
+      }
+    } else if (activeBoard === 'individual') {
+      const row = (r, i) => [
+        { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
+        { text: r.individualId },
+        { text: r.name || '—' },
+        { text: String(r.correct), cls: 'num' },
+        { text: String(r.score), cls: 'num' },
+        { text: `${r.answered}/${cfg.INDIVIDUAL_PROBLEMS}`, cls: 'muted' },
+      ];
+      const header = ['#', 'ID', 'Name', { label: 'Correct', num: true },
+        { label: 'Points', num: true }, 'Answered'];
+      if (ranked.length) host.appendChild(table(header, ranked.map(row)));
+      if (out.length) {
+        const w = table(header, out.map((r) => row(r, null)));
+        w.classList.add('table-wrap--dq');
+        host.appendChild(w);
       }
     } else {
-      const rows = splitByDivision(derived.guts)[division];
-      host.appendChild(rows.length ? table(
-        ['#', 'Team', { label: 'Guts', num: true }],
-        rows.map((r, i) => [
-          { text: String(i + 1), cls: rankCls(i) },
-          { text: `Team ${r.team}` },
-          { text: r.score.toFixed(1), cls: 'num' },
-        ]),
-      ) : el('div', 'empty', 'No guts scores imported for this division yet.'));
+      const row = (r, i) => [
+        { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
+        { text: r.name ? `${r.team} · ${r.name}` : `Team ${r.team}` },
+        { text: String(r.correct), cls: 'num' },
+        { text: String(r.score), cls: 'num' },
+        { text: `${r.perSet.filter((s) => s.complete).length}/${cfg.GUTS_SETS}`, cls: 'muted' },
+      ];
+      const header = ['#', 'Team', { label: 'Correct', num: true },
+        { label: 'Points', num: true }, 'Sets'];
+      if (ranked.length) host.appendChild(table(header, ranked.map(row)));
+      if (out.length) {
+        const w = table(header, out.map((r) => row(r, null)));
+        w.classList.add('table-wrap--dq');
+        host.appendChild(w);
+      }
     }
   }
-
-  const orphan = splitByDivision(
-    activeBoard === 'individual' ? derived.individuals
-      : activeBoard === 'guts' ? derived.guts : derived.combined,
-  ).unassigned;
-  if (orphan.length) {
-    const p = el('p', 'field__hint');
-    p.style.marginTop = '16px';
-    p.textContent = `${orphan.length} row(s) are waiting on a division — assign them from the coverage matrix.`;
-    host.appendChild(p);
-  }
 }
 
 // ---------------------------------------------------------------------
-// Activity
+// Answer key
 // ---------------------------------------------------------------------
 
-function ago(iso) {
-  const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.round(secs / 60)}m ago`;
-  return `${Math.round(secs / 3600)}h ago`;
-}
+let keyIndividualInputs = [];
+let keyGutsInputs = [];
+let keyPointInputs = [];
 
-function renderActivity() {
-  const online = data.graders.filter(
-    (g) => Date.now() - new Date(g.last_seen).getTime() < cfg.CLAIM_TTL_MS);
-  $('#onlineCount').textContent = String(Math.max(online.length, 1));
+function buildKeyEditor() {
+  keyIndividualInputs = buildAnswerGrid($('#keyIndividual'), cfg.INDIVIDUAL_PROBLEMS);
 
-  const chips = $('#graderChips');
-  chips.replaceChildren();
-  if (!online.length) chips.appendChild(el('span', 'muted', 'Just you so far.'));
-  for (const g of online) {
-    const chip = el('span', 'grader-chip');
-    chip.append(el('span', 'dot dot--live'), el('span', null,
-      g.grader_id === grader.id ? `${g.name} (you)` : g.name));
-    chips.appendChild(chip);
-  }
-
-  const active = $('#activeClaims');
-  active.replaceChildren();
-  const claims = [...derived.claims.values()];
-  if (!claims.length) active.appendChild(el('span', 'muted', 'Nobody has a proof open.'));
-  for (const c of claims) {
-    const chip = el('span', 'grader-chip');
-    chip.append(
-      el('span', 'mono', `${c.contestant_id} ${c.problem}`),
-      el('span', 'muted', c.grader_id === grader.id ? 'you' : c.grader_name),
-    );
-    active.appendChild(chip);
-  }
-
-  const feed = $('#feed');
-  feed.replaceChildren();
-  const recent = [...data.grades]
-    .sort((a, b) => new Date(b.updated_at ?? b.created_at) - new Date(a.updated_at ?? a.created_at))
-    .slice(0, 40);
-  if (!recent.length) feed.appendChild(el('div', 'empty', 'No grades entered yet.'));
-  for (const g of recent) {
-    const item = el('div', 'feed__item');
-    item.append(
-      el('span', 'feed__score', String(g.score)),
-      el('span', 'mono', `${g.contestant_id} ${g.problem}`),
-      el('span', 'muted', g.grader_name),
-      el('span', 'feed__when', ago(g.updated_at ?? g.created_at)),
-    );
-    feed.appendChild(item);
-  }
-}
-
-// ---------------------------------------------------------------------
-// Guts import + exports
-// ---------------------------------------------------------------------
-
-async function handleGutsCsv(text) {
-  const { rows, errors } = parseGutsCsv(text);
-  const host = $('#gutsResult');
+  const host = $('#keyGuts');
   host.replaceChildren();
+  keyGutsInputs = [];
+  keyPointInputs = [];
+  for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+    const box = el('div', 'keyset');
+    const head = el('div', 'keyset__head');
+    const problems = problemsInSet(set, cfg);
+    head.append(el('b', null, `Set ${set}`),
+      el('span', 'muted', `problems ${problems[0]}–${problems[problems.length - 1]}`));
+    const pointsWrap = el('div', 'keyset__points');
+    const points = el('input', 'input');
+    points.type = 'number';
+    points.min = '0';
+    points.step = '1';
+    points.setAttribute('aria-label', `Points per problem in set ${set}`);
+    pointsWrap.append(el('span', null, 'points each'), points);
+    head.appendChild(pointsWrap);
+    box.appendChild(head);
+    keyPointInputs.push(points);
 
-  if (!rows.length) {
-    const b = el('div', 'banner banner--error');
-    const d = el('div');
-    d.append(el('b', null, 'Nothing imported'),
-      el('span', null, errors[0] ?? 'No usable rows found. Expected team,score.'));
-    b.appendChild(d);
-    host.appendChild(b);
-    return;
+    const grid = el('div', 'answers answers--guts');
+    box.appendChild(grid);
+    keyGutsInputs.push(...buildAnswerGrid(grid, cfg.GUTS_PER_SET, { offset: problems[0] - 1 }));
+    host.appendChild(box);
   }
+}
 
+function fillKeyEditor() {
+  // The status line always reflects the saved key. Only the input boxes
+  // are held back, and only while somebody is typing in them — otherwise
+  // saving from a button inside this tab would leave the status stale.
+  const gaps = derived.keyGapsIndividual.length + derived.keyGapsGuts.length;
+  $('#keyState').textContent = gaps ? `${gaps} unset` : 'complete';
+  $('#keyState').className = gaps ? 'tag tag--flag' : 'tag tag--live';
+
+  if (document.activeElement?.closest('#tab-key .ans')) return;
+  for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+    const input = keyIndividualInputs[p - 1];
+    const value = derived.key.individual.get(p)?.answer;
+    input.value = value == null ? '' : String(value);
+    input.dispatchEvent(new Event('input'));
+  }
+  for (let p = 1; p <= GUTS_N; p += 1) {
+    const input = keyGutsInputs[p - 1];
+    const value = derived.key.guts.get(p)?.answer;
+    input.value = value == null ? '' : String(value);
+    input.dispatchEvent(new Event('input'));
+  }
+  for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+    keyPointInputs[set - 1].value = derived.key.guts.get(problemsInSet(set, cfg)[0])?.points ?? 1;
+  }
+}
+
+async function saveKey() {
+  const rows = [];
+  for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+    const parsed = parseAnswer(keyIndividualInputs[p - 1].value);
+    if (!parsed.ok) { toast(`Individual problem ${p}: whole numbers only.`, 'error'); return; }
+    rows.push({ round: 'individual', problem: p, answer: parsed.value, points: cfg.INDIVIDUAL_POINTS });
+  }
+  for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+    const points = Number(keyPointInputs[set - 1].value);
+    if (!Number.isFinite(points) || points < 0) {
+      toast(`Set ${set}: points must be zero or more.`, 'error');
+      return;
+    }
+    for (const p of problemsInSet(set, cfg)) {
+      const parsed = parseAnswer(keyGutsInputs[p - 1].value);
+      if (!parsed.ok) { toast(`Guts problem ${p}: whole numbers only.`, 'error'); return; }
+      rows.push({ round: 'guts', problem: p, answer: parsed.value, points });
+    }
+  }
   try {
-    await store.importGuts(rows);
+    await store.saveKey(rows);
     await refresh();
-    const b = el('div', 'banner banner--ok');
-    const d = el('div');
-    d.append(
-      el('b', null, `Imported guts scores for ${rows.length} team(s)`),
-      el('span', null, `Teams ${rows.slice(0, 6).map((r) => r.team).join(', ')}${rows.length > 6 ? '…' : ''}`),
-    );
-    b.appendChild(d);
-    host.appendChild(b);
-    toast(`Guts: ${rows.length} teams imported.`);
+    toast('Answer key saved. Every score just recalculated.');
   } catch (err) {
-    toast(err.message || 'Guts import failed.', 'error');
-    return;
-  }
-
-  if (errors.length) {
-    const b = el('div', 'banner banner--warn');
-    b.style.marginTop = '10px';
-    const d = el('div');
-    d.append(el('b', null, `${errors.length} row(s) skipped`), el('span', null, errors.join(' ')));
-    b.appendChild(d);
-    host.appendChild(b);
+    toast(err.message || 'Could not save the key.', 'error');
   }
 }
 
-function exportGrades() {
-  const rows = [...data.grades]
-    .sort((a, b) => a.contestant_id.localeCompare(b.contestant_id, undefined, { numeric: true })
-      || a.problem.localeCompare(b.problem))
-    .map((g) => [g.contestant_id, g.team, g.member, g.division, g.problem, g.score,
-      g.feedback, g.grader_name, g.updated_at ?? g.created_at]);
-  downloadCsv('sfpo-2026-grades.csv', toCsv(
-    ['contestant_id', 'team', 'member', 'division', 'problem', 'score', 'feedback', 'grader', 'graded_at'],
+// ---------------------------------------------------------------------
+// Clock
+// ---------------------------------------------------------------------
+
+function renderClock() {
+  const state = data.state;
+  const remaining = gutsRemaining(state);
+  const text = formatClock(remaining);
+  $('#clockTime').textContent = text;
+  $('#clockBig').textContent = text;
+
+  const chip = $('#clockChip');
+  chip.className = 'clockchip';
+  if (state?.guts_frozen) chip.classList.add('clockchip--frozen');
+  else if (!state?.guts_running) chip.classList.add('clockchip--stopped');
+
+  const host = $('#freezeState');
+  host.replaceChildren();
+  const frozen = Boolean(state?.guts_frozen);
+  const b = el('div', `banner ${frozen ? 'banner--warn' : 'banner--ok'}`);
+  const d = el('div');
+  d.append(
+    el('b', null, frozen ? 'The public board is frozen' : 'The public board is live'),
+    el('span', null, frozen
+      ? 'It is showing the standings from the moment it froze. Unfreeze to reveal the rest.'
+      : `It will freeze itself with ${state?.freeze_minutes ?? cfg.FREEZE_MINUTES} minutes left.`),
+  );
+  b.appendChild(d);
+  host.appendChild(b);
+  $('#freezeToggle').textContent = frozen ? 'Unfreeze and reveal' : 'Freeze now';
+  $('#freezeToggle').className = frozen ? 'btn btn--go' : 'btn btn--warn';
+
+  // Auto-freeze at the threshold. The portal is the thing that is always
+  // open on contest day, so it is what closes the board.
+  if (!frozen && shouldFreeze(state)) store.setFrozen(true).then(refresh).catch(() => {});
+}
+
+function startClockTicker() {
+  clearInterval(clockTimer);
+  clockTimer = setInterval(renderClock, 1000);
+}
+
+async function clockAction(action) {
+  const state = data.state ?? {};
+  const remaining = gutsRemaining(state);
+  const patch = {};
+  if (action === 'start') {
+    patch.guts_running = true;
+    patch.guts_ends_at = new Date(Date.now() + remaining * 1000).toISOString();
+  } else if (action === 'pause') {
+    patch.guts_running = false;
+    patch.guts_remaining = remaining;
+    patch.guts_ends_at = null;
+  } else if (action === 'reset') {
+    patch.guts_running = false;
+    patch.guts_remaining = Number(state.guts_duration ?? cfg.GUTS_DURATION);
+    patch.guts_ends_at = null;
+  } else {
+    const delta = action === 'plus' ? 60 : -60;
+    const next = Math.max(0, remaining + delta);
+    if (state.guts_running) patch.guts_ends_at = new Date(Date.now() + next * 1000).toISOString();
+    else patch.guts_remaining = next;
+  }
+  try {
+    await store.saveState(patch);
+    await refresh();
+  } catch (err) {
+    toast(err.message || 'Could not change the clock.', 'error');
+  }
+}
+
+// ---------------------------------------------------------------------
+// Admin
+// ---------------------------------------------------------------------
+
+function renderWeightPreview() {
+  const ind = Number($('#individualWeight').value) || 0;
+  const guts = Number($('#gutsWeight').value) || 0;
+  const sum = ind + guts;
+  const host = $('#weightPreview');
+  host.replaceChildren();
+  const d = el('div');
+  if (!sum) {
+    host.className = 'banner banner--error';
+    d.append(el('b', null, 'Both weights are zero'), el('span', null, 'Nothing would be scored.'));
+  } else {
+    host.className = 'banner banner--info';
+    const pct = Math.round((ind / sum) * 100);
+    d.append(el('b', null, `A perfect team scores ${pct} from the individual round and ${100 - pct} from guts.`),
+      el('span', null, 'Each round is measured against its own maximum first, so these are the real shares.'));
+  }
+  host.appendChild(d);
+}
+
+function renderDqList() {
+  const host = $('#dqList');
+  host.replaceChildren();
+  const out = data.teams.filter((t) => t.disqualified).sort((a, b) => a.team - b.team);
+  if (!out.length) { host.appendChild(el('p', 'field__hint', 'No teams are disqualified.')); return; }
+  for (const team of out) {
+    const row = el('div', 'dq-row');
+    const info = el('div');
+    info.append(el('b', null, `Team ${team.team}${team.name ? ` · ${team.name}` : ''}`),
+      el('span', 'muted', team.dq_reason || 'no reason recorded'));
+    const undo = el('button', 'btn btn--ghost', 'Reinstate');
+    undo.type = 'button';
+    undo.addEventListener('click', async () => {
+      undo.disabled = true;
+      try {
+        await store.setTeam(team.team, { disqualified: false, dq_reason: '', dq_by: '', dq_at: null });
+        await refresh();
+        toast(`Team ${team.team} is back in the standings.`);
+      } catch (err) { toast(err.message || 'Could not reinstate.', 'error'); undo.disabled = false; }
+    });
+    row.append(info, undo);
+    host.appendChild(row);
+  }
+}
+
+function exportIndividualCsv() {
+  const rows = derived.individuals.map((r, i) => [
+    r.disqualified ? 'DQ' : i + 1, r.division ?? '', r.individualId, r.team, r.member, r.name,
+    r.correct, r.score, r.answered, r.enteredBy, r.disqualified ? 'yes' : 'no',
+    ...r.marks.map((m) => m[0].toUpperCase()),
+  ]);
+  downloadCsv('cowconuts-2026-individual.csv', toCsv(
+    ['rank', 'division', 'individual_id', 'team', 'member', 'name', 'correct', 'points',
+      'answered', 'entered_by', 'disqualified',
+      ...Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => `q${i + 1}`)],
     rows));
 }
 
-function exportIndividual() {
-  // One file holds both divisions, so every row needs the same width even
-  // though Division A has three problems and Division B has five.
-  const widest = Math.max(problemsFor('A', cfg).length, problemsFor('B', cfg).length);
-  const rows = [];
-  for (const division of ['A', 'B']) {
-    const problems = problemsFor(division, cfg);
-    const ranked = splitByDivision(derived.individuals)[division];
-    let rank = 0;
-    ranked.forEach((r) => {
-      const i = r.disqualified ? null : rank++;
-      const cells = problems.map((p) => (r.byProblem[p] ? r.byProblem[p].score : ''));
-      while (cells.length < widest) cells.push('');
-      rows.push([i == null ? 'DQ' : i + 1, division, r.contestantId, r.team, r.member, ...cells,
-        r.total, r.complete ? 'complete' : 'in progress',
-        r.disqualified ? 'yes' : 'no', r.disqualified ? teamNote(r.team) : '']);
-    });
-  }
-  downloadCsv('sfpo-2026-individual.csv', toCsv(
-    ['rank_in_division', 'division', 'contestant_id', 'team', 'member',
-      'p1', 'p2', 'p3', 'p4', 'p5', 'total', 'status', 'disqualified', 'dq_reason'],
+function exportGutsCsv() {
+  const rows = derived.guts.map((r, i) => [
+    r.disqualified ? 'DQ' : i + 1, r.division ?? '', r.team, r.name, r.correct, r.score,
+    r.disqualified ? 'yes' : 'no', ...r.perSet.map((s) => s.score),
+  ]);
+  downloadCsv('cowconuts-2026-guts.csv', toCsv(
+    ['rank', 'division', 'team', 'team_name', 'correct', 'points', 'disqualified',
+      ...Array.from({ length: cfg.GUTS_SETS }, (_, i) => `set${i + 1}`)],
     rows));
 }
 
-function exportCombined() {
+function exportCombinedCsv() {
   const rows = [];
   for (const division of ['A', 'B']) {
-    const ordered = splitByDivision(derived.combined)[division];
     let rank = 0;
-    ordered.forEach((r) => {
+    for (const r of splitByDivision(derived.combined)[division]) {
       const i = r.disqualified ? null : rank++;
-      rows.push([i == null ? 'DQ' : i + 1, division, r.team, r.proof, r.proofMax, r.proofPct.toFixed(2),
-        r.guts ?? '', r.gutsMax || '', r.gutsPct.toFixed(2), r.total.toFixed(4), r.status,
-        r.disqualified ? 'yes' : 'no', r.disqualified ? teamNote(r.team) : '',
-        r.members.map((m) => `${m.contestantId}:${m.total}`).join(' ')]);
-    });
+      rows.push([i == null ? 'DQ' : i + 1, division, r.team, r.name,
+        r.individual, r.indMax, r.indPct.toFixed(2),
+        r.guts ?? '', r.gutsMax, r.gutsPct.toFixed(2),
+        r.total.toFixed(4), r.disqualified ? 'yes' : 'no',
+        r.members.map((m) => `${m.individualId}:${m.score}`).join(' ')]);
+    }
   }
-  downloadCsv('sfpo-2026-combined.csv', toCsv(
-    ['rank_in_division', 'division', 'team', 'proof_total', 'proof_max', 'proof_pct',
-      'guts_score', 'guts_max', 'guts_pct', 'combined_total', 'status',
-      'disqualified', 'dq_reason', 'member_breakdown'],
+  downloadCsv('cowconuts-2026-combined.csv', toCsv(
+    ['rank_in_division', 'division', 'team', 'team_name', 'individual_total', 'individual_max',
+      'individual_pct', 'guts_total', 'guts_max', 'guts_pct', 'combined', 'disqualified',
+      'member_breakdown'],
     rows));
 }
 
 // ---------------------------------------------------------------------
-// Render everything
+// Render / refresh
 // ---------------------------------------------------------------------
 
 function render() {
   recompute();
-  renderProblemChips();
-  renderScorepad();
-  renderCellBanner();
-  renderIdEcho();
   renderSuggestions();
-  if (activeTab === 'matrix') renderMatrix();
+  if (activeTab === 'progress') renderProgress();
   if (activeTab === 'leaderboard') renderBoards();
-  renderActivity();
-
-  const mine = data.grades.filter((g) => g.grader_id === grader.id).length;
-  $('#myCount').textContent = mine ? `${mine} graded by you` : '';
-
-  const teamsWithData = new Set([...data.grades.map((g) => g.team), ...data.guts.map((g) => g.team)]);
-  $('#wipeCounts').textContent = data.grades.length || data.guts.length
-    ? `${data.grades.length} grades · ${data.guts.length} guts scores · ${teamsWithData.size} teams · ${data.claims.length} open locks`
-    : 'Nothing to delete.';
-  for (const [id, value] of [['#teamCount', cfg.TEAM_COUNT],
-    ['#secondReadThreshold', cfg.SECOND_READ_THRESHOLD],
-    ['#disagreementDelta', cfg.DISAGREEMENT_DELTA],
-    ['#proofWeight', cfg.PROOF_WEIGHT],
-    ['#gutsWeight', cfg.GUTS_WEIGHT],
-    ['#gutsMax', cfg.GUTS_MAX]]) {
-    const input = $(id);
-    if (input !== document.activeElement) input.value = value;
-  }
+  if (activeTab === 'key') fillKeyEditor();
+  renderClock();
   renderWeightPreview();
   renderDqList();
+
+  if (entryMode === 'individual') { markSheetAgainstKey(); refreshIndividualContext(); }
+  else refreshGutsContext();
+
+  const online = data.graders.filter(
+    (g) => Date.now() - new Date(g.last_seen).getTime() < cfg.CLAIM_TTL_MS);
+  $('#onlineCount').textContent = String(Math.max(online.length, 1));
+
+  $('#wipeCounts').textContent = data.contestants.length || data.gutsAnswers.length
+    ? `${data.contestants.length} sheets · ${data.gutsAnswers.length} guts answers · `
+      + `${data.teams.length} teams · ${data.claims.length} open locks`
+    : 'Nothing to delete.';
+
+  for (const [id, value] of [
+    ['#teamCount', cfg.TEAM_COUNT],
+    ['#individualWeight', cfg.INDIVIDUAL_WEIGHT],
+    ['#gutsWeight', cfg.GUTS_WEIGHT],
+    ['#durationMinutes', Math.round((data.state?.guts_duration ?? cfg.GUTS_DURATION) / 60)],
+    ['#freezeMinutes', data.state?.freeze_minutes ?? cfg.FREEZE_MINUTES],
+  ]) {
+    const input = $(id);
+    if (input && input !== document.activeElement) input.value = value;
+  }
 }
 
 async function refresh() {
@@ -1046,51 +1050,45 @@ async function refresh() {
     connected = true;
   } catch (err) {
     connected = false;
-    console.error(err);
-    toast(err.message || 'Lost the connection to the database.', 'error');
+    toast(err.message || 'Lost the connection.', 'error');
   }
-  updateConnectionBadge();
+  updateBadge();
   render();
 }
 
-function updateConnectionBadge() {
+function updateBadge() {
   const dot = $('#connDot');
   const label = $('#connLabel');
   dot.className = 'dot';
-  if (store.mode === 'demo') {
-    dot.classList.add('dot--demo');
-    label.textContent = 'demo mode';
-  } else if (connected) {
-    dot.classList.add('dot--live');
-    label.textContent = 'live';
-  } else {
-    dot.classList.add('dot--down');
-    label.textContent = 'offline';
-  }
+  if (store.mode === 'demo') { dot.classList.add('dot--demo'); label.textContent = 'demo mode'; }
+  else if (connected) { dot.classList.add('dot--live'); label.textContent = 'live'; }
+  else { dot.classList.add('dot--down'); label.textContent = 'offline'; }
 }
 
 // ---------------------------------------------------------------------
 // Wiring
 // ---------------------------------------------------------------------
 
-function wireMatrix() {
-  $('#matrix').addEventListener('click', (e) => {
-    const cell = e.target.closest('.cell');
-    if (!cell) return;
-    $('#contestantId').value = cell.dataset.cid;
-    setContestant(cell.dataset.cid);
-    selectProblem(cell.dataset.problem);
-  });
+function setEntryMode(mode) {
+  entryMode = mode;
+  releaseHeld();
+  for (const tab of $$('.tab[data-entry]')) {
+    tab.setAttribute('aria-selected', String(tab.dataset.entry === mode));
+  }
+  $('#entry-individual').classList.toggle('hidden', mode !== 'individual');
+  $('#entry-guts').classList.toggle('hidden', mode !== 'guts');
+  render();
 }
 
-function wireTabs() {
+function wire() {
+  for (const tab of $$('.tab[data-entry]')) {
+    tab.addEventListener('click', () => setEntryMode(tab.dataset.entry));
+  }
   for (const tab of $$('.tab[data-tab]')) {
     tab.addEventListener('click', () => {
       activeTab = tab.dataset.tab;
-      for (const t of $$('.tab[data-tab]')) {
-        t.setAttribute('aria-selected', String(t === tab));
-      }
-      for (const id of ['matrix', 'leaderboard', 'activity', 'setup']) {
+      for (const t of $$('.tab[data-tab]')) t.setAttribute('aria-selected', String(t === tab));
+      for (const id of ['progress', 'leaderboard', 'key', 'run', 'setup']) {
         $(`#tab-${id}`).classList.toggle('hidden', id !== activeTab);
       }
       render();
@@ -1099,137 +1097,109 @@ function wireTabs() {
   for (const btn of $$('.tab[data-board]')) {
     btn.addEventListener('click', () => {
       activeBoard = btn.dataset.board;
-      for (const b of $$('.tab[data-board]')) {
-        b.setAttribute('aria-selected', String(b === btn));
-      }
+      for (const b of $$('.tab[data-board]')) b.setAttribute('aria-selected', String(b === btn));
       renderBoards();
     });
   }
-}
 
-function wireForm() {
-  const idInput = $('#contestantId');
-  idInput.addEventListener('input', () => {
-    idInput.value = idInput.value.toUpperCase();
-    setContestant(idInput.value);
-  });
-  idInput.addEventListener('keydown', (e) => {
-    if (e.key !== 'Enter') return;
-    e.preventDefault();
-    const parsed = parseContestantId(idInput.value);
-    if (!parsed.ok) return;
-    // Enter from the ID box jumps straight to the first thing that
-    // still needs doing for that contestant.
-    const division = derived.divByTeam.get(parsed.team);
-    const candidates = division ? problemsFor(division, cfg) : [];
-    const next = candidates.find(
-      (p) => summariseCell(derived.byCell.get(cellKey(parsed.id, p)), cfg).state === 'ungraded');
-    if (next) selectProblem(next);
-  });
+  sheetInputs = buildAnswerGrid($('#answerGrid'), cfg.INDIVIDUAL_PROBLEMS,
+    { onChange: () => markSheetAgainstKey() });
 
-  $('#submitGrade').addEventListener('click', submitGrade);
-  $('#clearForm').addEventListener('click', () => clearForm());
+  const setSelect = $('#gutsSet');
+  for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+    setSelect.appendChild(new Option(`Set ${set}`, String(set)));
+  }
+  gutsInputs = buildAnswerGrid($('#gutsGrid'), cfg.GUTS_PER_SET);
+
+  $('#individualId').addEventListener('input', onIdTyped);
+  for (const id of ['#teamNo', '#memberLetter']) {
+    $(id).addEventListener('input', () => {
+      const current = currentIndividualId();
+      if (current) { $('#individualId').value = current.id; loadExistingSheet(); claimCurrent(); }
+      refreshIndividualContext();
+    });
+  }
+  $('#divisionPick').addEventListener('change', refreshIndividualContext);
+  $('#saveSheet').addEventListener('click', saveSheet);
+  $('#clearSheet').addEventListener('click', () => clearSheet());
+
+  $('#gutsTeam').addEventListener('input', () => {
+    $('#gutsTeamName').dataset.dirty = '';
+    refreshGutsContext();
+    claimCurrent();
+  });
+  $('#gutsSet').addEventListener('change', () => { refreshGutsContext(); claimCurrent(); });
+  $('#gutsTeamName').addEventListener('input', () => { $('#gutsTeamName').dataset.dirty = '1'; });
+  $('#saveGuts').addEventListener('click', saveGutsSet);
+  $('#clearGuts').addEventListener('click', () => { fillGrid(gutsInputs, []); });
 
   document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submitGrade(); return; }
-    const typing = ['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName);
-    if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (/^[0-7]$/.test(e.key)) {
-      form.score = Number(e.key);
-      renderScorepad();
-    }
-  });
-}
-
-function wireSetup() {
-  const drop = $('#gutsDrop');
-  const file = $('#gutsFile');
-  drop.addEventListener('click', () => file.click());
-  file.addEventListener('change', async () => {
-    if (file.files?.[0]) await handleGutsCsv(await file.files[0].text());
-    file.value = '';
-  });
-  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('is-over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('is-over'));
-  drop.addEventListener('drop', async (e) => {
-    e.preventDefault();
-    drop.classList.remove('is-over');
-    const f = e.dataTransfer?.files?.[0];
-    if (f) await handleGutsCsv(await f.text());
-  });
-
-  $('#saveSettings').addEventListener('click', async () => {
-    try {
-      const proofWeight = Number($('#proofWeight').value);
-      const gutsWeight = Number($('#gutsWeight').value);
-      if (proofWeight + gutsWeight <= 0) {
-        toast('One of the weights has to be above zero.', 'error');
-        return;
-      }
-      await store.saveSettings({
-        team_count: Number($('#teamCount').value) || cfg.TEAM_COUNT,
-        second_read_threshold: Number($('#secondReadThreshold').value),
-        disagreement_delta: Number($('#disagreementDelta').value),
-        proof_weight: proofWeight,
-        guts_weight: gutsWeight,
-        guts_max: Math.max(0, Number($('#gutsMax').value) || 0),
-      });
-      await refresh();
-      toast('Settings saved for every grader.');
-    } catch (err) {
-      toast(err.message || 'Could not save settings.', 'error');
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      if (entryMode === 'individual') saveSheet(); else saveGutsSet();
     }
   });
 
-  for (const id of ['#proofWeight', '#gutsWeight', '#gutsMax']) {
+  buildKeyEditor();
+  $('#saveKey').addEventListener('click', saveKey);
+
+  $('#clockStart').addEventListener('click', () => clockAction('start'));
+  $('#clockPause').addEventListener('click', () => clockAction('pause'));
+  $('#clockPlus').addEventListener('click', () => clockAction('plus'));
+  $('#clockMinus').addEventListener('click', () => clockAction('minus'));
+  $('#clockReset').addEventListener('click', () => clockAction('reset'));
+  $('#saveClock').addEventListener('click', async () => {
+    const minutes = Number($('#durationMinutes').value);
+    if (!Number.isFinite(minutes) || minutes < 1) { toast('Length must be at least a minute.', 'error'); return; }
+    const running = Boolean(data.state?.guts_running);
+    await store.saveState({
+      guts_duration: Math.round(minutes * 60),
+      freeze_minutes: Math.max(0, Number($('#freezeMinutes').value) || 0),
+      ...(running ? {} : { guts_remaining: Math.round(minutes * 60) }),
+    });
+    await refresh();
+    toast('Clock settings saved.');
+  });
+  $('#freezeToggle').addEventListener('click', async () => {
+    await store.setFrozen(!data.state?.guts_frozen);
+    await refresh();
+  });
+  $('#publicLink').href = `guts.html${location.search}`;
+
+  for (const id of ['#individualWeight', '#gutsWeight']) {
     $(id).addEventListener('input', renderWeightPreview);
   }
+  $('#saveSettings').addEventListener('click', async () => {
+    const ind = Number($('#individualWeight').value);
+    const guts = Number($('#gutsWeight').value);
+    if (ind + guts <= 0) { toast('One of the weights has to be above zero.', 'error'); return; }
+    await store.saveSettings({
+      team_count: Number($('#teamCount').value) || cfg.TEAM_COUNT,
+      individual_weight: ind,
+      guts_weight: guts,
+    });
+    await refresh();
+    toast('Settings saved for everyone.');
+  });
 
   $('#dqAdd').addEventListener('click', async () => {
     const team = Number($('#dqTeam').value);
     const reason = $('#dqReason').value.trim();
-    if (!Number.isInteger(team) || team < 1) {
-      toast('Enter the team number to disqualify.', 'error');
-      $('#dqTeam').focus();
-      return;
-    }
-    if (!reason) {
-      toast('Record a reason — it goes on the results and the export.', 'error');
-      $('#dqReason').focus();
-      return;
-    }
-    if (derived.dq.has(team)) {
-      toast(`Team ${team} is already disqualified.`, 'info');
-      return;
-    }
-    const button = $('#dqAdd');
-    button.disabled = true;
-    try {
-      await store.setTeamDq(team, { disqualified: true, reason, by: grader.name });
-      $('#dqTeam').value = '';
-      $('#dqReason').value = '';
-      await refresh();
-      toast(`Team ${team} disqualified. Its scores are kept.`, 'info');
-    } catch (err) {
-      toast(err.message || 'Could not disqualify that team.', 'error');
-    } finally {
-      button.disabled = false;
-    }
+    if (!Number.isInteger(team) || team < 1) { toast('Enter the team number.', 'error'); return; }
+    if (!reason) { toast('Record a reason — it goes on the exports.', 'error'); return; }
+    await store.setTeam(team, {
+      disqualified: true, dq_reason: reason, dq_by: grader.name, dq_at: new Date().toISOString(),
+    });
+    $('#dqTeam').value = '';
+    $('#dqReason').value = '';
+    await refresh();
+    toast(`Team ${team} disqualified. Its answers are kept.`, 'info');
   });
 
-  $('#exportGrades').addEventListener('click', exportGrades);
-  $('#exportIndividual').addEventListener('click', exportIndividual);
-  $('#exportCombined').addEventListener('click', exportCombined);
+  $('#exportIndividual').addEventListener('click', exportIndividualCsv);
+  $('#exportGuts').addEventListener('click', exportGutsCsv);
+  $('#exportCombined').addEventListener('click', exportCombinedCsv);
 
-  $('#signOut').addEventListener('click', async () => {
-    await releaseHeldClaim();
-    await store.signOut();
-    localStorage.removeItem('sfpo-grader-name');
-    location.reload();
-  });
-
-  // Deleting the whole contest is one click away from the export
-  // buttons, so it takes a deliberate word to arm it.
   const confirmInput = $('#wipeConfirm');
   const wipeButton = $('#wipeAll');
   confirmInput.addEventListener('input', () => {
@@ -1239,168 +1209,154 @@ function wireSetup() {
     if (confirmInput.value.trim().toUpperCase() !== 'ERASE') return;
     wipeButton.disabled = true;
     try {
-      await releaseHeldClaim();
+      await releaseHeld();
       const counts = await store.clearAll();
       confirmInput.value = '';
-      clearForm();
+      clearSheet();
       await refresh();
-      const total = Object.values(counts).reduce((a, b) => a + b, 0);
-      toast(total ? `Deleted ${counts.grades} grades and ${counts.guts} guts scores.`
-        : 'There was nothing to delete.', 'info');
+      toast(`Deleted ${counts.contestants ?? 0} sheets and ${counts.gutsAnswers ?? counts.guts_answers ?? 0} guts answers.`, 'info');
     } catch (err) {
       toast(err.message || 'Could not clear the data.', 'error');
-    } finally {
-      wipeButton.disabled = confirmInput.value.trim().toUpperCase() !== 'ERASE';
     }
   });
 
-  // Seeding fake grades only ever makes sense against the local demo store.
+  $('#signOut').addEventListener('click', async () => {
+    await releaseHeld();
+    await store.signOut();
+    localStorage.removeItem('contest-grader-name');
+    location.reload();
+  });
+
+  $('#changeName').addEventListener('click', () => {
+    const next = prompt('Scoring as:', grader.name);
+    if (!next?.trim()) return;
+    grader.name = next.trim();
+    localStorage.setItem('contest-grader-name', grader.name);
+    $('#whoamiName').textContent = grader.name;
+    store.heartbeat(grader).catch(() => {});
+  });
+
+  const savedTheme = localStorage.getItem('contest-theme');
+  if (savedTheme) document.documentElement.dataset.theme = savedTheme;
+  $('#themeToggle').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    document.documentElement.dataset.theme = next;
+    localStorage.setItem('contest-theme', next);
+  });
+
   if (store.mode === 'demo') {
     $('#seedDemo').classList.remove('hidden');
     $('#seedDemo').addEventListener('click', async () => { await seedDemo(); toast('Demo data loaded.'); });
   }
 }
 
-function wireIdentity() {
-  $('#changeName').addEventListener('click', () => {
-    const next = prompt('Grading as:', grader.name);
-    if (!next || !next.trim()) return;
-    grader.name = next.trim();
-    localStorage.setItem('sfpo-grader-name', grader.name);
-    $('#whoamiName').textContent = grader.name;
-    store.heartbeat(grader).catch(() => {});
-  });
-
-  const saved = localStorage.getItem('sfpo-theme');
-  if (saved) document.documentElement.dataset.theme = saved;
-  $('#themeToggle').addEventListener('click', () => {
-    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-    document.documentElement.dataset.theme = next;
-    localStorage.setItem('sfpo-theme', next);
-  });
-}
-
 // ---------------------------------------------------------------------
-// Demo seed — a believable half-graded contest to click around in
-// ---------------------------------------------------------------------
-
 async function seedDemo() {
-  const names = ['Priya Raman', 'Dan Whitfield', 'Mei Sato'];
-  const ids = ['demo-1', 'demo-2', 'demo-3'];
-  let n = 0;
-  for (let team = 1; team <= 12; team += 1) {
+  const names = ['Cowbell', 'Coconut Crew', 'Milk Maids', 'Udder Chaos', 'Moo Point'];
+  const keyRows = [];
+  for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+    keyRows.push({ round: 'individual', problem: p, answer: (p * 7) % 100, points: 1 });
+  }
+  for (let p = 1; p <= GUTS_N; p += 1) {
+    keyRows.push({ round: 'guts', problem: p, answer: (p * 13) % 50, points: Math.ceil(p / cfg.GUTS_PER_SET) });
+  }
+  await store.saveKey(keyRows);
+
+  for (let team = 1; team <= 10; team += 1) {
     const division = team % 2 ? 'A' : 'B';
-    const members = ['A', 'B', 'C', 'D'].slice(0, 2 + (team % 3));
-    for (const m of members) {
-      for (const problem of problemsFor(division, cfg)) {
-        n += 1;
-        if (n % 4 === 0) continue;               // leave gaps to grade
-        const score = (team * 3 + n * 5) % 8;
-        const who = n % 3;
-        await store.saveGrade({
-          contestant_id: `${team}${m}`,
-          team,
-          member: m,
-          division,
-          problem,
-          score,
-          feedback: score >= 5
-            ? 'Complete argument; the induction step is airtight.'
-            : 'Right idea but the key case is asserted rather than proved.',
-          grader_name: names[who],
-          grader_id: ids[who],
-        });
-      }
+    for (const member of cfg.MEMBERS.slice(0, 2 + (team % 3))) {
+      const skill = 4 + ((team * 3 + member.charCodeAt(0)) % 9);
+      const answers = Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => (
+        (i * 7 + team) % 13 < skill ? ((i + 1) * 7) % 100 : ((i + 1) * 7 + 1) % 100));
+      await store.saveContestant({
+        individual_id: `${team}${member}`,
+        team, member, division,
+        name: `${names[team % names.length]} ${member}`,
+        answers,
+        entered_by: 'demo', entered_by_name: 'Demo', entered_at: new Date().toISOString(),
+      });
+    }
+    const gutsSkill = 1 + ((team * 5) % 4);
+    for (let set = 1; set <= 5 + (team % 3); set += 1) {
+      await store.saveGutsSet(team, problemsInSet(set, cfg).map((p) => ({
+        problem: p, answer: (p * team) % 5 < gutsSkill ? (p * 13) % 50 : (p * 13 + 1) % 50,
+      })), 'demo', 'Demo', `${names[team % names.length]} ${team}`);
     }
   }
-  await store.importGuts(
-    Array.from({ length: 12 }, (_, i) => ({ team: i + 1, score: 40 + ((i * 17) % 55) })));
   await refresh();
 }
 
 // ---------------------------------------------------------------------
-// Boot
-// ---------------------------------------------------------------------
-
 async function enterApp() {
   $('#gate').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#whoamiName').textContent = grader.name;
   $('#brandName').textContent = cfg.CONTEST_NAME;
-  $('#brandSub').textContent = 'Grading Portal';
+  document.title = `${cfg.CONTEST_NAME} — Staff Portal`;
 
-  wireTabs();
-  wireMatrix();
-  wireForm();
-  wireSetup();
-  wireIdentity();
-
+  wire();
   try { await store.releaseStale(Math.round(cfg.CLAIM_TTL_MS / 1000)); } catch { /* best effort */ }
   await store.heartbeat(grader).catch(() => {});
   await refresh();
 
-  store.onChange(() => { refresh(); });
+  store.onChange((snapshot) => {
+    if (snapshot) { data = snapshot; render(); } else refresh();
+  });
+  startClockTicker();
 
   setInterval(() => {
     store.heartbeat(grader).catch(() => {});
-    if (heldClaim) {
-      const [contestantId, problem] = heldClaim.split('|');
-      store.claim(contestantId, problem, grader, cfg.CLAIM_TTL_MS).catch(() => {});
-    }
-    renderActivity();
+    if (held) store.claim(held.scope, held.ref, grader, cfg.CLAIM_TTL_MS).catch(() => {});
   }, cfg.HEARTBEAT_MS);
 
-  addEventListener('pagehide', () => { releaseHeldClaim(); });
-  $('#contestantId').focus();
+  addEventListener('pagehide', () => { releaseHeld(); });
+  $('#individualId').focus();
 }
 
 async function boot() {
-  document.title = `${cfg.CONTEST_NAME} — Staff Grading Portal`;
-  $('#gateTitle').textContent = cfg.CONTEST_NAME;
-
+  $('#gateTitle').textContent = cfg.CONTEST_NAME.replace(/ Annual Math Contest$/, '');
   const nameInput = $('#graderName');
   const passwordInput = $('#staffPassword');
   nameInput.value = grader.name;
+
+  const override = readOverride();
+  $('#connUrl').value = override?.url ?? '';
+  $('#connKey').value = override?.key ?? '';
+  $('#gateConnect').addEventListener('click', () => $('#connectPanel').classList.toggle('hidden'));
+  $('#connSave').addEventListener('click', () => {
+    writeOverride($('#connUrl').value.trim(), $('#connKey').value.trim());
+    location.reload();
+  });
 
   if (store.mode === 'demo') {
     $('#gateDemo').classList.remove('hidden');
     $('#passwordField').classList.add('hidden');
   }
-
-  // Already signed in from an earlier shift? Skip straight through.
-  if (grader.name && await store.hasSession().catch(() => false)) {
-    await enterApp();
-    return;
-  }
+  if (grader.name && await store.hasSession().catch(() => false)) { await enterApp(); return; }
 
   const submit = async () => {
     const name = nameInput.value.trim();
     if (!name) {
-      $('#gateError').textContent = 'We need a name to put on your grades.';
+      $('#gateError').textContent = 'We need a name to stamp on your entries.';
       $('#gateError').classList.add('field__hint--error');
-      nameInput.focus();
       return;
     }
     grader.name = name;
-    localStorage.setItem('sfpo-grader-name', name);
-
+    localStorage.setItem('contest-grader-name', name);
     if (store.mode === 'supabase') {
       try {
         $('#gateEnter').disabled = true;
         await store.signIn(passwordInput.value);
       } catch (err) {
-        $('#gateError').textContent = err.message?.includes('Invalid')
-          ? 'That password was not accepted. Check with the head grader.'
+        $('#gateError').textContent = /Invalid/.test(err.message ?? '')
+          ? 'That password was not accepted. Check with the contest director.'
           : (err.message || 'Could not sign in.');
         $('#gateError').classList.add('field__hint--error');
         return;
-      } finally {
-        $('#gateEnter').disabled = false;
-      }
+      } finally { $('#gateEnter').disabled = false; }
     }
     await enterApp();
   };
-
   $('#gateEnter').addEventListener('click', submit);
   for (const input of [nameInput, passwordInput]) {
     input.addEventListener('keydown', (e) => { if (e.key === 'Enter') submit(); });

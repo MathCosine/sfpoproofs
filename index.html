@@ -4,66 +4,85 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex, nofollow">
-<title>SFPO 2026 — Staff Grading Portal</title>
+<title>Cowconuts 2026 — Staff Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="assets/styles.css">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📐</text></svg>">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
 <body>
 
-<!-- ===================== door ===================== -->
 <div class="gate" id="gate">
   <div class="gate__card card">
-    <h1 class="gate__title" id="gateTitle">SFPO 2026</h1>
-    <p class="gate__sub">Staff grading portal</p>
+    <h1 class="gate__title" id="gateTitle">Cowconuts 2026</h1>
+    <p class="gate__sub">Annual Math Contest · staff portal</p>
 
     <div class="banner banner--info hidden" id="gateDemo">
       <div>
         <b>Demo mode</b>
-        <span>No database configured, so everything stays in this browser. Open a second tab
-        to watch the live locking work.</span>
+        <span>No database connected, so everything stays in this browser.
+        Open a second tab to see the live locking work.</span>
       </div>
     </div>
 
     <div class="field">
       <label class="field__label" for="graderName">Your name</label>
       <input class="input" id="graderName" placeholder="e.g. Priya Raman" autocomplete="off">
-      <p class="field__hint">Stamped on every grade you enter. Set it once — it stays put.</p>
+      <p class="field__hint">Stamped on everything you enter. Set it once — it stays put.</p>
     </div>
 
     <div class="field" id="passwordField">
       <label class="field__label" for="staffPassword">Staff password</label>
-      <input class="input" id="staffPassword" type="password" placeholder="Shared with the grading team" autocomplete="current-password">
+      <input class="input" id="staffPassword" type="password" autocomplete="current-password"
+             placeholder="Shared with the scoring team">
       <p class="field__hint" id="gateError"></p>
     </div>
 
-    <button class="btn btn--primary btn--block" id="gateEnter">Start grading</button>
+    <button class="btn btn--primary btn--block" id="gateEnter">Start scoring</button>
+    <button class="btn btn--ghost btn--block" id="gateConnect" style="margin-top:10px">
+      Connection settings
+    </button>
+
+    <div class="hidden" id="connectPanel" style="margin-top:14px">
+      <div class="field">
+        <label class="field__label" for="connUrl">Supabase project URL</label>
+        <input class="input mono" id="connUrl" placeholder="https://xxxx.supabase.co" autocomplete="off">
+      </div>
+      <div class="field">
+        <label class="field__label" for="connKey">Publishable / anon key</label>
+        <input class="input mono" id="connKey" placeholder="sb_publishable_…" autocomplete="off">
+      </div>
+      <p class="field__hint" style="margin-bottom:10px">
+        Saved in this browser and used instead of the values in the code, so you can rotate a
+        key without redeploying. Clear both fields to go back to the built-in ones.
+      </p>
+      <button class="btn btn--go btn--block" id="connSave">Save and reload</button>
+    </div>
   </div>
 </div>
 
-<!-- ===================== app ===================== -->
 <div class="app hidden" id="app">
 
   <header class="topbar">
     <div class="topbar__brand">
-      <b id="brandName">SFPO 2026</b>
-      <span id="brandSub">Grading Portal</span>
+      <b id="brandName">Cowconuts 2026</b>
+      <span>Staff Portal</span>
     </div>
 
-    <div class="presence">
-      <span class="dot" id="connDot"></span>
-      <span id="connLabel">connecting…</span>
-    </div>
-
-    <div class="presence" title="Graders active in the last two minutes">
+    <div class="presence"><span class="dot" id="connDot"></span><span id="connLabel">connecting…</span></div>
+    <div class="presence" title="Staff active in the last two minutes">
       <span id="onlineCount">0</span>&nbsp;online
     </div>
 
-    <div class="whoami" id="whoami">
+    <div class="clockchip" id="clockChip" title="Guts clock">
+      <span class="clockchip__label">GUTS</span>
+      <span class="clockchip__time mono" id="clockTime">75:00</span>
+    </div>
+
+    <div class="whoami">
       <div>
-        <div class="whoami__label">Grading as</div>
+        <div class="whoami__label">Scoring as</div>
         <div class="whoami__name" id="whoamiName">—</div>
       </div>
       <button class="whoami__edit" id="changeName">change</button>
@@ -74,106 +93,146 @@
 
   <main class="layout">
 
-    <!-- ---------- left: the grading console ---------- -->
     <section class="console">
+      <div class="tabs" role="tablist">
+        <button class="tab" role="tab" data-entry="individual" aria-selected="true">Individual</button>
+        <button class="tab" role="tab" data-entry="guts" aria-selected="false">Guts</button>
+      </div>
 
-      <div class="card panel">
+      <!-- ---------- individual entry ---------- -->
+      <div class="card panel" id="entry-individual">
         <div class="panel__head">
-          <span class="step">1</span>
-          <h2>Grade a proof</h2>
+          <span class="step">1</span><h2>Enter an answer sheet</h2>
           <span class="spacer"></span>
-          <span class="tag" id="editingTag" hidden>editing your read</span>
+          <span class="tag" id="sheetState"></span>
         </div>
 
-        <div id="cellBanner"></div>
+        <div id="individualBanner"></div>
 
         <div class="field">
-          <label class="field__label" for="contestantId">Contestant ID</label>
-          <input class="input id-input" id="contestantId" placeholder="12C"
+          <label class="field__label" for="individualId">Individual ID</label>
+          <input class="input id-input" id="individualId" placeholder="12C"
                  autocomplete="off" spellcheck="false" maxlength="5">
-          <p class="field__hint id-echo" id="idEcho">Team number, then the member letter.</p>
+          <p class="field__hint" id="idEcho">Type 12C and the team and member fill themselves in.</p>
         </div>
 
-        <div class="field">
-          <span class="field__label">Problem</span>
-          <div class="chip-row">
-            <span class="chip-row__label">DIV A</span>
-            <div class="chip-row" id="problemsA"></div>
+        <div class="grid-3">
+          <div class="field">
+            <label class="field__label" for="teamNo">Team</label>
+            <input class="input mono" id="teamNo" type="number" min="1" autocomplete="off">
           </div>
-          <div class="chip-row">
-            <span class="chip-row__label">DIV B</span>
-            <div class="chip-row" id="problemsB"></div>
+          <div class="field">
+            <label class="field__label" for="memberLetter">Member</label>
+            <input class="input mono" id="memberLetter" maxlength="1" autocomplete="off">
+          </div>
+          <div class="field">
+            <label class="field__label" for="divisionPick">Division</label>
+            <select class="select" id="divisionPick">
+              <option value="">—</option>
+              <option value="A">Division A</option>
+              <option value="B">Division B</option>
+            </select>
           </div>
         </div>
 
         <div class="field">
-          <span class="field__label">Score <span class="muted" id="scoreHint">— press 0–7</span></span>
-          <div class="scorepad" id="scorepad"></div>
+          <label class="field__label" for="contestantName">Name <span class="muted">optional</span></label>
+          <input class="input" id="contestantName" placeholder="Left blank is fine" autocomplete="off">
         </div>
 
         <div class="field">
-          <label class="field__label" for="feedback">Feedback to the contestant</label>
-          <textarea class="textarea" id="feedback"
-            placeholder="What earned the points, and what was missing. This goes back to the student."></textarea>
+          <span class="field__label">Answers <span class="muted" id="answersHint"></span></span>
+          <div class="answers" id="answerGrid"></div>
         </div>
 
         <div class="chip-row">
-          <button class="btn btn--go" id="submitGrade">
-            Submit grade <span class="kbd">⌘↵</span>
-          </button>
-          <button class="btn btn--ghost" id="clearForm">Clear</button>
-          <span class="spacer" style="margin-left:auto"></span>
-          <span class="muted" id="myCount" style="font-size:12px"></span>
+          <button class="btn btn--go" id="saveSheet">Save sheet <span class="kbd">⌘↵</span></button>
+          <button class="btn btn--ghost" id="clearSheet">Clear</button>
+          <span style="margin-left:auto" class="muted" id="myCount"></span>
+        </div>
+      </div>
+
+      <!-- ---------- guts entry ---------- -->
+      <div class="card panel hidden" id="entry-guts">
+        <div class="panel__head">
+          <span class="step">1</span><h2>Enter a guts set</h2>
+          <span class="spacer"></span>
+          <span class="tag" id="gutsState"></span>
+        </div>
+
+        <div id="gutsBanner"></div>
+
+        <div class="grid-3">
+          <div class="field">
+            <label class="field__label" for="gutsTeam">Team</label>
+            <input class="input id-input" id="gutsTeam" type="number" min="1" placeholder="12" autocomplete="off">
+          </div>
+          <div class="field">
+            <label class="field__label" for="gutsSet">Set</label>
+            <select class="select" id="gutsSet"></select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="gutsDivision">Division</label>
+            <select class="select" id="gutsDivision">
+              <option value="">—</option>
+              <option value="A">Division A</option>
+              <option value="B">Division B</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="gutsTeamName">Team name</label>
+          <input class="input" id="gutsTeamName" placeholder="Asked once, then remembered" autocomplete="off">
+          <p class="field__hint" id="gutsNameHint"></p>
+        </div>
+
+        <div class="field">
+          <span class="field__label">Answers <span class="muted" id="gutsPointsHint"></span></span>
+          <div class="answers answers--guts" id="gutsGrid"></div>
+        </div>
+
+        <div class="chip-row">
+          <button class="btn btn--go" id="saveGuts">Save set <span class="kbd">⌘↵</span></button>
+          <button class="btn btn--ghost" id="clearGuts">Clear</button>
+          <span style="margin-left:auto" class="muted" id="gutsProgress"></span>
         </div>
       </div>
 
       <div class="card panel">
         <div class="panel__head">
-          <span class="step">2</span>
-          <h2>Grade these next</h2>
-          <span class="spacer"></span>
-          <span class="tag" id="queueCount">0</span>
+          <span class="step">2</span><h2>Enter these next</h2>
+          <span class="spacer"></span><span class="tag" id="queueCount">0</span>
         </div>
-        <p class="field__hint" style="margin-bottom:11px">
-          Conflicts first, then second reads, then unfinished contestants. Anything another
-          grader is holding right now is left out.
-        </p>
         <div class="suggest" id="suggestList"></div>
       </div>
-
     </section>
 
-    <!-- ---------- right: live status ---------- -->
     <section>
       <div class="tabs" role="tablist">
-        <button class="tab" role="tab" data-tab="matrix" aria-selected="true">Coverage matrix</button>
+        <button class="tab" role="tab" data-tab="progress" aria-selected="true">Progress</button>
         <button class="tab" role="tab" data-tab="leaderboard" aria-selected="false">Leaderboards</button>
-        <button class="tab" role="tab" data-tab="activity" aria-selected="false">Activity</button>
-        <button class="tab" role="tab" data-tab="setup" aria-selected="false">Guts &amp; export</button>
+        <button class="tab" role="tab" data-tab="key" aria-selected="false">Answer key</button>
+        <button class="tab" role="tab" data-tab="run" aria-selected="false">Run contest</button>
+        <button class="tab" role="tab" data-tab="setup" aria-selected="false">Admin</button>
       </div>
 
-      <!-- matrix -->
-      <div class="card panel" id="tab-matrix">
+      <div class="card panel" id="tab-progress">
         <div class="panel__head">
-          <h2>What has been graded</h2>
-          <span class="spacer"></span>
+          <h2>Who has been entered</h2><span class="spacer"></span>
           <div class="legend">
-            <span><i style="background:var(--slate)"></i>not yet</span>
-            <span><i style="background:var(--lime)"></i>graded</span>
-            <span><i style="background:var(--amber)"></i>2nd read</span>
-            <span><i style="background:var(--red)"></i>conflict</span>
+            <span><i style="background:var(--slate)"></i>not entered</span>
+            <span><i style="background:var(--lime)"></i>done</span>
+            <span><i style="background:var(--amber)"></i>partial</span>
             <span><i style="background:var(--violet)"></i>in progress</span>
           </div>
         </div>
-        <div class="matrix" id="matrix"></div>
-        <div id="unassigned"></div>
+        <div id="progressPanel"></div>
       </div>
 
-      <!-- leaderboards -->
       <div class="card panel hidden" id="tab-leaderboard">
         <div class="panel__head">
-          <h2>Standings</h2>
-          <span class="spacer"></span>
+          <h2>Standings</h2><span class="spacer"></span>
           <div class="tabs" style="margin:0">
             <button class="tab btn--ghost" data-board="combined" aria-selected="true">Combined</button>
             <button class="tab btn--ghost" data-board="individual" aria-selected="false">Individual</button>
@@ -183,84 +242,75 @@
         <div id="boards"></div>
       </div>
 
-      <!-- activity -->
-      <div class="card panel hidden" id="tab-activity">
-        <div class="panel__head"><h2>Live activity</h2></div>
-        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">Graders online</h3>
-        <div class="grader-chips" id="graderChips" style="margin-bottom:20px"></div>
-        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">In progress right now</h3>
-        <div class="grader-chips" id="activeClaims" style="margin-bottom:20px"></div>
-        <h3 style="font-size:12px;text-transform:uppercase;letter-spacing:.07em;margin-bottom:9px">Recent grades</h3>
-        <div class="feed" id="feed"></div>
+      <div class="card panel hidden" id="tab-key">
+        <div class="panel__head"><h2>Answer key</h2><span class="spacer"></span>
+          <span class="tag" id="keyState"></span></div>
+        <p class="field__hint" style="margin-bottom:14px">
+          Non-negative integers. Leave a problem blank and it scores nothing for anyone —
+          nobody is marked right or wrong against an answer you have not set yet.
+          Guts point values are set per set, right here.
+        </p>
+        <h3 class="subhead">Individual — 20 problems, 1 point each</h3>
+        <div class="answers" id="keyIndividual"></div>
+        <h3 class="subhead" style="margin-top:22px">Guts — 7 sets of 4</h3>
+        <div id="keyGuts"></div>
+        <button class="btn btn--primary" id="saveKey" style="margin-top:16px">Save answer key</button>
       </div>
 
-      <!-- guts + export -->
-      <div class="card panel hidden" id="tab-setup">
-        <div class="panel__head"><h2>Guts round import</h2></div>
-        <p class="field__hint" style="margin-bottom:12px">
-          A CSV of <span class="mono">team,score</span> — one row per team, header optional.
-          Add a third <span class="mono">division</span> column and it will assign divisions too.
-          Re-importing overwrites the teams in the file and leaves the rest alone.
-        </p>
-        <div class="dropzone" id="gutsDrop">
-          <b>Drop your guts CSV here</b>
-          <p class="field__hint" style="margin-top:6px">or click to choose a file</p>
-          <input type="file" id="gutsFile" accept=".csv,text/csv" hidden>
+      <div class="card panel hidden" id="tab-run">
+        <div class="panel__head"><h2>Guts clock</h2></div>
+        <div class="clockbig mono" id="clockBig">75:00</div>
+        <div class="chip-row" style="margin-bottom:16px">
+          <button class="btn btn--go" id="clockStart">Start</button>
+          <button class="btn btn--warn" id="clockPause">Pause</button>
+          <button class="btn btn--ghost" id="clockMinus">−1 min</button>
+          <button class="btn btn--ghost" id="clockPlus">+1 min</button>
+          <button class="btn btn--ghost" id="clockReset">Reset</button>
         </div>
-        <div id="gutsResult" style="margin-top:13px"></div>
+        <div class="grid-3">
+          <div class="field">
+            <label class="field__label" for="durationMinutes">Length (minutes)</label>
+            <input class="input" id="durationMinutes" type="number" min="1" max="600">
+          </div>
+          <div class="field">
+            <label class="field__label" for="freezeMinutes">Freeze with (minutes) left</label>
+            <input class="input" id="freezeMinutes" type="number" min="0" max="120">
+          </div>
+        </div>
+        <button class="btn btn--primary" id="saveClock">Save clock settings</button>
 
-        <div class="panel__head" style="margin-top:28px"><h2>Roster shape</h2></div>
-        <p class="field__hint" style="margin-bottom:12px">
-          There is no roster file, so the matrix is drawn from these bounds. Teams with fewer
-          than four members simply leave their extra slots untouched — that is expected, and a
-          slot nobody grades is never counted against coverage.
+        <div class="panel__head" style="margin-top:28px"><h2>Public leaderboard</h2></div>
+        <div id="freezeState"></div>
+        <div class="chip-row" style="margin-top:12px">
+          <button class="btn btn--warn" id="freezeToggle">Freeze now</button>
+          <a class="btn" id="publicLink" target="_blank" rel="noopener">Open public board ↗</a>
+        </div>
+        <p class="field__hint" style="margin-top:12px">
+          The public board shows team names, guts scores and the clock — nothing else from this
+          portal, and never an answer or the key. Put it on the projector.
         </p>
-        <div class="grid-2">
+      </div>
+
+      <div class="card panel hidden" id="tab-setup">
+        <div class="panel__head"><h2>Contest settings</h2></div>
+        <div class="grid-3">
           <div class="field">
             <label class="field__label" for="teamCount">Teams (1 – N)</label>
             <input class="input" id="teamCount" type="number" min="1" max="500">
           </div>
           <div class="field">
-            <label class="field__label" for="secondReadThreshold">Second read at score ≥</label>
-            <input class="input" id="secondReadThreshold" type="number" min="0" max="7" step="0.5">
-          </div>
-          <div class="field">
-            <label class="field__label" for="disagreementDelta">Conflict when reads differ by ≥</label>
-            <input class="input" id="disagreementDelta" type="number" min="0.5" max="7" step="0.5">
-          </div>
-        </div>
-
-        <div class="panel__head" style="margin-top:28px"><h2>Combined score weighting</h2></div>
-        <p class="field__hint" style="margin-bottom:12px">
-          The weights apply to each side's <b>share of its own maximum</b>, not to raw points.
-          They have to: a Division B team can score 140 on proofs where Division A tops out at
-          84, and guts is on a third scale — so weighting raw points would quietly give guts a
-          different real share in each division.
-        </p>
-        <div class="grid-2">
-          <div class="field">
-            <label class="field__label" for="proofWeight">Proof weight</label>
-            <input class="input" id="proofWeight" type="number" min="0" max="100" step="1">
+            <label class="field__label" for="individualWeight">Individual weight</label>
+            <input class="input" id="individualWeight" type="number" min="0" max="100">
           </div>
           <div class="field">
             <label class="field__label" for="gutsWeight">Guts weight</label>
-            <input class="input" id="gutsWeight" type="number" min="0" max="100" step="1">
-          </div>
-          <div class="field">
-            <label class="field__label" for="gutsMax">Guts is out of</label>
-            <input class="input" id="gutsMax" type="number" min="0" step="1" placeholder="0">
-            <p class="field__hint">0 uses the highest guts score imported.</p>
+            <input class="input" id="gutsWeight" type="number" min="0" max="100">
           </div>
         </div>
         <div class="banner banner--info" id="weightPreview"></div>
         <button class="btn btn--primary" id="saveSettings">Save settings for everyone</button>
 
         <div class="panel__head" style="margin-top:28px"><h2>Disqualifications</h2></div>
-        <p class="field__hint" style="margin-bottom:12px">
-          A disqualified team keeps every grade it has — it just stops ranking, drops out of
-          the grading queue, and is listed separately at the bottom of each leaderboard.
-          Reinstating restores the exact score.
-        </p>
         <div class="grid-2">
           <div class="field">
             <label class="field__label" for="dqTeam">Team number</label>
@@ -276,15 +326,15 @@
 
         <div class="panel__head" style="margin-top:28px"><h2>Export</h2></div>
         <div class="chip-row">
-          <button class="btn" id="exportGrades">All grades + feedback</button>
           <button class="btn" id="exportIndividual">Individual results</button>
-          <button class="btn" id="exportCombined">Final combined results</button>
+          <button class="btn" id="exportGuts">Guts results</button>
+          <button class="btn" id="exportCombined">Combined results</button>
         </div>
 
         <div class="panel__head" style="margin-top:28px"><h2>Clear test data</h2></div>
         <p class="field__hint" style="margin-bottom:12px">
-          Deletes every grade, guts score, team and lock so a dry run never lands in the real
-          results. Your settings above are kept. There is no undo — export first if you want a copy.
+          Deletes every answer sheet, guts answer, team and lock. The answer key and your
+          settings are kept. No undo — export first if you want a copy.
         </p>
         <div class="danger">
           <p class="danger__counts mono" id="wipeCounts">Nothing to delete.</p>
@@ -301,7 +351,6 @@
           <button class="btn btn--ghost hidden" id="seedDemo">Load demo data</button>
         </div>
       </div>
-
     </section>
   </main>
 </div>

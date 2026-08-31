@@ -60,176 +60,253 @@ const watch = (p, tag) => {
 const page = await ctx.newPage();
 watch(page, 'tab1');
 
+
 await page.goto(BASE, { waitUntil: 'networkidle' });
 
-// ---- gate -------------------------------------------------------
+// ---- gate ---------------------------------------------------------
 check('gate is shown', await page.isVisible('#gate'));
-check('?demo=1 forces the demo store even with credentials present',
-  await page.isVisible('#gateDemo'));
-check('password field hidden in demo mode', !(await page.isVisible('#passwordField')));
-
+check('?demo=1 forces the demo store', await page.isVisible('#gateDemo'));
 await page.fill('#graderName', 'Priya Raman');
 await page.click('#gateEnter');
 await page.waitForSelector('#app:not(.hidden)');
-check('entered the app', await page.isVisible('#app'));
-check('grader name is on the bar', (await page.textContent('#whoamiName')) === 'Priya Raman');
+check('entered the portal', await page.isVisible('#app'));
+check('name is on the bar', (await page.textContent('#whoamiName')) === 'Priya Raman');
 
-// ---- grade one proof --------------------------------------------
-await page.fill('#contestantId', '12c');
-check('ID is uppercased as you type', (await page.inputValue('#contestantId')) === '12C');
-check('ID echo parses the team', (await page.textContent('#idEcho')).includes('Team 12, member C'));
+// ---- answer key ---------------------------------------------------
+await page.click('.tab[data-tab="key"]');
+await page.waitForTimeout(200);
+const keyBoxes = await page.locator('#keyIndividual .ans input').count();
+check('the key has one box per individual problem', keyBoxes === 20, String(keyBoxes));
+const gutsSets = await page.locator('#keyGuts .keyset').count();
+check('the guts key is grouped into 7 sets', gutsSets === 7, String(gutsSets));
+const gutsBoxes = await page.locator('#keyGuts .ans input').count();
+check('7 sets of 4 is 28 guts boxes', gutsBoxes === 28, String(gutsBoxes));
 
-await page.click('button.chip:has-text("A2")');
-check('problem chip is pressed',
-  (await page.getAttribute('button.chip:has-text("A2")', 'aria-pressed')) === 'true');
-
-await page.keyboard.press('6');
-check('number key sets the score',
-  (await page.getAttribute('.score[aria-pressed="true"]', 'aria-pressed')) === 'true');
-check('the right score is selected',
-  (await page.textContent('.score[aria-pressed="true"]')) === '6');
-
-await page.fill('#feedback', 'Induction is clean; the base case is asserted not proved.');
-await page.click('#submitGrade');
-await page.waitForTimeout(400);
-
-const toastText = await page.textContent('.toast').catch(() => '');
-check('a confirmation toast appears', toastText.includes('12C'), toastText);
-
-// grader name must NOT have been disturbed by grading
-check('grader name survives a submit', (await page.textContent('#whoamiName')) === 'Priya Raman');
-check('contestant stays loaded for the next problem',
-  (await page.inputValue('#contestantId')) === '12C');
-const advanced = await page.getAttribute('button.chip:has-text("A1")', 'aria-pressed');
-check('auto-advanced to the next ungraded problem', advanced === 'true', `A1 pressed=${advanced}`);
-check('score pad was cleared', (await page.locator('.score[aria-pressed="true"]').count()) === 0);
-check('feedback was cleared', (await page.inputValue('#feedback')) === '');
-
-// ---- matrix -----------------------------------------------------
-check('team 12 landed in Division A',
-  await page.locator('#matrix .matrix__team:has-text("TEAM 12")').first().isVisible());
-check('a score of 6 paints the cell amber, not green',
-  (await page.locator('.cell--needs-second').count()) >= 1
-  && (await page.locator('.cell--graded').count()) === 0);
-check('progress bar rendered', await page.locator('.progress__fill').first().isVisible());
-
-// A low score is settled by one read and should go straight to green.
-await page.fill('#contestantId', '12C');
-await page.click('button.chip:has-text("A3")');
-await page.keyboard.press('2');
-await page.click('#submitGrade');
-await page.waitForTimeout(400);
-check('a low score paints the cell green', (await page.locator('.cell--graded').count()) >= 1);
-
-// second read flag: score a 7 and confirm the amber state
-await page.fill('#contestantId', '12A');
-await page.click('button.chip:has-text("A1")');
-await page.keyboard.press('7');
-await page.click('#submitGrade');
-await page.waitForTimeout(400);
-check('a high score is flagged for a second read',
-  (await page.locator('.cell--needs-second').count()) >= 1);
-
-// ---- suggestions ------------------------------------------------
-const sugg = await page.locator('.suggest__item').count();
-check('the queue has suggestions', sugg > 0, `${sugg} items`);
-const myQueue = await page.locator('.suggest__item').allTextContents();
-check('you are never offered a second read of your own work',
-  !myQueue.some((t) => t.includes('second read')), myQueue[0]?.trim());
-
-// ---- a second grader in another tab -----------------------------
-const page2 = await ctx.newPage();
-watch(page2, 'tab2');
-// Both tabs share localStorage, so stamp a different grader id before the
-// app boots — otherwise "tab 2" is the same person and none of the
-// two-grader rules are actually exercised.
-await page2.addInitScript(() => {
-  localStorage.setItem('sfpo-grader-id', 'grader-dan');
-  localStorage.setItem('sfpo-grader-name', 'Dan Whitfield');
+// Fill the key: individual problem n -> n, guts problem n -> n*2.
+await page.evaluate(() => {
+  document.querySelectorAll('#keyIndividual .ans input').forEach((input, i) => {
+    input.value = String(i + 1);
+    input.dispatchEvent(new Event('input'));
+  });
+  document.querySelectorAll('#keyGuts .ans input').forEach((input, i) => {
+    input.value = String((i + 1) * 2);
+    input.dispatchEvent(new Event('input'));
+  });
 });
-await page2.goto(BASE, { waitUntil: 'networkidle' });
-await page2.waitForSelector('#app:not(.hidden)', { timeout: 5000 });
-check('tab 2 is a different grader',
-  (await page2.textContent('#whoamiName')) === 'Dan Whitfield');
-await page2.fill('#contestantId', '12B');
-await page2.click('button.chip:has-text("A3")');
-await page2.waitForTimeout(700);
+const setPoints = await page.locator('#keyGuts .keyset__points input').nth(6).inputValue();
+check('set 7 defaults to 7 points each', setPoints === '7', setPoints);
+await page.click('#saveKey');
+await page.waitForTimeout(500);
+check('the key saves and reports complete',
+  (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
 
-// Tab 2 has read nothing, so the high scores tab 1 entered are exactly
-// what it should be sent to double-check, ahead of everything else.
-const danQueue = await page2.locator('.suggest__item').allTextContents();
-check('the other grader is sent the second reads first',
-  (danQueue[0] ?? '').includes('needs a second read'), (danQueue[0] ?? '').trim());
+// ---- individual entry ---------------------------------------------
+await page.fill('#individualId', '12c');
+await page.waitForTimeout(200);
+check('the ID uppercases itself', (await page.inputValue('#individualId')) === '12C');
+check('typing 12C fills the team box', (await page.inputValue('#teamNo')) === '12');
+check('typing 12C fills the member box', (await page.inputValue('#memberLetter')) === 'C');
 
-await page.waitForTimeout(900);
-const claimedCells = await page.locator('.cell--claimed').count();
-check('tab 1 sees tab 2 holding a cell (live lock)', claimedCells >= 1, `${claimedCells} claimed`);
+await page.fill('#teamNo', '13');
+await page.waitForTimeout(150);
+check('the team box stays editable and updates the ID',
+  (await page.inputValue('#individualId')) === '13C', await page.inputValue('#individualId'));
+await page.fill('#individualId', '12C');
+await page.waitForTimeout(150);
 
-// tab 1 must not be offered the cell tab 2 holds
-const queueItems = await page.locator('.suggest__item').allTextContents();
-check('the held cell is kept out of the queue',
-  !queueItems.some((t) => t.includes('12B') && t.includes('A3')));
+await page.selectOption('#divisionPick', 'A');
+await page.fill('#contestantName', 'Ada Lovelace');
 
-// and opening it directly warns you
-await page.fill('#contestantId', '12B');
-await page.click('button.chip:has-text("A3")');
+const answerBoxes = await page.locator('#answerGrid .ans input').count();
+check('there are 20 answer boxes', answerBoxes === 20, String(answerBoxes));
+
+// Type into the first box and let Enter walk the grid.
+const first = page.locator('#answerGrid .ans input').first();
+await first.click();
+await page.keyboard.type('1');
+await page.keyboard.press('Enter');
+await page.keyboard.type('2');
+await page.keyboard.press('Enter');
+await page.keyboard.type('999');
+await page.waitForTimeout(200);
+check('Enter walks to the next box',
+  (await page.locator('#answerGrid .ans input').nth(2).inputValue()) === '999');
+check('a correct answer turns the box green',
+  (await page.locator('#answerGrid .ans').first().getAttribute('class')).includes('ans--correct'));
+check('a wrong answer turns the box red',
+  (await page.locator('#answerGrid .ans').nth(2).getAttribute('class')).includes('ans--wrong'));
+check('the running total is shown while typing',
+  (await page.textContent('#myCount')).includes('2 correct'), await page.textContent('#myCount'));
+
+// Paste a whole row across the grid.
+await page.locator('#answerGrid .ans input').nth(3).click();
+await page.evaluate(() => {
+  const input = document.querySelectorAll('#answerGrid .ans input')[3];
+  const data = new DataTransfer();
+  data.setData('text', '4 5 6 7');
+  input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }));
+});
+await page.waitForTimeout(200);
+check('pasting a row spreads across the boxes',
+  (await page.locator('#answerGrid .ans input').nth(6).inputValue()) === '7',
+  await page.locator('#answerGrid .ans input').nth(6).inputValue());
+
+await page.click('#saveSheet');
+await page.waitForTimeout(500);
+const savedToast = await page.locator('.toast').last().textContent();
+check('the sheet saves with its score', savedToast.includes('12C') && savedToast.includes('6 pts'),
+  savedToast.trim());
+check('a non-negative integer is required',
+  (await page.locator('#answerGrid .ans--bad').count()) === 0);
+
+// ---- progress is per contestant, not per problem -------------------
+await page.click('.tab[data-tab="progress"]');
 await page.waitForTimeout(300);
-const banner = await page.textContent('#cellBanner').catch(() => '');
-check('opening a held cell warns about the other grader',
-  banner.includes('grading this right now'), banner.trim().slice(0, 80));
-await page2.close();
+check('progress lists people, not 20 boxes each',
+  (await page.locator('.person').count()) === 4
+  && (await page.locator('#progressPanel .ans').count()) === 0,
+  `${await page.locator('.person').count()} chips`);
+check('the entered contestant shows their score',
+  (await page.locator('.person--partial, .person--done').first().textContent()).includes('12C'));
 
-// ---- guards against a mistyped ID -------------------------------
-check('the "editing your read" tag is hidden when it is not your read',
-  !(await page.isVisible('#editingTag')));
+// ---- guts ----------------------------------------------------------
+await page.click('.tab[data-entry="guts"]');
+await page.waitForTimeout(200);
+await page.fill('#gutsTeam', '12');
+await page.selectOption('#gutsSet', '1');
+await page.waitForTimeout(250);
+check('guts shows 4 boxes for a set',
+  (await page.locator('#gutsGrid .ans input').count()) === 4);
+check('guts states the points for the set',
+  (await page.textContent('#gutsPointsHint')).includes('1 point(s) each'),
+  await page.textContent('#gutsPointsHint'));
+check('a team with no name is asked for one',
+  (await page.textContent('#gutsNameHint')).includes('give it a name'));
 
-await page.fill('#contestantId', '12C');       // team 12 is Division A
-await page.click('button.chip:has-text("B4")');
+await page.click('#saveGuts');
 await page.waitForTimeout(300);
-const mismatch = await page.textContent('#cellBanner');
-check('scoring a B problem for a Division A team is called out',
-  mismatch.includes('Division A, but B4 is a Division B problem'), mismatch.trim().slice(0, 70));
-await page.click('#clearForm');
+check('guts refuses to save without a team name',
+  (await page.locator('.toast').last().textContent()).includes('name'));
 
-// ---- seed + leaderboards ----------------------------------------
-await page.click('.tab[data-tab="setup"]');
-await page.click('#seedDemo');
-await page.waitForTimeout(2500);
+await page.fill('#gutsTeamName', 'Cowbell');
+await page.evaluate(() => {
+  document.querySelectorAll('#gutsGrid .ans input').forEach((input, i) => {
+    input.value = String((i + 1) * 2);
+    input.dispatchEvent(new Event('input'));
+  });
+});
+await page.click('#saveGuts');
+await page.waitForTimeout(600);
+check('the set saves and advances to the next one',
+  (await page.inputValue('#gutsSet')) === '2', await page.inputValue('#gutsSet'));
+
+await page.selectOption('#gutsSet', '7');
+await page.waitForTimeout(250);
+check('set 7 is worth 7 points each',
+  (await page.textContent('#gutsPointsHint')).includes('7 point(s) each'));
+await page.evaluate(() => {
+  document.querySelectorAll('#gutsGrid .ans input').forEach((input, i) => {
+    input.value = String((25 + i) * 2);
+    input.dispatchEvent(new Event('input'));
+  });
+});
+await page.click('#saveGuts');
+await page.waitForTimeout(600);
 
 await page.click('.tab[data-tab="leaderboard"]');
-await page.waitForTimeout(400);
-const combinedRows = await page.locator('#boards table tbody tr').count();
-check('combined leaderboard has rows', combinedRows > 0, `${combinedRows} rows`);
-const firstRow = await page.locator('#boards table tbody tr').first().textContent();
-check('combined row shows proof + guts + total', /Team \d+/.test(firstRow), firstRow.trim());
-
-await page.click('.tab[data-board="individual"]');
-await page.waitForTimeout(300);
-check('individual leaderboard renders',
-  (await page.locator('#boards table tbody tr').count()) > 0);
 await page.click('.tab[data-board="guts"]');
 await page.waitForTimeout(300);
-check('guts leaderboard renders',
-  (await page.locator('#boards table tbody tr').count()) > 0);
+const gutsRow = await page.locator('#boards table tbody tr').first().textContent();
+check('guts points rise by set: 4 x 1 + 4 x 7 = 32',
+  gutsRow.includes('32'), gutsRow.trim());
+check('the team name reaches the leaderboard', gutsRow.includes('Cowbell'), gutsRow.trim());
 
-// ---- guts CSV import --------------------------------------------
+// ---- clock ---------------------------------------------------------
+await page.click('.tab[data-tab="run"]');
+await page.waitForTimeout(250);
+check('the clock starts at 75 minutes',
+  (await page.textContent('#clockBig')) === '75:00', await page.textContent('#clockBig'));
+await page.click('#clockMinus');
+await page.waitForTimeout(400);
+check('the clock is adjustable while stopped',
+  (await page.textContent('#clockBig')) === '74:00', await page.textContent('#clockBig'));
+await page.click('#clockStart');
+await page.waitForTimeout(1400);
+const running = await page.textContent('#clockBig');
+check('starting the clock makes it count down', running !== '74:00', running);
+await page.click('#clockPause');
+await page.waitForTimeout(400);
+const paused = await page.textContent('#clockBig');
+await page.waitForTimeout(1400);
+check('pausing holds it still', (await page.textContent('#clockBig')) === paused, paused);
+
+check('the board reports itself live',
+  (await page.textContent('#freezeState')).includes('is live'));
+await page.click('#freezeToggle');
+await page.waitForTimeout(400);
+check('freezing is reflected in the portal',
+  (await page.textContent('#freezeState')).includes('is frozen'));
+await page.click('#freezeToggle');
+await page.waitForTimeout(400);
+
+// ---- the public board ----------------------------------------------
+const board = await ctx.newPage();
+watch(board, 'board');
+const BOARD_URL = BASE.replace('/?demo=1', '/guts.html?demo=1');
+await board.goto(BOARD_URL, { waitUntil: 'networkidle' });
+await board.waitForTimeout(1200);
+const boardText = await board.innerText('body');
+check('the public board shows the team and its score',
+  boardText.includes('Cowbell') && boardText.includes('32'), boardText.slice(0, 120));
+check('the public board shows a clock',
+  /\d\d:\d\d/.test(await board.textContent('#clockTime')), await board.textContent('#clockTime'));
+const leak = ['answer key', 'Staff', 'Disqualif', 'ERASE', 'Individual ID']
+  .filter((w) => new RegExp(w, 'i').test(boardText));
+check('the public board leaks nothing from the portal', leak.length === 0,
+  `matched: ${leak.join(', ')} | body: ${boardText.replace(/\s+/g, ' ').slice(0, 150)}`);
+check('the public board has no answer boxes',
+  (await board.locator('input').count()) === 0);
+await board.close();
+
+// ---- two graders never key the same sheet ---------------------------
+const page2 = await ctx.newPage();
+watch(page2, 'tab2');
+await page2.addInitScript(() => {
+  localStorage.setItem('contest-grader-id', 'grader-dan');
+  localStorage.setItem('contest-grader-name', 'Dan Whitfield');
+});
+await page2.goto(BASE, { waitUntil: 'networkidle' });
+await page2.waitForSelector('#app:not(.hidden)');
+check('tab 2 is a different grader',
+  (await page2.textContent('#whoamiName')) === 'Dan Whitfield');
+await page2.fill('#individualId', '20A');
+await page2.waitForTimeout(700);
+
+await page.click('.tab[data-entry="individual"]');
+await page.fill('#individualId', '20A');
+await page.waitForTimeout(900);
+check('opening a sheet someone else holds warns you',
+  (await page.textContent('#individualBanner')).includes('entering this sheet right now'),
+  (await page.textContent('#individualBanner')).trim().slice(0, 70));
+await page2.close();
+
+// ---- disqualification ----------------------------------------------
 await page.click('.tab[data-tab="setup"]');
-check('the team count defaults to 100', (await page.inputValue('#teamCount')) === '100',
-  await page.inputValue('#teamCount'));
-await page.click('#saveSettings');
+await page.fill('#dqTeam', '12');
+await page.fill('#dqReason', 'Outside help');
+await page.click('#dqAdd');
+await page.waitForTimeout(600);
+check('the DQ is listed with its reason',
+  (await page.textContent('#dqList')).includes('Outside help'));
+await page.click('.tab[data-tab="leaderboard"]');
+await page.waitForTimeout(300);
+check('a disqualified team drops out of the ranking',
+  (await page.locator('#boards .table-wrap--dq').count()) >= 1);
+await page.click('.tab[data-tab="setup"]');
+await page.click('#dqList button');
 await page.waitForTimeout(500);
 
-await page.setInputFiles('#gutsFile', {
-  name: 'guts.csv',
-  mimeType: 'text/csv',
-  buffer: Buffer.from('team,score\n1,120\n2,118\nbadrow,5\n'),
-});
-await page.waitForTimeout(900);
-const gutsResult = await page.textContent('#gutsResult');
-check('guts CSV imports the good rows', gutsResult.includes('2 team(s)'), gutsResult.trim().slice(0, 90));
-check('guts CSV reports the bad row', gutsResult.includes('skipped'));
-
-// ---- exports ----------------------------------------------------
+// ---- exports --------------------------------------------------------
 const readDownload = async (id) => {
   const dl = page.waitForEvent('download', { timeout: 5000 });
   await page.click(id);
@@ -239,162 +316,57 @@ const readDownload = async (id) => {
   for await (const c of stream) chunks.push(c);
   return { name: d.suggestedFilename(), text: Buffer.concat(chunks).toString('utf8') };
 };
-
-for (const [id, file] of [['#exportGrades', 'grades'], ['#exportCombined', 'combined']]) {
+for (const [id, label] of [['#exportIndividual', 'individual'], ['#exportGuts', 'guts'],
+  ['#exportCombined', 'combined']]) {
   const d = await readDownload(id);
-  check(`${file} CSV downloads`, d.name.endsWith('.csv'), d.name);
-  check(`${file} CSV has rows`, d.text.trim().split('\n').length > 1);
+  check(`${label} CSV downloads with rows`,
+    d.name.endsWith('.csv') && d.text.trim().split('\n').length > 1, d.name);
 }
+const indCsv = await readDownload('#exportIndividual');
+const indLines = indCsv.text.replace(/^\uFEFF/, '').trim().split('\n');
+const width = indLines[0].split(',').length;
+check('individual CSV columns line up',
+  indLines.slice(1).every((l) => l.split(',').length === width),
+  `header ${width} cols`);
 
-// Both divisions share one file, and A has three problems to B's five —
-// so every row must still be the same width as the header.
-const indiv = await readDownload('#exportIndividual');
-const lines = indiv.text.replace(/^\uFEFF/, '').trim().split('\n');
-const width = lines[0].split(',').length;
-const ragged = lines.slice(1).filter((l) => l.split(',').length !== width);
-check('individual CSV columns line up across both divisions',
-  ragged.length === 0, `header ${width} cols, ${ragged.length} ragged rows`);
-const divA = lines.slice(1).find((l) => l.split(',')[1] === 'A');
-check('a Division A row keeps total, status and the DQ columns',
-  /,\d+(\.\d+)?,(complete|in progress),(yes|no),[^,]*$/.test(divA), divA);
-
-// ---- weighting ---------------------------------------------------
-await page.click('.tab[data-tab="setup"]');
-check('the weights default to 80/20',
-  (await page.inputValue('#proofWeight')) === '80' && (await page.inputValue('#gutsWeight')) === '20',
-  `${await page.inputValue('#proofWeight')}/${await page.inputValue('#gutsWeight')}`);
-const preview = await page.textContent('#weightPreview');
-check('the weighting preview spells out the split',
-  preview.includes('80 from proofs and 20 from guts'), preview.trim().slice(0, 70));
-
-await page.fill('#gutsWeight', '0');
-await page.waitForTimeout(150);
-check('changing a weight updates the preview live',
-  (await page.textContent('#weightPreview')).includes('100 from proofs and 0 from guts'));
-await page.fill('#gutsWeight', '20');
-
-await page.click('.tab[data-tab="leaderboard"]');
-await page.click('.tab[data-board="combined"]');
-await page.waitForTimeout(300);
-const caption = await page.textContent('#boards');
-check('the leaderboard states the formula',
-  caption.includes('80% of the proof score plus 20% of the guts score'),
-  caption.trim().slice(0, 80));
-const topCombined = await page.locator('#boards table tbody tr').first().textContent();
-check('combined scores are on a 0-100 scale',
-  /\d+\.\d{2}/.test(topCombined), topCombined.trim());
-
-// ---- disqualification --------------------------------------------
-const rankedBefore = await page.locator('#boards table tbody tr').count();
-// Read the cell, not the row text — concatenated columns turn
-// "Team 7" + "24.0" into a bogus "Team 724".
-const topTeam = ((await page.locator('#boards table tbody tr').first()
-  .locator('td').nth(1).textContent()).match(/(\d+)/) ?? [])[1];
-check('there is a leader to disqualify', Boolean(topTeam), topCombined.trim());
-
-await page.click('.tab[data-tab="setup"]');
-await page.click('#dqAdd');
-await page.waitForTimeout(300);
-check('a DQ without a team number is refused',
-  (await page.locator('.toast').last().textContent()).includes('team number'),
-  await page.locator('.toast').last().textContent());
-
-await page.fill('#dqTeam', topTeam);
-await page.click('#dqAdd');
-await page.waitForTimeout(300);
-check('a DQ without a reason is refused',
-  (await page.locator('.toast').last().textContent()).includes('reason'),
-  await page.locator('.toast').last().textContent());
-
-await page.fill('#dqReason', 'Outside collaboration');
-await page.click('#dqAdd');
-await page.waitForTimeout(600);
-check('the DQ list shows the team and reason',
-  (await page.textContent('#dqList')).includes(`Team ${topTeam}`)
-  && (await page.textContent('#dqList')).includes('Outside collaboration'));
-
-await page.click('.tab[data-tab="leaderboard"]');
-await page.waitForTimeout(300);
-const rankedAfter = await page.locator('#boards .table-wrap:not(.table-wrap--dq) tbody tr').count();
-check('the disqualified team leaves the ranking', rankedAfter === rankedBefore - 1,
-  `${rankedBefore} -> ${rankedAfter}`);
-const dqTable = await page.locator('#boards .table-wrap--dq').first().textContent();
-check('it appears in a disqualified table with its score and reason',
-  dqTable.includes(`Team ${topTeam}`) && dqTable.includes('Outside collaboration'), dqTable.trim().slice(0, 80));
-
-await page.click('.tab[data-tab="matrix"]');
-await page.waitForTimeout(300);
-check('the matrix marks the team DQ',
-  (await page.locator('.matrix__team--dq').count()) >= 1);
-
-const queueAfter = await page.locator('.suggest__item').allTextContents();
-check('the queue stops offering that team',
-  !queueAfter.some((t) => new RegExp(`^${topTeam}[A-D]`).test(t.trim())),
-  queueAfter.slice(0, 2).join(' | '));
-
-// Reinstating must restore the team exactly.
-await page.click('.tab[data-tab="setup"]');
-await page.click('#dqList button');
-await page.waitForTimeout(600);
-check('reinstating clears the DQ list',
-  (await page.textContent('#dqList')).includes('No teams are disqualified'));
-await page.click('.tab[data-tab="leaderboard"]');
-await page.waitForTimeout(300);
-check('the team is back in the ranking',
-  (await page.locator('#boards .table-wrap:not(.table-wrap--dq) tbody tr').count()) === rankedBefore);
-
-// ---- clearing test data -----------------------------------------
-await page.click('.tab[data-tab="setup"]');
-const before = await page.textContent('#wipeCounts');
-check('the wipe panel shows what would be deleted',
-  /\d+ grades · \d+ guts scores/.test(before), before.trim());
-check('the wipe button starts locked', await page.isDisabled('#wipeAll'));
-
-await page.fill('#wipeConfirm', 'erase please');
-check('a wrong confirmation keeps it locked', await page.isDisabled('#wipeAll'));
-
+// ---- clear test data -------------------------------------------------
+check('the wipe panel shows what would go',
+  /\d+ sheets · \d+ guts answers/.test(await page.textContent('#wipeCounts')),
+  await page.textContent('#wipeCounts'));
+check('the wipe starts locked', await page.isDisabled('#wipeAll'));
 await page.fill('#wipeConfirm', 'erase');
-check('typing ERASE unlocks it (case-insensitive)', !(await page.isDisabled('#wipeAll')));
+check('typing ERASE unlocks it', !(await page.isDisabled('#wipeAll')));
 await page.click('#wipeAll');
 await page.waitForTimeout(700);
-
-check('grades are gone', (await page.textContent('#wipeCounts')) === 'Nothing to delete.');
-check('the confirmation box resets', (await page.inputValue('#wipeConfirm')) === '');
-await page.click('.tab[data-tab="matrix"]');
+check('answers are gone', (await page.textContent('#wipeCounts')) === 'Nothing to delete.');
+await page.click('.tab[data-tab="key"]');
 await page.waitForTimeout(300);
-check('the matrix empties out', (await page.locator('.cell--graded').count()) === 0);
-await page.click('.tab[data-tab="leaderboard"]');
-await page.waitForTimeout(300);
-check('the leaderboards empty out',
-  (await page.locator('#boards table tbody tr').count()) === 0);
+check('the answer key survives the wipe',
+  (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
 
-// Settings are configuration, not test data — they must survive the wipe.
+// ---- theme + screenshots --------------------------------------------
 await page.click('.tab[data-tab="setup"]');
-check('the team count survives the wipe',
-  (await page.inputValue('#teamCount')) === '100', await page.inputValue('#teamCount'));
-
-// ---- theme + screenshots ----------------------------------------
-await page.click('.tab[data-tab="matrix"]');
-await page.waitForTimeout(400);
-await page.screenshot({ path: 'docs/screenshot-light.png', fullPage: false });
-await page.click('#themeToggle');
-await page.waitForTimeout(350);
-check('dark theme applies',
-  (await page.getAttribute('html', 'data-theme')) === 'dark');
-await page.screenshot({ path: 'docs/screenshot-dark.png', fullPage: false });
-await page.click('#themeToggle');
-await page.waitForTimeout(300);
+await page.click('#seedDemo');
+await page.waitForTimeout(3000);
+await page.click('.tab[data-entry="individual"]');
+await page.click('.tab[data-tab="progress"]');
+await page.waitForTimeout(600);
+await page.screenshot({ path: 'docs/screenshot-portal.png' });
 await page.click('.tab[data-tab="leaderboard"]');
+await page.click('.tab[data-board="combined"]');
 await page.waitForTimeout(400);
 await page.screenshot({ path: 'docs/screenshot-leaderboard.png' });
 
+const shot = await ctx.newPage();
+await shot.setViewportSize({ width: 1600, height: 900 });
+await shot.goto(BOARD_URL, { waitUntil: 'networkidle' });
+await shot.waitForTimeout(1500);
+await shot.screenshot({ path: 'docs/screenshot-guts-board.png' });
+await shot.close();
+
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));
-check('never touched the live Supabase project', liveRequests.length === 0,
+check('never touched a live Supabase project', liveRequests.length === 0,
   liveRequests.slice(0, 2).join(' | '));
-if (resourceErrors.length) {
-  out.push(`NOTE  ${resourceErrors.length} resource fetch(es) failed in this sandbox: `
-    + [...new Set(resourceErrors.map((e) => e.split(': ').pop().split('?')[0]))].join(', '));
-}
 
 await browser.close();
 server.close();

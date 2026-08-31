@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cowconuts 2026 — Guts Round</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
+<style>
+/* =====================================================================
+   Public guts board. Built for a projector at the back of a room:
+   one screen, no scrolling, no chrome, nothing from the staff portal.
+   Deliberately single-theme — a room's lighting is not the viewer's
+   OS setting — so every colour is stated outright.
+   ===================================================================== */
+:root{
+  --ink:#0b0d12; --paper:#0b0d12; --card:#151922; --line:#000;
+  --text:#f2f5fa; --muted:#8b97ab;
+  --lime:#7be495; --cyan:#5bc8f5; --amber:#ffd84d; --violet:#b98cff; --red:#ff6b6b;
+  --gold:#ffd84d; --silver:#d8dee9; --bronze:#e0955c;
+  --font:"Space Grotesk",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0;overflow:hidden}
+body{
+  background:var(--paper); color:var(--text); font-family:var(--font);
+  background-image:radial-gradient(rgba(255,255,255,.05) 1.4px,transparent 1.4px);
+  background-size:26px 26px;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{height:100%;display:flex;flex-direction:column;padding:20px 22px 16px;gap:16px}
+
+/* ---------- header ---------- */
+header{display:flex;align-items:center;gap:20px;flex:none}
+.title{font-size:clamp(20px,2.4vw,32px);font-weight:700;letter-spacing:-.02em;margin:0}
+.title span{color:var(--muted);font-weight:600;font-size:.6em;display:block;letter-spacing:.1em;text-transform:uppercase}
+.clock{
+  margin-left:auto;display:flex;align-items:center;gap:14px;
+  padding:8px 22px;border:4px solid var(--line);border-radius:18px;
+  background:var(--lime);color:#0b0d12;box-shadow:7px 7px 0 var(--line);
+}
+.clock--stopped{background:#3a4152;color:var(--text)}
+.clock--frozen{background:var(--violet);color:#0b0d12}
+.clock--out{background:var(--red);color:#0b0d12}
+.clock__label{font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;opacity:.75}
+.clock__time{font-family:var(--mono);font-size:clamp(30px,4.6vw,58px);font-weight:700;
+  line-height:1;font-variant-numeric:tabular-nums}
+.frozen-flag{
+  padding:7px 16px;border:4px solid var(--line);border-radius:14px;
+  background:var(--violet);color:#0b0d12;font-weight:800;letter-spacing:.08em;
+  text-transform:uppercase;font-size:13px;box-shadow:5px 5px 0 var(--line);
+}
+
+/* ---------- body ---------- */
+.cols{flex:1;display:grid;grid-template-columns:1.15fr .85fr;gap:18px;min-height:0}
+@media (max-width:900px){.cols{grid-template-columns:1fr}.rest{display:none}}
+
+.panelhead{
+  display:flex;align-items:baseline;gap:10px;margin-bottom:10px;
+  font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
+}
+.panelhead b{color:var(--text)}
+
+.top{display:flex;flex-direction:column;min-height:0}
+.toplist{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0}
+.row{
+  display:flex;align-items:center;gap:14px;
+  padding:10px 16px;border:4px solid var(--line);border-radius:14px;
+  background:var(--card);box-shadow:5px 5px 0 var(--line);
+  flex:1;min-height:0;
+}
+.row--1{background:var(--gold);color:#0b0d12}
+.row--2{background:var(--silver);color:#0b0d12}
+.row--3{background:var(--bronze);color:#0b0d12}
+.rank{font-family:var(--mono);font-weight:800;font-size:clamp(18px,2.3vw,30px);min-width:1.6em;text-align:right}
+.who{flex:1;min-width:0}
+.name{font-weight:700;font-size:clamp(15px,1.9vw,26px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.meta{font-size:clamp(10px,1vw,13px);font-weight:600;opacity:.65;font-family:var(--mono)}
+.score{font-family:var(--mono);font-weight:800;font-size:clamp(20px,2.6vw,36px);font-variant-numeric:tabular-nums}
+
+/* ---------- scrolling remainder ---------- */
+.rest{display:flex;flex-direction:column;min-height:0}
+.restview{
+  flex:1;min-height:0;overflow:hidden;position:relative;
+  border:4px solid var(--line);border-radius:14px;background:var(--card);
+  box-shadow:5px 5px 0 var(--line);
+}
+.resttrack{position:absolute;inset:0;padding:10px 14px;display:flex;flex-direction:column;gap:2px}
+.restrow{
+  display:flex;align-items:center;gap:12px;padding:7px 6px;
+  border-bottom:2px solid rgba(255,255,255,.07);font-size:clamp(12px,1.25vw,17px);
+}
+.restrow:last-child{border-bottom:0}
+.restrow .rank{font-size:1em;min-width:2.2em;opacity:.6}
+.restrow .name{font-size:1em;font-weight:600}
+.restrow .score{font-size:1.05em}
+.restrow--dq{opacity:.42;text-decoration:line-through}
+
+.empty{display:grid;place-items:center;height:100%;color:var(--muted);font-weight:700;padding:30px;text-align:center}
+footer{flex:none;display:flex;align-items:center;gap:12px;font-size:11px;font-weight:700;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--lime)}
+.dot--down{background:var(--red)}
+footer .spacer{margin-left:auto}
+@media (prefers-reduced-motion:reduce){.resttrack{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1 class="title" id="title">Guts Round<span id="subtitle">Cowconuts 2026</span></h1>
+    <div class="frozen-flag" id="frozenFlag" hidden>Standings frozen</div>
+    <div class="clock" id="clock">
+      <span class="clock__label">Time left</span>
+      <span class="clock__time" id="clockTime">--:--</span>
+    </div>
+  </header>
+
+  <div class="cols">
+    <section class="top">
+      <div class="panelhead"><b>Top 10</b></div>
+      <div class="toplist" id="topList"><div class="empty">Waiting for the first scores…</div></div>
+    </section>
+    <section class="rest">
+      <div class="panelhead"><b>Everyone else</b><span id="restCount"></span></div>
+      <div class="restview"><div class="resttrack" id="restTrack"></div></div>
+    </section>
+  </div>
+
+  <footer>
+    <span class="dot" id="liveDot"></span>
+    <span id="liveLabel">live</span>
+    <span class="spacer"></span>
+    <span id="teamCount"></span>
+  </footer>
+</div>
+
+<script type="module">
+import { resolvedConfig } from './assets/config.js';
+import { createPublicStore } from './assets/store.js';
+import { gutsRemaining, formatClock } from './assets/scoring.js';
+
+const cfg = resolvedConfig(location.search);
+const $ = (s) => document.querySelector(s);
+
+let board = [];
+let state = null;
+let live = false;
+
+const demo = new URLSearchParams(location.search).has('demo');
+
+function render() {
+  const ranked = [...board]
+    .sort((a, b) => Number(a.disqualified) - Number(b.disqualified)
+      || Number(b.score) - Number(a.score) || a.team - b.team);
+  const shown = ranked.filter((r) => !r.disqualified);
+
+  $('#subtitle').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
+  $('#teamCount').textContent = shown.length ? `${shown.length} teams` : '';
+
+  // ---- top 10 -------------------------------------------------------
+  const top = $('#topList');
+  top.replaceChildren();
+  if (!shown.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = 'Waiting for the first scores…';
+    top.appendChild(e);
+  }
+  shown.slice(0, 10).forEach((row, i) => {
+    const node = document.createElement('div');
+    node.className = `row${i < 3 ? ` row--${i + 1}` : ''}`;
+    node.innerHTML = `
+      <span class="rank">${i + 1}</span>
+      <span class="who">
+        <span class="name"></span>
+        <span class="meta"></span>
+      </span>
+      <span class="score"></span>`;
+    node.querySelector('.name').textContent = row.name || `Team ${row.team}`;
+    node.querySelector('.meta').textContent =
+      `#${row.team}${row.division ? ` · DIV ${row.division}` : ''} · ${row.solved} correct`;
+    node.querySelector('.score').textContent = Number(row.score);
+    top.appendChild(node);
+  });
+
+  // ---- everyone else ------------------------------------------------
+  const rest = ranked.slice(10);
+  $('#restCount').textContent = rest.length ? `${rest.length} more` : '';
+  const track = $('#restTrack');
+  track.replaceChildren();
+  if (!rest.length) {
+    const e = document.createElement('div');
+    e.className = 'empty';
+    e.textContent = 'Every team is in the top ten.';
+    track.appendChild(e);
+  }
+  for (const row of rest) {
+    const node = document.createElement('div');
+    node.className = `restrow${row.disqualified ? ' restrow--dq' : ''}`;
+    node.innerHTML = '<span class="rank"></span><span class="who"><span class="name"></span></span><span class="score"></span>';
+    const place = row.disqualified ? 'DQ' : String(shown.indexOf(row) + 1);
+    node.querySelector('.rank').textContent = place;
+    node.querySelector('.name').textContent = row.name || `Team ${row.team}`;
+    node.querySelector('.score').textContent = Number(row.score);
+    track.appendChild(node);
+  }
+  startScroll();
+
+  // ---- clock --------------------------------------------------------
+  const frozen = Boolean(state?.guts_frozen);
+  $('#frozenFlag').hidden = !frozen;
+  renderClock();
+}
+
+/**
+ * The overflow list creeps upward and wraps around, so a room can read
+ * every team without anyone touching the machine. It only scrolls when
+ * there is genuinely more than fits.
+ */
+let scrollTimer = null;
+function startScroll() {
+  clearInterval(scrollTimer);
+  const view = $('.restview');
+  const track = $('#restTrack');
+  const overflow = track.scrollHeight - view.clientHeight;
+  track.style.transform = 'translateY(0)';
+  if (overflow <= 8) return;
+  let y = 0;
+  const step = 0.4;
+  scrollTimer = setInterval(() => {
+    y += step;
+    if (y > overflow + 40) y = -8;
+    track.style.transform = `translateY(${-Math.max(0, y)}px)`;
+  }, 40);
+}
+
+function renderClock() {
+  const remaining = gutsRemaining(state);
+  $('#clockTime').textContent = formatClock(remaining);
+  const clock = $('#clock');
+  clock.className = 'clock';
+  if (state?.guts_frozen) clock.classList.add('clock--frozen');
+  else if (remaining <= 0) clock.classList.add('clock--out');
+  else if (!state?.guts_running) clock.classList.add('clock--stopped');
+}
+setInterval(renderClock, 1000);
+
+function setLive(ok) {
+  live = ok;
+  $('#liveDot').className = ok ? 'dot' : 'dot dot--down';
+  $('#liveLabel').textContent = ok ? (demo ? 'demo' : 'live') : 'reconnecting…';
+}
+
+// ---------------------------------------------------------------------
+if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
+  // Mirrors what the portal writes locally, so the board can be checked
+  // on a projector before the contest without a database.
+  const read = () => {
+    try {
+      const db = JSON.parse(localStorage.getItem('contest-demo-db') ?? '{}');
+      const key = new Map((db.key ?? []).filter((k) => k.round === 'guts')
+        .map((k) => [Number(k.problem), k]));
+      const byTeam = new Map();
+      for (const a of db.gutsAnswers ?? []) {
+        if (!byTeam.has(Number(a.team))) byTeam.set(Number(a.team), []);
+        byTeam.get(Number(a.team)).push(a);
+      }
+      board = (db.teams ?? []).map((t) => {
+        let score = 0; let solved = 0;
+        for (const a of byTeam.get(Number(t.team)) ?? []) {
+          const k = key.get(Number(a.problem));
+          if (k?.answer != null && a.answer === k.answer) { score += Number(k.points); solved += 1; }
+        }
+        return {
+          team: Number(t.team), name: t.name, division: t.division,
+          score, solved, disqualified: Boolean(t.disqualified),
+        };
+      });
+      state = db.state ?? null;
+    } catch { board = []; }
+    render();
+  };
+  setLive(true);
+  read();
+  addEventListener('storage', read);
+  if ('BroadcastChannel' in window) new BroadcastChannel('contest-demo').addEventListener('message', read);
+  setInterval(read, 3000);
+} else {
+  const store = createPublicStore(cfg);
+  const pull = async () => {
+    try {
+      const next = await store.load();
+      board = next.board;
+      state = next.state;
+      setLive(true);
+      render();
+    } catch {
+      setLive(false);
+    }
+  };
+  await pull();
+  store.onChange(pull);
+}
+</script>
+</body>
+</html>

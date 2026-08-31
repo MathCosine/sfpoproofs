@@ -1,60 +1,87 @@
 // =====================================================================
-//  SFPO 2026 grading portal — configuration
+//  Answer-round contest portal — configuration
 //
-//  Fill in SUPABASE_URL and SUPABASE_ANON_KEY from your Supabase
-//  project (Settings -> API).  Both are safe to commit: the anon key is
-//  a public identifier, and every table is locked behind row level
+//  Fill in SUPABASE_URL and SUPABASE_ANON_KEY (Settings -> API Keys).
+//  Both are safe to commit: every staff table is behind row level
 //  security that requires the shared staff sign-in.
 //
-//  Leave them blank and the portal boots into DEMO MODE — everything
-//  works, data lives in this browser only, and a second tab acts like a
-//  second grader so you can try the live locking without a server.
+//  Leave them blank and the portal runs in DEMO MODE against this
+//  browser only. Add ?demo=1 to a configured URL for the same thing.
 // =====================================================================
 
 export const CONFIG = {
-  SUPABASE_URL: 'https://epkrytwiecfliqjadabl.supabase.co',
-  SUPABASE_ANON_KEY: 'sb_publishable_1GtB3jQACkq_3yDAGH__mw_4uwA-G7X',
-
-  // The single shared staff account you created in Supabase
-  // (Authentication -> Users -> Add user).  Graders type only the
-  // password; it is never stored in this repo.
+  SUPABASE_URL: '',
+  SUPABASE_ANON_KEY: '',
   STAFF_EMAIL: 'staff@sfpo.local',
 
-  // Contest identity
-  CONTEST_NAME: 'SFPO 2026',
-  CONTEST_SUBTITLE: 'San Francisco Proof Open',
+  CONTEST_NAME: 'Cowconuts 2026 Annual Math Contest',
 
-  // Problem sets per division
-  PROBLEMS: { A: ['A1', 'A2', 'A3'], B: ['B1', 'B2', 'B3', 'B4', 'B5'] },
+  // ---- Individual round -------------------------------------------
+  INDIVIDUAL_PROBLEMS: 20,
+  INDIVIDUAL_POINTS: 1,        // per correct answer, no penalty
 
-  // Scoring
-  MAX_SCORE: 7,          // olympiad 0-7
-  ALLOW_HALF_POINTS: false,
+  // ---- Guts round --------------------------------------------------
+  GUTS_SETS: 7,
+  GUTS_PER_SET: 4,             // => 28 problems
+  GUTS_DURATION: 75 * 60,      // seconds
+  FREEZE_MINUTES: 10,          // board stops updating with this long left
 
-  // Combined score = weighted blend of proof and guts. The weights apply
-  // to each side's PERCENTAGE of its own maximum, never to raw points —
-  // see README. GUTS_MAX 0 means "use the highest guts score present".
-  PROOF_WEIGHT: 80,
+  // ---- Combined ----------------------------------------------------
+  // Weights apply to each round's share of its own maximum, never to
+  // raw points — the two rounds are on different scales.
+  INDIVIDUAL_WEIGHT: 80,
   GUTS_WEIGHT: 20,
-  GUTS_MAX: 0,
 
-  // A cell is offered for a second read when its single score is at or
-  // above this. Two reads differing by DISAGREEMENT_DELTA or more are
-  // flagged as a conflict for the head grader.
-  SECOND_READ_THRESHOLD: 5,
-  DISAGREEMENT_DELTA: 2,
-
-  // Expected roster shape. There is no roster file — the portal draws
-  // the matrix from these bounds and quietly ignores slots nobody ever
-  // touches, because plenty of teams come with 1, 2 or 3 members.
-  //
-  // Changing this here only affects a database that has never had its
-  // settings saved. Once app_settings exists, the stored value wins —
-  // set it from Guts & export instead, so every grader picks it up.
+  // ---- Roster ------------------------------------------------------
+  // Individual IDs are <team><member>, e.g. 12C. Division is chosen from
+  // a dropdown and stored on the team.
   TEAM_COUNT: 100,
   MEMBERS: ['A', 'B', 'C', 'D'],
+  DIVISIONS: ['A', 'B'],
 
-  // Live coordination timings (milliseconds)
-  CLAIM_TTL_MS: 120000,     // a claim older than this is treated as abandoned
-  HEARTBEAT_MS: 20000,      // how often we refresh our claim and presence
+  // ---- Live coordination -------------------------------------------
+  CLAIM_TTL_MS: 120000,
+  HEARTBEAT_MS: 20000,
 };
+
+export const GUTS_PROBLEMS = CONFIG.GUTS_SETS * CONFIG.GUTS_PER_SET;
+
+// ---------------------------------------------------------------------
+//  Credentials can also be set at runtime, without editing this file or
+//  redeploying: the portal's Connection panel writes them here, and both
+//  the portal and the public leaderboard prefer them over the values
+//  above. That is the quick path when you rotate a Supabase key mid
+//  contest, or point the same site at a different project.
+//
+//  guts.html also accepts ?url=...&key=... so a projector machine can be
+//  pointed at a project without touching storage.
+// ---------------------------------------------------------------------
+const OVERRIDE_KEY = 'contest-supabase-override';
+
+export function readOverride() {
+  try {
+    const raw = localStorage.getItem(OVERRIDE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+
+export function writeOverride(url, key) {
+  try {
+    if (!url && !key) localStorage.removeItem(OVERRIDE_KEY);
+    else localStorage.setItem(OVERRIDE_KEY, JSON.stringify({ url, key }));
+    return true;
+  } catch { return false; }
+}
+
+/** CONFIG with any runtime credential override folded in. */
+export function resolvedConfig(search = '') {
+  const params = new URLSearchParams(search);
+  const fromUrl = params.get('url');
+  const fromKey = params.get('key');
+  const stored = readOverride();
+  return {
+    ...CONFIG,
+    SUPABASE_URL: fromUrl || stored?.url || CONFIG.SUPABASE_URL,
+    SUPABASE_ANON_KEY: fromKey || stored?.key || CONFIG.SUPABASE_ANON_KEY,
+  };
+}
