@@ -10,8 +10,8 @@
 // =====================================================================
 
 export const CONFIG = {
-  SUPABASE_URL: '',
-  SUPABASE_ANON_KEY: '',
+  SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
+  SUPABASE_ANON_KEY: 'sb_publishable_-H6aL_rA_pj5z1E87EVgOQ_RudzlFe8',
   STAFF_EMAIL: 'staff@sfpo.local',
 
   CONTEST_NAME: 'Cowconuts 2026 Annual Math Contest',
