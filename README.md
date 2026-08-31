@@ -52,6 +52,9 @@ length — all mid-contest, all reflected on the public board within a second. T
 board freezes itself with 10 minutes left (configurable) so the finish is a reveal;
 unfreezing publishes everything that happened during the freeze.
 
+**Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
+the guts point values, which are configuration rather than answers.
+
 **Disqualification** keeps every answer and simply stops a team ranking, and
 **Clear test data** wipes a dry run while keeping your key and settings.
 
@@ -109,6 +112,14 @@ be pointed at a project without touching storage.
 
 ---
 
+## When a deploy looks half-broken
+
+GitHub Pages caches each file separately, so a browser can end up holding a new
+`index.html` with a stale script. `APP_VERSION` in `config.js` and `data-app-version`
+in the two HTML files are compared at boot; a mismatch shows a banner saying to hard
+refresh, rather than leaving a panel with its controls quietly missing. Bump both
+together on any deploy that changes markup and script at once.
+
 ## Security
 
 The anon key is a public identifier and is meant to ship in client code. Every staff
@@ -160,7 +171,7 @@ data. The bar reads **demo mode** in amber throughout.
 
 ```bash
 npm test               # 42 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 67 browser checks, including ten scorers at once
+npm run test:e2e       # 77 browser checks, including ten scorers at once
 ```
 
 Ten scorers at once is covered from both ends: the lock's mutual exclusion is unit

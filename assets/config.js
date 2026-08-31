@@ -9,6 +9,11 @@
 //  browser only. Add ?demo=1 to a configured URL for the same thing.
 // =====================================================================
 
+// Bumped on every deploy. index.html and guts.html carry the same string
+// in data-app-version; a mismatch means the browser has a half-updated
+// copy and the portal says so rather than misbehaving quietly.
+export const APP_VERSION = '2026.08.31.1';
+
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_-H6aL_rA_pj5z1E87EVgOQ_RudzlFe8',

@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body>
+<body data-app-version="2026.08.31.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -259,7 +259,11 @@
         <div class="answers hidden" id="keyIndividualB"></div>
         <h3 class="subhead" style="margin-top:22px">Guts — 7 sets of 4</h3>
         <div id="keyGuts"></div>
-        <button class="btn btn--primary" id="saveKey" style="margin-top:16px">Save answer key</button>
+        <div class="chip-row" style="margin-top:16px">
+          <button class="btn btn--primary" id="saveKey">Save answer key</button>
+          <button class="btn btn--danger" id="clearKey">Clear answer key</button>
+          <span class="muted" id="clearKeyHint" style="font-size:12px"></span>
+        </div>
       </div>
 
       <div class="card panel hidden" id="tab-run">
@@ -361,6 +365,6 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js"></script>
+<script type="module" src="assets/app.js?v=2026.08.31.1"></script>
 </body>
 </html>

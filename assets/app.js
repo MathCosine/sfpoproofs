@@ -2,7 +2,7 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, resolvedConfig, readOverride, writeOverride } from './config.js';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js';
 import { createStore } from './store.js';
 import { toCsv, downloadCsv } from './csv.js';
 import {
@@ -135,6 +135,10 @@ function buildQueue(claims, dq, gutsByTeam) {
  * of numbers across the grid.
  */
 function buildAnswerGrid(host, count, { offset = 0, onChange } = {}) {
+  // A null host means the markup and this script disagree — usually a
+  // half-updated cache. Returning empty keeps the rest of the tab alive
+  // instead of throwing and leaving a panel with no controls at all.
+  if (!host) return [];
   host.replaceChildren();
   const inputs = [];
   for (let i = 0; i < count; i += 1) {
@@ -853,33 +857,53 @@ function fillKeyEditor() {
   }
 }
 
-async function saveKey() {
+/**
+ * Read the whole key out of the editor. `blank: true` returns the same
+ * rows with every answer emptied — that is what clearing writes, so the
+ * two paths can never disagree about the key's shape.
+ * Returns null (after a toast) if anything typed is not a whole number.
+ */
+function buildKeyRows({ blank = false } = {}) {
   const rows = [];
   for (const division of cfg.DIVISIONS) {
     for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
-      const parsed = parseAnswer(keyIndividualInputs[division][p - 1].value);
-      if (!parsed.ok) {
-        toast(`Division ${division} problem ${p}: whole numbers only.`, 'error');
-        return;
+      let answer = null;
+      if (!blank) {
+        const parsed = parseAnswer(keyIndividualInputs[division][p - 1].value);
+        if (!parsed.ok) {
+          toast(`Division ${division} problem ${p}: whole numbers only.`, 'error');
+          return null;
+        }
+        answer = parsed.value;
       }
       rows.push({
-        round: 'individual', division, problem: p,
-        answer: parsed.value, points: cfg.INDIVIDUAL_POINTS,
+        round: 'individual', division, problem: p, answer, points: cfg.INDIVIDUAL_POINTS,
       });
     }
   }
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+    // Point values are contest configuration, not answers, so a clear keeps them.
     const points = Number(keyPointInputs[set - 1].value);
     if (!Number.isFinite(points) || points < 0) {
       toast(`Set ${set}: points must be zero or more.`, 'error');
-      return;
+      return null;
     }
     for (const p of problemsInSet(set, cfg)) {
-      const parsed = parseAnswer(keyGutsInputs[p - 1].value);
-      if (!parsed.ok) { toast(`Guts problem ${p}: whole numbers only.`, 'error'); return; }
-      rows.push({ round: 'guts', division: GUTS_DIVISION, problem: p, answer: parsed.value, points });
+      let answer = null;
+      if (!blank) {
+        const parsed = parseAnswer(keyGutsInputs[p - 1].value);
+        if (!parsed.ok) { toast(`Guts problem ${p}: whole numbers only.`, 'error'); return null; }
+        answer = parsed.value;
+      }
+      rows.push({ round: 'guts', division: GUTS_DIVISION, problem: p, answer, points });
     }
   }
+  return rows;
+}
+
+async function saveKey() {
+  const rows = buildKeyRows();
+  if (!rows) return;
   try {
     await store.saveKey(rows);
     await refresh();
@@ -1197,6 +1221,36 @@ function wire() {
   });
 
   buildKeyEditor();
+
+  // Clearing the key rescores every sheet in the contest to zero, so it
+  // takes two deliberate clicks rather than one stray one.
+  let clearArmed = null;
+  const disarmClear = () => {
+    clearTimeout(clearArmed);
+    clearArmed = null;
+    $('#clearKey').textContent = 'Clear answer key';
+    $('#clearKey').className = 'btn btn--danger';
+    $('#clearKeyHint').textContent = '';
+  };
+  $('#clearKey').addEventListener('click', async () => {
+    if (!clearArmed) {
+      clearArmed = setTimeout(disarmClear, 5000);
+      $('#clearKey').textContent = 'Click again to clear';
+      $('#clearKey').className = 'btn btn--warn is-pressed';
+      $('#clearKeyHint').textContent =
+        'Every answer in both divisions and guts is emptied. Guts point values are kept.';
+      return;
+    }
+    disarmClear();
+    try {
+      await store.saveKey(buildKeyRows({ blank: true }));
+      await refresh();
+      toast('Answer key cleared. Nothing is scored until you set it again.', 'info');
+    } catch (err) {
+      toast(err.message || 'Could not clear the key.', 'error');
+    }
+  });
+
   for (const btn of $$('.tab[data-keydiv]')) {
     btn.addEventListener('click', () => {
       activeKeyDivision = btn.dataset.keydiv;
@@ -1392,7 +1446,28 @@ async function enterApp() {
   $('#individualId').focus();
 }
 
+/**
+ * GitHub Pages caches each file separately, so a browser can end up with
+ * a new index.html and a stale script (or the reverse). That used to show
+ * as a panel with its controls silently missing. Now it says so.
+ */
+function checkVersion() {
+  const markup = document.body.dataset.appVersion;
+  if (!markup || markup === APP_VERSION) return true;
+  const b = el('div', 'banner banner--error');
+  const d = el('div');
+  d.append(
+    el('b', null, 'This page is half-updated'),
+    el('span', null, `The page is ${markup} but the script is ${APP_VERSION}. `
+      + 'Hard refresh to fix it: Cmd/Ctrl + Shift + R.'),
+  );
+  b.append(el('div', null, '⚠'), d);
+  $('#gate').querySelector('.gate__card').prepend(b);
+  return false;
+}
+
 async function boot() {
+  checkVersion();
   $('#gateTitle').textContent = cfg.CONTEST_NAME.replace(/ Annual Math Contest$/, '');
   const nameInput = $('#graderName');
   const passwordInput = $('#staffPassword');

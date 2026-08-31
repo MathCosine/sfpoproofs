@@ -74,6 +74,9 @@ await page.waitForSelector('#app:not(.hidden)');
 check('entered the portal', await page.isVisible('#app'));
 check('name is on the bar', (await page.textContent('#whoamiName')) === 'Priya Raman');
 
+check('a correctly-served page shows no version warning',
+  !(await page.locator('#gate .banner--error').count()));
+
 // ---- answer key ---------------------------------------------------
 await page.click('.tab[data-tab="key"]');
 await page.waitForTimeout(200);
@@ -114,6 +117,39 @@ check('set 7 defaults to 7 points each', setPoints === '7', setPoints);
 await page.click('#saveKey');
 await page.waitForTimeout(500);
 check('the key saves and reports complete',
+  (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
+
+// ---- clearing the key ----------------------------------------------
+check('clearing the key takes two clicks', await page.isVisible('#clearKey'));
+await page.click('#clearKey');
+await page.waitForTimeout(150);
+check('the first click only arms it',
+  (await page.textContent('#clearKey')).includes('Click again'),
+  await page.textContent('#clearKey'));
+check('and it says what will happen',
+  (await page.textContent('#clearKeyHint')).includes('both divisions'));
+await page.click('#clearKey');
+await page.waitForTimeout(600);
+check('the second click empties all 68 answers (20 + 20 + 28)',
+  (await page.textContent('#keyState')) === '68 unset', await page.textContent('#keyState'));
+check('guts point values survive a clear',
+  (await page.locator('#keyGuts .keyset__points input').nth(6).inputValue()) === '7');
+
+// Put the key back for the rest of the run.
+await page.evaluate(() => {
+  document.querySelectorAll('#keyIndividualA .ans input').forEach((input, i) => {
+    input.value = String(i + 1); input.dispatchEvent(new Event('input'));
+  });
+  document.querySelectorAll('#keyIndividualB .ans input').forEach((input, i) => {
+    input.value = String(i + 101); input.dispatchEvent(new Event('input'));
+  });
+  document.querySelectorAll('#keyGuts .ans input').forEach((input, i) => {
+    input.value = String((i + 1) * 2); input.dispatchEvent(new Event('input'));
+  });
+});
+await page.click('#saveKey');
+await page.waitForTimeout(500);
+check('and the key can be typed back in',
   (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
 
 // ---- individual entry ---------------------------------------------
@@ -465,6 +501,40 @@ await shot.goto(BOARD_URL, { waitUntil: 'networkidle' });
 await shot.waitForTimeout(1500);
 await shot.screenshot({ path: 'docs/screenshot-guts-board.png' });
 await shot.close();
+
+// ---- half-updated cache ----------------------------------------------
+// The bug this guards: a browser holding a new index.html and a stale
+// script lost every control in the answer key tab, silently.
+{
+  const stale = await ctx.newPage();
+  const staleErrors = [];
+  stale.on('pageerror', (e) => staleErrors.push(String(e)));
+  await stale.route(/index\.html/, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace(/data-app-version="[^"]*"/, 'data-app-version="0.0.0"');
+    await route.fulfill({ response: res, body });
+  });
+  // The context already has a name stored, so this tab signs straight in;
+  // the banner is added before that happens and is still in the DOM.
+  await stale.goto(`${BASE.replace('/?', '/index.html?')}`, { waitUntil: 'networkidle' });
+  await stale.waitForSelector('#app:not(.hidden)');
+  const warning = await stale.textContent('#gate .banner--error').catch(() => '');
+  check('a half-updated page says so instead of misbehaving',
+    warning.includes('half-updated'), warning.trim().slice(0, 60));
+
+  // And the grid builder must survive a host that is not there.
+  const survived = await stale.evaluate(() => {
+    document.querySelector('#keyIndividualA')?.remove();
+    return true;
+  });
+  await stale.click('.tab[data-tab="key"]');
+  await stale.waitForTimeout(300);
+  check('a missing grid does not take the rest of the tab with it',
+    survived && (await stale.locator('#keyGuts .ans input').count()) === 28,
+    `${await stale.locator('#keyGuts .ans input').count()} guts boxes still built`);
+  check('and it does not throw', staleErrors.length === 0, staleErrors[0] ?? '');
+  await stale.close();
+}
 
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));
 check('never touched a live Supabase project', liveRequests.length === 0,
