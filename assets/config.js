@@ -44,8 +44,6 @@ export const CONFIG = {
   HEARTBEAT_MS: 20000,
 };
 
-export const GUTS_PROBLEMS = CONFIG.GUTS_SETS * CONFIG.GUTS_PER_SET;
-
 // ---------------------------------------------------------------------
 //  Credentials can also be set at runtime, without editing this file or
 //  redeploying: the portal's Connection panel writes them here, and both

@@ -6,7 +6,8 @@ import { CONFIG, resolvedConfig, readOverride, writeOverride } from './config.js
 import { createStore } from './store.js';
 import { toCsv, downloadCsv } from './csv.js';
 import {
-  parseIndividualId, parseAnswer, problemsInSet, gutsProblemCount, indexKey, keyGaps,
+  parseIndividualId, isMemberLetter, parseAnswer, problemsInSet, gutsProblemCount,
+  indexKey, keyGaps,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
@@ -46,6 +47,7 @@ let held = null;           // { scope, ref }
 let blockedBy = null;
 let connected = false;
 let clockTimer = null;
+let freezing = false;
 
 // ---------------------------------------------------------------------
 function toast(message, kind = 'ok') {
@@ -206,7 +208,9 @@ let gutsInputs = [];
 function currentIndividualId() {
   const team = Number($('#teamNo').value);
   const member = $('#memberLetter').value.trim().toUpperCase();
-  if (!Number.isInteger(team) || team < 1 || !member) return null;
+  // A digit typed into the member box used to build IDs like "121",
+  // which then read back as team 121 — a contestant nobody could find.
+  if (!Number.isInteger(team) || team < 1 || !isMemberLetter(member)) return null;
   return { id: `${team}${member}`, team, member };
 }
 
@@ -283,6 +287,15 @@ function refreshIndividualContext() {
     host.appendChild(b);
   }
 
+  if (current.team > cfg.TEAM_COUNT) {
+    const b = el('div', 'banner banner--warn');
+    const d = el('div');
+    d.append(el('b', null, `Team ${current.team} is above your team count of ${cfg.TEAM_COUNT}`),
+      el('span', null, 'Usually a mistyped number. It will still save if that is really the team.'));
+    b.append(el('div', null, '⚠'), d);
+    host.appendChild(b);
+  }
+
   const existing = data.contestants.find((c) => c.individual_id === current.id);
   if (existing) {
     const person = derived.byId.get(current.id);
@@ -316,7 +329,14 @@ function markSheetAgainstKey() {
 
 async function saveSheet() {
   const current = currentIndividualId();
-  if (!current) { toast('Enter an individual ID, like 12C.', 'error'); $('#individualId').focus(); return; }
+  if (!current) {
+    const member = $('#memberLetter').value.trim();
+    toast(member && !isMemberLetter(member)
+      ? 'The member has to be a single letter, like C.'
+      : 'Enter an individual ID, like 12C.', 'error');
+    $(member && !isMemberLetter(member) ? '#memberLetter' : '#individualId').focus();
+    return;
+  }
   const division = $('#divisionPick').value;
   if (!division) { toast('Pick a division.', 'error'); $('#divisionPick').focus(); return; }
   const { values, bad } = readGrid(sheetInputs);
@@ -554,12 +574,11 @@ function renderProgress() {
     ...data.contestants.map((c) => Number(c.team)),
   ])].sort((a, b) => a - b);
 
-  const totalPeople = data.contestants.length;
   const donePeople = derived.individuals.filter((p) => p.answered > 0).length;
   const bar = el('div', 'matrix__bar');
   bar.append(
-    el('span', 'tag tag--a', `${teams.length} teams`),
-    el('span', 'muted', `${donePeople}/${totalPeople} sheets entered`),
+    el('span', 'tag tag--a', `${teams.length} of ${cfg.TEAM_COUNT} teams`),
+    el('span', 'muted', `${donePeople} sheets entered`),
   );
   bar.appendChild(el('span', 'spacer'));
   const gutsDone = derived.guts.reduce(
@@ -877,7 +896,13 @@ function renderClock() {
 
   // Auto-freeze at the threshold. The portal is the thing that is always
   // open on contest day, so it is what closes the board.
-  if (!frozen && shouldFreeze(state)) store.setFrozen(true).then(refresh).catch(() => {});
+  if (!frozen && !freezing && shouldFreeze(state)) {
+    freezing = true;
+    store.setFrozen(true)
+      .then(refresh)
+      .catch(() => {})
+      .finally(() => { freezing = false; });
+  }
 }
 
 function startClockTicker() {
@@ -1210,6 +1235,9 @@ function wire() {
     wipeButton.disabled = true;
     try {
       await releaseHeld();
+      // The public board's refresh is a no-op while frozen, so a wipe
+      // during a freeze would leave deleted teams on the screen.
+      if (data.state?.guts_frozen) await store.setFrozen(false).catch(() => {});
       const counts = await store.clearAll();
       confirmInput.value = '';
       clearSheet();

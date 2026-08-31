@@ -10,6 +10,10 @@ const ID_RE = /^(\d{1,3})\s*([A-Z]?)$/;
  * A bare team number is allowed so the entry box can fill the team in
  * before a member letter has been typed.
  */
+export function isMemberLetter(raw) {
+  return /^[A-Z]$/.test(String(raw ?? '').trim().toUpperCase());
+}
+
 export function parseIndividualId(raw) {
   const cleaned = String(raw ?? '').trim().toUpperCase().replace(/[\s\-_.]/g, '');
   const m = ID_RE.exec(cleaned);
@@ -186,12 +190,6 @@ export function gutsStandings(teams, gutsByTeam, key, cfg, dq = new Set()) {
 
 export function dqTeams(teams) {
   return new Set(teams.filter((t) => t.disqualified).map((t) => Number(t.team)));
-}
-
-export function divisionByTeam(teams) {
-  const map = new Map();
-  for (const t of teams) if (t.division) map.set(Number(t.team), t.division);
-  return map;
 }
 
 export function individualMaxPoints(key, cfg) {

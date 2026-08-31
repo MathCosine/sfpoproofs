@@ -1,8 +1,8 @@
 {
-  "name": "sfpo-grading-portal",
+  "name": "cowconuts-contest-portal",
   "private": true,
   "version": "1.0.0",
-  "description": "Staff grading portal for the San Francisco Proof Open 2026",
+  "description": "Staff scoring portal for the Cowconuts 2026 Annual Math Contest",
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",

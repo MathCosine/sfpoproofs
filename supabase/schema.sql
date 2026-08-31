@@ -22,7 +22,6 @@ create table if not exists app_settings (
   team_count            int     not null default 100,
   individual_weight     numeric not null default 80,
   guts_weight           numeric not null default 20,
-  double_entry          boolean not null default false,
   updated_at            timestamptz not null default now(),
   constraint app_settings_singleton check (id = 1)
 );

@@ -162,6 +162,13 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const c = await getClient();
       const { error } = await c.from('contestants').upsert(row, { onConflict: 'individual_id' });
       if (error) throw new Error(error.message);
+
+      // Only touch the team when its division actually changes. Writing it
+      // on every sheet bumps updated_at, fires the public-board trigger and
+      // pushes a realtime message to every open portal, hundreds of times
+      // over, for a value that is set once.
+      const existing = await c.from('teams').select('division').eq('team', row.team).maybeSingle();
+      if (existing.data?.division === row.division) return;
       const { error: teamError } = await c.from('teams')
         .upsert({ team: row.team, division: row.division }, { onConflict: 'team' });
       if (teamError) throw new Error(teamError.message);

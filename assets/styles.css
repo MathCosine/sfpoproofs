@@ -117,8 +117,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border-color: var(--line);
   box-shadow: var(--shadow-xs), inset 0 0 0 3px var(--cyan);
 }
-.textarea { resize: vertical; min-height: 92px; font-weight: 500; }
-.input--error { box-shadow: var(--shadow-xs), inset 0 0 0 3px var(--red); }
 
 .tag {
   display: inline-flex;
@@ -138,7 +136,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tag--b { background: var(--lime); }
 .tag--flag { background: var(--amber); }
 .tag--live { background: var(--lime); }
-.tag--off  { background: var(--slate); }
 
 .muted { color: var(--muted); font-weight: 600; }
 
@@ -250,62 +247,16 @@ button, input, select, textarea { font: inherit; color: inherit; }
   text-transform: uppercase;
   padding: 14px 16px;
 }
-.id-echo { font-size: 12px; font-weight: 700; min-height: 18px; }
 
 /* ---------- problem chips ---------------------------------------- */
 
 .chip-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .chip-row + .chip-row { margin-top: 9px; }
-.chip-row__label {
-  width: 34px; flex: none; font-size: 11px; font-weight: 800;
-  letter-spacing: .06em; color: var(--muted);
-}
-.chip {
-  min-width: 52px;
-  padding: 9px 12px;
-  font-family: var(--mono);
-  font-weight: 700;
-  background: var(--card);
-  border: var(--bw) solid var(--line);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-xs);
-  cursor: pointer;
-  transition: transform .06s ease, box-shadow .06s ease, background .12s ease;
-}
-.chip:hover  { transform: translate(-1px, -1px); box-shadow: var(--shadow-sm); }
 .chip:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--line); }
-.chip[aria-pressed="true"] {
-  background: var(--cyan);
-  transform: translate(2px, 2px);
-  box-shadow: 0 0 0 var(--line);
-}
-.chip--done::after {
-  content: "✓"; margin-left: 6px; font-size: 11px; color: #1b7a3d;
-}
-.chip:focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }
 
 /* ---------- score pad -------------------------------------------- */
 
-.scorepad { display: grid; grid-template-columns: repeat(8, 1fr); gap: 8px; }
-.score {
-  aspect-ratio: 1;
-  display: flex; align-items: center; justify-content: center;
-  font-size: 21px; font-weight: 800;
-  background: var(--card);
-  border: var(--bw) solid var(--line);
-  border-radius: var(--radius-sm);
-  box-shadow: var(--shadow-xs);
-  cursor: pointer;
-  transition: transform .06s ease, box-shadow .06s ease, background .12s ease;
-}
-.score:hover  { transform: translate(-1px, -1px); box-shadow: var(--shadow-sm); }
 .score:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--line); }
-.score[aria-pressed="true"] {
-  background: var(--lime);
-  transform: translate(2px, 2px);
-  box-shadow: 0 0 0 var(--line);
-}
-.score:focus-visible { outline: 3px solid var(--violet); outline-offset: 2px; }
 
 /* ---------- banners ---------------------------------------------- */
 
@@ -347,8 +298,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .suggest__item:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--line); }
 .suggest__id { font-family: var(--mono); font-size: 16px; font-weight: 800; min-width: 62px; }
 .suggest__why { font-size: 12px; font-weight: 600; color: var(--muted); }
-.suggest__item--p0 { background: color-mix(in srgb, var(--red) 30%, var(--card)); }
-.suggest__item--p1 { background: color-mix(in srgb, var(--amber) 38%, var(--card)); }
 
 /* ---------- tabs -------------------------------------------------- */
 
@@ -372,9 +321,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* ---------- matrix ------------------------------------------------ */
 
-.matrix { display: flex; flex-direction: column; gap: 20px; }
-
-.matrix__division { border: var(--bw) solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .matrix__bar {
   display: flex; align-items: center; gap: 11px;
   padding: 10px 13px;
@@ -383,45 +329,6 @@ button, input, select, textarea { font: inherit; color: inherit; }
   font-weight: 800; font-size: 13px;
 }
 .matrix__bar .spacer { margin-left: auto; }
-
-.progress {
-  flex: 1; max-width: 190px; height: 15px;
-  border: 2px solid var(--line); border-radius: 999px;
-  background: var(--card); overflow: hidden;
-}
-.progress__fill { height: 100%; background: var(--lime); transition: width .3s ease; }
-
-.matrix__grid {
-  display: flex; flex-wrap: wrap; gap: 9px;
-  padding: 13px; max-height: 430px; overflow: auto;
-}
-.matrix__team {
-  border: 2px solid var(--line); border-radius: var(--radius-sm);
-  padding: 7px 8px 8px; background: var(--card); min-width: 92px;
-}
-.matrix__team-no {
-  font-family: var(--mono); font-size: 11px; font-weight: 800;
-  color: var(--muted); margin-bottom: 5px; letter-spacing: .04em;
-}
-.matrix__row { display: flex; align-items: center; gap: 4px; }
-.matrix__row + .matrix__row { margin-top: 4px; }
-.matrix__who { font-family: var(--mono); font-size: 11px; font-weight: 800; width: 15px; }
-
-.cell {
-  width: 17px; height: 17px; flex: none;
-  border: 2px solid var(--line); border-radius: 4px;
-  background: var(--slate);
-  cursor: pointer; padding: 0;
-  transition: transform .06s ease;
-}
-.cell:hover  { transform: scale(1.22); }
-.cell:active { transform: scale(.94); }
-.cell--graded       { background: var(--lime); }
-.cell--needs-second { background: var(--amber); }
-.cell--conflict     { background: var(--red); }
-.cell--claimed      { background: var(--violet); animation: pulse 1.6s ease-in-out infinite; }
-.cell--mine         { box-shadow: inset 0 0 0 2px var(--card); }
-.cell--absent       { opacity: .3; }
 
 .legend { display: flex; flex-wrap: wrap; gap: 13px; font-size: 12px; font-weight: 700; }
 .legend span { display: inline-flex; align-items: center; gap: 6px; }
@@ -450,50 +357,12 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 .rank--3 { background: color-mix(in srgb, var(--amber) 45%, var(--red)); }
 .num { text-align: right; font-family: var(--mono); font-weight: 800; }
 
-/* ---------- activity feed ----------------------------------------- */
-
-.feed { display: flex; flex-direction: column; gap: 8px; max-height: 480px; overflow: auto; }
-.feed__item {
-  display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px;
-  border: 2px solid var(--line); border-radius: var(--radius-sm);
-  background: var(--card); font-size: 13px; font-weight: 600;
-}
-.feed__score {
-  font-family: var(--mono); font-weight: 800;
-  padding: 2px 8px; border: 2px solid var(--line); border-radius: 7px; background: var(--lime);
-}
-.feed__when { margin-left: auto; font-size: 11px; color: var(--muted); font-weight: 700; white-space: nowrap; }
-
-.grader-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.grader-chip {
-  display: inline-flex; align-items: center; gap: 7px;
-  padding: 6px 11px;
-  border: 2px solid var(--line); border-radius: 999px;
-  background: var(--card); font-size: 13px; font-weight: 700;
-}
 
 /* ---------- setup / drop zone ------------------------------------- */
 
 .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 13px; }
 
-.dropzone {
-  padding: 26px; text-align: center;
-  border: var(--bw) dashed var(--line); border-radius: var(--radius);
-  background: var(--card); cursor: pointer;
-  transition: background .15s ease, transform .06s ease;
-}
-.dropzone:hover, .dropzone.is-over { background: color-mix(in srgb, var(--cyan) 22%, var(--card)); }
-.dropzone.is-over { transform: scale(1.01); }
-
 /* ---------- disqualification -------------------------------------- */
-
-.matrix__team--dq {
-  border-color: var(--red);
-  background: color-mix(in srgb, var(--red) 11%, var(--card));
-  opacity: .72;
-}
-.matrix__team--dq .matrix__team-no { color: var(--red); }
 
 .table-wrap--dq { margin-top: 8px; border-color: var(--red); }
 .table-wrap--dq tbody td { color: var(--muted); }
