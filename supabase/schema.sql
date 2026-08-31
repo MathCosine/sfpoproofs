@@ -54,14 +54,37 @@ insert into contest_state (id) values (1) on conflict (id) do nothing;
 --   round = 'individual' -> problems 1..20
 --   round = 'guts'       -> problems 1..28  (set n covers 4n-3 .. 4n)
 -- ---------------------------------------------------------------------
+--   The two divisions sit different individual papers, so the individual
+--   key is stored per division. Guts is one paper for everybody and uses
+--   the division '*'.
 create table if not exists answer_key (
   round      text    not null check (round in ('individual','guts')),
+  division   char(1) not null default '*' check (division in ('A','B','*')),
   problem    int     not null check (problem >= 1),
   answer     int     check (answer >= 0),   -- null until you set it
   points     numeric not null default 1,
   updated_at timestamptz not null default now(),
-  primary key (round, problem)
+  primary key (round, division, problem)
 );
+
+-- Upgrading a database that predates the split: keep whatever individual
+-- key was already typed, make it Division A, and start Division B as a
+-- copy of it rather than empty.
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'answer_key' and column_name = 'division'
+  ) then
+    alter table answer_key add column division char(1) not null default '*';
+    update answer_key set division = 'A' where round = 'individual';
+    alter table answer_key drop constraint if exists answer_key_pkey;
+    alter table answer_key add primary key (round, division, problem);
+    insert into answer_key (round, division, problem, answer, points)
+      select 'individual', 'B', problem, answer, points
+        from answer_key where round = 'individual' and division = 'A';
+  end if;
+end $$;
 
 -- ---------------------------------------------------------------------
 -- Teams. Division and name live here; the name is captured the first
@@ -177,7 +200,8 @@ begin
            count(*) filter (where ak.answer is not null and ga.answer = ak.answer) as solved,
            count(*) filter (where ga.answer is not null) as answered
       from guts_answers ga
-      left join answer_key ak on ak.round = 'guts' and ak.problem = ga.problem
+      left join answer_key ak on ak.round = 'guts' and ak.division = '*'
+                            and ak.problem = ga.problem
      group by ga.team
   ) sc on sc.team = t.team
   on conflict (team) do update set
@@ -313,13 +337,14 @@ alter table guts_public  replica identity full;
 -- default rising point values (set 1 = 1 point ... set 7 = 7 points).
 -- Existing rows are left exactly as they are.
 -- ---------------------------------------------------------------------
-insert into answer_key (round, problem, answer, points)
-select 'individual', g, null, 1 from generate_series(1, 20) g
-on conflict (round, problem) do nothing;
+insert into answer_key (round, division, problem, answer, points)
+select 'individual', d, g, null, 1
+  from generate_series(1, 20) g, unnest(array['A','B']) d
+on conflict (round, division, problem) do nothing;
 
-insert into answer_key (round, problem, answer, points)
-select 'guts', g, null, ceil(g / 4.0) from generate_series(1, 28) g
-on conflict (round, problem) do nothing;
+insert into answer_key (round, division, problem, answer, points)
+select 'guts', '*', g, null, ceil(g / 4.0) from generate_series(1, 28) g
+on conflict (round, division, problem) do nothing;
 
 select refresh_guts_public();
 

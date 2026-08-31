@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   parseIndividualId, parseAnswer, problemsInSet, setOfProblem, gutsProblemCount,
   indexKey, keyGaps, keyMaxPoints, scoreSheet, individualStandings, indexGutsAnswers,
+  individualKey, GUTS_DIVISION,
   scoreGutsTeam, gutsStandings, combinedStandings, splitByDivision, dqTeams,
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
@@ -20,15 +21,24 @@ const cfg = {
   INDIVIDUAL_WEIGHT: 80,
   GUTS_WEIGHT: 20,
   MEMBERS: ['A', 'B', 'C', 'D'],
+  DIVISIONS: ['A', 'B'],
   CLAIM_TTL_MS: 120000,
 };
 
-/** A key where individual problem n has answer n, guts problem n has n*2. */
+/**
+ * Division A's individual problem n has answer n; Division B's has n+100
+ * — deliberately disjoint, so a sheet marked against the wrong paper
+ * scores zero rather than accidentally matching.
+ * Guts problem n has answer n*2 and is the same paper for both.
+ */
 const fullKey = () => {
   const rows = [];
-  for (let p = 1; p <= 20; p += 1) rows.push({ round: 'individual', problem: p, answer: p, points: 1 });
+  for (let p = 1; p <= 20; p += 1) {
+    rows.push({ round: 'individual', division: 'A', problem: p, answer: p, points: 1 });
+    rows.push({ round: 'individual', division: 'B', problem: p, answer: p + 100, points: 1 });
+  }
   for (let p = 1; p <= 28; p += 1) {
-    rows.push({ round: 'guts', problem: p, answer: p * 2, points: Math.ceil(p / 4) });
+    rows.push({ round: 'guts', division: '*', problem: p, answer: p * 2, points: Math.ceil(p / 4) });
   }
   return indexKey(rows);
 };
@@ -76,7 +86,7 @@ test('guts sets map to problem numbers', () => {
 // ---------------------------------------------------------------------
 test('a perfect sheet scores every point', () => {
   const answers = Array.from({ length: 20 }, (_, i) => i + 1);
-  const out = scoreSheet(answers, fullKey(), cfg);
+  const out = scoreSheet(answers, fullKey(), cfg, 'A');
   assert.equal(out.score, 20);
   assert.equal(out.correct, 20);
   assert.equal(out.answered, 20);
@@ -84,39 +94,41 @@ test('a perfect sheet scores every point', () => {
 
 test('wrong and blank both score zero, and are told apart', () => {
   const answers = [1, 999, null, 4, ...Array(16).fill(null)];
-  const out = scoreSheet(answers, fullKey(), cfg);
+  const out = scoreSheet(answers, fullKey(), cfg, 'A');
   assert.equal(out.score, 2);
   assert.equal(out.answered, 3);
   assert.deepEqual(out.marks.slice(0, 4), ['correct', 'wrong', 'blank', 'correct']);
 });
 
 test('zero is a real answer, not a blank', () => {
-  const key = indexKey([{ round: 'individual', problem: 1, answer: 0, points: 1 }]);
-  const out = scoreSheet([0], key, { ...cfg, INDIVIDUAL_PROBLEMS: 1 });
+  const key = indexKey([{ round: 'individual', division: 'A', problem: 1, answer: 0, points: 1 }]);
+  const out = scoreSheet([0], key, { ...cfg, INDIVIDUAL_PROBLEMS: 1 }, 'A');
   assert.equal(out.score, 1);
   assert.equal(out.answered, 1);
   assert.equal(out.marks[0], 'correct');
 });
 
 test('an unset key entry never marks anybody right or wrong', () => {
-  const key = indexKey([{ round: 'individual', problem: 1, answer: null, points: 1 }]);
-  const out = scoreSheet([7], key, { ...cfg, INDIVIDUAL_PROBLEMS: 1 });
+  const key = indexKey([{ round: 'individual', division: 'A', problem: 1, answer: null, points: 1 }]);
+  const out = scoreSheet([7], key, { ...cfg, INDIVIDUAL_PROBLEMS: 1 }, 'A');
   assert.equal(out.score, 0);
   assert.equal(out.marks[0], 'unkeyed', 'the box is flagged, not silently counted');
 });
 
 test('an empty key scores nothing rather than everything', () => {
-  const out = scoreSheet(Array.from({ length: 20 }, (_, i) => i + 1), indexKey([]), cfg);
+  const out = scoreSheet(Array.from({ length: 20 }, (_, i) => i + 1), indexKey([]), cfg, 'A');
   assert.equal(out.score, 0);
   assert.ok(out.marks.every((m) => m === 'unkeyed'));
 });
 
 test('keyGaps names the problems still missing an answer', () => {
   const key = indexKey([
-    { round: 'individual', problem: 1, answer: 5, points: 1 },
-    { round: 'individual', problem: 3, answer: null, points: 1 },
+    { round: 'individual', division: 'A', problem: 1, answer: 5, points: 1 },
+    { round: 'individual', division: 'A', problem: 3, answer: null, points: 1 },
   ]);
-  assert.deepEqual(keyGaps(key, 'individual', 4), [2, 3, 4]);
+  assert.deepEqual(keyGaps(key, 'individual', 4, 'A'), [2, 3, 4]);
+  assert.deepEqual(keyGaps(key, 'individual', 4, 'B'), [1, 2, 3, 4],
+    'Division B has its own paper and its own gaps');
 });
 
 // ---------------------------------------------------------------------
@@ -159,7 +171,7 @@ test('guts standings rank on points and keep the team name', () => {
 // ---------------------------------------------------------------------
 test('combined blends the two rounds by share of maximum', () => {
   const key = fullKey();
-  assert.equal(individualMaxPoints(key, cfg), 20 * 4, 'four members of twenty points');
+  assert.equal(individualMaxPoints(key, cfg, 'A'), 20 * 4, 'four members of twenty points');
   assert.equal(gutsMaxPoints(key, cfg), 4 * (1 + 2 + 3 + 4 + 5 + 6 + 7));
 
   const individuals = [
@@ -461,4 +473,66 @@ test('an abandoned claim can be taken over, a live one cannot', async () => {
     .claim('individual', '9B', scorer(2), 120000);
   assert.equal(refused.ok, false);
   assert.equal(refused.heldBy.grader_name, 'Gone Home');
+});
+
+// ---------------------------------------------------------------------
+// The two divisions sit different individual papers
+// ---------------------------------------------------------------------
+
+test('each division has its own individual key, guts is shared', () => {
+  const key = fullKey();
+  assert.equal(individualKey(key, 'A').get(3).answer, 3);
+  assert.equal(individualKey(key, 'B').get(3).answer, 103);
+  assert.equal(key.guts.get(3).answer, 6, 'guts is one paper for everybody');
+  assert.equal(individualKey(key, 'Z').size, 0, 'an unknown division scores nothing');
+});
+
+test('a sheet is marked against its own division’s paper', () => {
+  const key = fullKey();
+  const sheet = Array.from({ length: 20 }, (_, i) => i + 1);   // the A answers
+
+  const asA = scoreSheet(sheet, key, cfg, 'A');
+  assert.equal(asA.score, 20, 'perfect on the paper it was sat');
+
+  const asB = scoreSheet(sheet, key, cfg, 'B');
+  assert.equal(asB.score, 0, 'the same answers score nothing on the other paper');
+  assert.ok(asB.marks.every((m) => m === 'wrong'));
+});
+
+test('a contestant with no division yet scores nothing rather than guessing', () => {
+  const out = scoreSheet([1, 2, 3], fullKey(), cfg, null);
+  assert.equal(out.score, 0);
+  assert.equal(out.marks[0], 'unkeyed', 'flagged, not silently marked wrong');
+});
+
+test('standings score each contestant against their own paper', () => {
+  const key = fullKey();
+  const sheetA = Array.from({ length: 20 }, (_, i) => i + 1);
+  const sheetB = Array.from({ length: 20 }, (_, i) => i + 101);
+  const people = individualStandings([
+    { individual_id: '1A', team: 1, member: 'A', division: 'A', answers: sheetA },
+    { individual_id: '2A', team: 2, member: 'A', division: 'B', answers: sheetB },
+  ], key, cfg);
+  assert.equal(people.find((p) => p.individualId === '1A').score, 20);
+  assert.equal(people.find((p) => p.individualId === '2A').score, 20,
+    'Division B is perfect on its own paper too');
+});
+
+test('a team is measured against the maximum of the paper it sat', () => {
+  // Make the papers different sizes: B only has 10 keyed problems.
+  const rows = [];
+  for (let p = 1; p <= 20; p += 1) {
+    rows.push({ round: 'individual', division: 'A', problem: p, answer: p, points: 1 });
+    if (p <= 10) rows.push({ round: 'individual', division: 'B', problem: p, answer: p, points: 1 });
+  }
+  const key = indexKey(rows);
+  assert.equal(individualMaxPoints(key, cfg, 'A'), 80);
+  assert.equal(individualMaxPoints(key, cfg, 'B'), 40, 'four members of ten points');
+
+  const perfectB = ['A', 'B', 'C', 'D'].map((m) => ({
+    individualId: `1${m}`, team: 1, member: m, division: 'B', score: 10, disqualified: false,
+  }));
+  const [row] = combinedStandings(perfectB, [], key, cfg, [{ team: 1, division: 'B' }]);
+  assert.equal(row.indPct, 100, 'a perfect B team is 100% of the B paper, not half of the A one');
+  assert.equal(row.total, 80, 'and so banks the full individual weight');
 });

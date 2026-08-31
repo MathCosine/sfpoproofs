@@ -77,17 +77,26 @@ check('name is on the bar', (await page.textContent('#whoamiName')) === 'Priya R
 // ---- answer key ---------------------------------------------------
 await page.click('.tab[data-tab="key"]');
 await page.waitForTimeout(200);
-const keyBoxes = await page.locator('#keyIndividual .ans input').count();
+const keyBoxes = await page.locator('#keyIndividualA .ans input').count();
 check('the key has one box per individual problem', keyBoxes === 20, String(keyBoxes));
+check('there is a separate grid per division',
+  (await page.locator('#keyIndividualB .ans input').count()) === 20);
+check('only the selected division’s grid is shown',
+  await page.isVisible('#keyIndividualA') && !(await page.isVisible('#keyIndividualB')));
 const gutsSets = await page.locator('#keyGuts .keyset').count();
 check('the guts key is grouped into 7 sets', gutsSets === 7, String(gutsSets));
 const gutsBoxes = await page.locator('#keyGuts .ans input').count();
 check('7 sets of 4 is 28 guts boxes', gutsBoxes === 28, String(gutsBoxes));
 
 // Fill the key: individual problem n -> n, guts problem n -> n*2.
+// Division A answers n, Division B answers n+100 — disjoint on purpose.
 await page.evaluate(() => {
-  document.querySelectorAll('#keyIndividual .ans input').forEach((input, i) => {
+  document.querySelectorAll('#keyIndividualA .ans input').forEach((input, i) => {
     input.value = String(i + 1);
+    input.dispatchEvent(new Event('input'));
+  });
+  document.querySelectorAll('#keyIndividualB .ans input').forEach((input, i) => {
+    input.value = String(i + 101);
     input.dispatchEvent(new Event('input'));
   });
   document.querySelectorAll('#keyGuts .ans input').forEach((input, i) => {
@@ -95,6 +104,11 @@ await page.evaluate(() => {
     input.dispatchEvent(new Event('input'));
   });
 });
+await page.click('.tab[data-keydiv="B"]');
+await page.waitForTimeout(150);
+check('switching division shows the other grid',
+  await page.isVisible('#keyIndividualB') && !(await page.isVisible('#keyIndividualA')));
+await page.click('.tab[data-keydiv="A"]');
 const setPoints = await page.locator('#keyGuts .keyset__points input').nth(6).inputValue();
 check('set 7 defaults to 7 points each', setPoints === '7', setPoints);
 await page.click('#saveKey');
@@ -135,6 +149,18 @@ check('Enter walks to the next box',
   (await page.locator('#answerGrid .ans input').nth(2).inputValue()) === '999');
 check('a correct answer turns the box green',
   (await page.locator('#answerGrid .ans').first().getAttribute('class')).includes('ans--correct'));
+
+// The same sheet against the other division's paper must go red.
+await page.selectOption('#divisionPick', 'B');
+await page.waitForTimeout(250);
+check('switching division re-marks the sheet against the other paper',
+  (await page.locator('#answerGrid .ans').first().getAttribute('class')).includes('ans--wrong'),
+  await page.locator('#answerGrid .ans').first().getAttribute('class'));
+check('the running total follows the division',
+  (await page.textContent('#myCount')).startsWith('0 correct'),
+  await page.textContent('#myCount'));
+await page.selectOption('#divisionPick', 'A');
+await page.waitForTimeout(250);
 check('a wrong answer turns the box red',
   (await page.locator('#answerGrid .ans').nth(2).getAttribute('class')).includes('ans--wrong'));
 check('the running total is shown while typing',

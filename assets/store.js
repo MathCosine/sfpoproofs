@@ -17,7 +17,7 @@ const EMPTY = () => ({
 const SHAPE = {
   app_settings: { field: 'settings', single: true },
   contest_state: { field: 'state', single: true },
-  answer_key: { field: 'key', id: (r) => `${r.round}|${r.problem}` },
+  answer_key: { field: 'key', id: (r) => `${r.round}|${r.division ?? '*'}|${r.problem}` },
   teams: { field: 'teams', id: (r) => String(r.team) },
   contestants: { field: 'contestants', id: (r) => r.individual_id },
   guts_answers: { field: 'gutsAnswers', id: (r) => `${r.team}|${r.problem}` },
@@ -195,7 +195,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
     async saveKey(rows) {
       const c = await getClient();
       const { error } = await c.from('answer_key')
-        .upsert(rows, { onConflict: 'round,problem' });
+        .upsert(rows, { onConflict: 'round,division,problem' });
       if (error) throw new Error(error.message);
     },
 
@@ -287,11 +287,18 @@ function demoBackend(cfg) {
 
   const seedKey = () => {
     const rows = [];
-    for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
-      rows.push({ round: 'individual', problem: p, answer: null, points: cfg.INDIVIDUAL_POINTS });
+    for (const division of cfg.DIVISIONS) {
+      for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+        rows.push({
+          round: 'individual', division, problem: p, answer: null, points: cfg.INDIVIDUAL_POINTS,
+        });
+      }
     }
     for (let p = 1; p <= cfg.GUTS_SETS * cfg.GUTS_PER_SET; p += 1) {
-      rows.push({ round: 'guts', problem: p, answer: null, points: Math.ceil(p / cfg.GUTS_PER_SET) });
+      rows.push({
+        round: 'guts', division: '*', problem: p, answer: null,
+        points: Math.ceil(p / cfg.GUTS_PER_SET),
+      });
     }
     return rows;
   };
@@ -390,8 +397,9 @@ function demoBackend(cfg) {
     async saveKey(rows) {
       await mutate((db) => {
         for (const row of rows) {
-          const i = db.key.findIndex(
-            (k) => k.round === row.round && Number(k.problem) === Number(row.problem));
+          const i = db.key.findIndex((k) => k.round === row.round
+            && (k.division ?? '*') === (row.division ?? '*')
+            && Number(k.problem) === Number(row.problem));
           if (i >= 0) Object.assign(db.key[i], row); else db.key.push({ ...row });
         }
       });

@@ -7,7 +7,7 @@ import { createStore } from './store.js';
 import { toCsv, downloadCsv } from './csv.js';
 import {
   parseIndividualId, isMemberLetter, parseAnswer, problemsInSet, gutsProblemCount,
-  indexKey, keyGaps,
+  indexKey, keyGaps, individualKey, GUTS_DIVISION,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
@@ -78,8 +78,9 @@ function recompute() {
   derived = {
     key, dq, claims, gutsByTeam, individuals, guts, combined,
     byId: new Map(individuals.map((p) => [p.individualId, p])),
-    keyGapsIndividual: keyGaps(key, 'individual', cfg.INDIVIDUAL_PROBLEMS),
-    keyGapsGuts: keyGaps(key, 'guts', GUTS_N),
+    keyGapsIndividual: Object.fromEntries(cfg.DIVISIONS.map(
+      (d) => [d, keyGaps(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, d)])),
+    keyGapsGuts: keyGaps(key, 'guts', GUTS_N, GUTS_DIVISION),
     teamsByNo: new Map(data.teams.map((t) => [Number(t.team), t])),
     queue: buildQueue(claims, dq, gutsByTeam),
   };
@@ -258,10 +259,13 @@ function refreshIndividualContext() {
   $('#sheetState').textContent = '';
   $('#sheetState').hidden = true;
 
-  const gaps = derived?.keyGapsIndividual ?? [];
-  $('#answersHint').textContent = gaps.length
-    ? `— ${gaps.length} of ${cfg.INDIVIDUAL_PROBLEMS} not in the key yet`
-    : `— out of ${cfg.INDIVIDUAL_PROBLEMS}`;
+  const division = $('#divisionPick').value;
+  const gaps = division ? (derived?.keyGapsIndividual?.[division] ?? []) : [];
+  $('#answersHint').textContent = !division
+    ? `— out of ${cfg.INDIVIDUAL_PROBLEMS}, pick a division to check them against the key`
+    : gaps.length
+      ? `— ${gaps.length} of ${cfg.INDIVIDUAL_PROBLEMS} not in the Division ${division} key yet`
+      : `— out of ${cfg.INDIVIDUAL_PROBLEMS}, Division ${division} key`;
 
   if (!current) return;
 
@@ -314,7 +318,8 @@ function refreshIndividualContext() {
 /** Tint each box green/red once the key knows that problem. */
 function markSheetAgainstKey() {
   const { values } = readGrid(sheetInputs);
-  const result = scoreSheet(values, derived.key, cfg);
+  const division = $('#divisionPick').value;
+  const result = scoreSheet(values, derived.key, cfg, division);
   sheetInputs.forEach((input, i) => {
     const wrap = input.parentElement;
     wrap.classList.remove('ans--correct', 'ans--wrong', 'ans--unkeyed');
@@ -324,7 +329,9 @@ function markSheetAgainstKey() {
     else if (mark === 'wrong') wrap.classList.add('ans--wrong');
     else if (mark === 'unkeyed') wrap.classList.add('ans--unkeyed');
   });
-  $('#myCount').textContent = `${result.correct} correct · ${result.score} pts`;
+  $('#myCount').textContent = division
+    ? `${result.correct} correct · ${result.score} pts`
+    : 'pick a division to score';
 }
 
 async function saveSheet() {
@@ -356,7 +363,7 @@ async function saveSheet() {
       entered_by_name: grader.name,
       entered_at: new Date().toISOString(),
     });
-    const result = scoreSheet(values, derived.key, cfg);
+    const result = scoreSheet(values, derived.key, cfg, division);
     toast(`${current.id} saved · ${result.correct}/${cfg.INDIVIDUAL_PROBLEMS} · ${result.score} pts`);
     await releaseHeld();
     clearSheet({ keepTeam: true });
@@ -686,9 +693,10 @@ function renderBoards() {
   note.style.marginBottom = '14px';
   if (activeBoard === 'combined') {
     note.textContent = `Combined = ${cfg.INDIVIDUAL_WEIGHT}% individual + ${cfg.GUTS_WEIGHT}% guts, `
-      + `each as a share of its own maximum, out of 100. A full team can bank `
-      + `${individualMaxPoints(derived.key, cfg)} individual points and `
-      + `${gutsMaxPoints(derived.key, cfg)} from guts.`;
+      + 'each as a share of its own maximum, out of 100. The divisions sit different '
+      + `individual papers, so each team is measured against its own: a full team can bank `
+      + cfg.DIVISIONS.map((d) => `${individualMaxPoints(derived.key, cfg, d)} in ${d}`).join(' and ')
+      + `, plus ${gutsMaxPoints(derived.key, cfg)} from guts.`;
   } else if (activeBoard === 'individual') {
     note.textContent = `One row per contestant, out of ${cfg.INDIVIDUAL_PROBLEMS}.`;
   } else {
@@ -773,12 +781,16 @@ function renderBoards() {
 // Answer key
 // ---------------------------------------------------------------------
 
-let keyIndividualInputs = [];
+const keyIndividualInputs = {};     // division -> inputs
 let keyGutsInputs = [];
 let keyPointInputs = [];
+let activeKeyDivision = 'A';
 
 function buildKeyEditor() {
-  keyIndividualInputs = buildAnswerGrid($('#keyIndividual'), cfg.INDIVIDUAL_PROBLEMS);
+  for (const division of cfg.DIVISIONS) {
+    keyIndividualInputs[division] = buildAnswerGrid(
+      $(`#keyIndividual${division}`), cfg.INDIVIDUAL_PROBLEMS);
+  }
 
   const host = $('#keyGuts');
   host.replaceChildren();
@@ -812,16 +824,23 @@ function fillKeyEditor() {
   // The status line always reflects the saved key. Only the input boxes
   // are held back, and only while somebody is typing in them — otherwise
   // saving from a button inside this tab would leave the status stale.
-  const gaps = derived.keyGapsIndividual.length + derived.keyGapsGuts.length;
+  const perDivision = cfg.DIVISIONS.map((d) => derived.keyGapsIndividual[d].length);
+  const gaps = perDivision.reduce((a, b) => a + b, 0) + derived.keyGapsGuts.length;
   $('#keyState').textContent = gaps ? `${gaps} unset` : 'complete';
   $('#keyState').className = gaps ? 'tag tag--flag' : 'tag tag--live';
+  $('#keyDivState').textContent = cfg.DIVISIONS
+    .map((d, i) => `${d}: ${perDivision[i] ? `${perDivision[i]} unset` : 'complete'}`)
+    .join(' · ');
 
   if (document.activeElement?.closest('#tab-key .ans')) return;
-  for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
-    const input = keyIndividualInputs[p - 1];
-    const value = derived.key.individual.get(p)?.answer;
-    input.value = value == null ? '' : String(value);
-    input.dispatchEvent(new Event('input'));
+  for (const division of cfg.DIVISIONS) {
+    const table = individualKey(derived.key, division);
+    for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+      const input = keyIndividualInputs[division][p - 1];
+      const value = table.get(p)?.answer;
+      input.value = value == null ? '' : String(value);
+      input.dispatchEvent(new Event('input'));
+    }
   }
   for (let p = 1; p <= GUTS_N; p += 1) {
     const input = keyGutsInputs[p - 1];
@@ -836,10 +855,18 @@ function fillKeyEditor() {
 
 async function saveKey() {
   const rows = [];
-  for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
-    const parsed = parseAnswer(keyIndividualInputs[p - 1].value);
-    if (!parsed.ok) { toast(`Individual problem ${p}: whole numbers only.`, 'error'); return; }
-    rows.push({ round: 'individual', problem: p, answer: parsed.value, points: cfg.INDIVIDUAL_POINTS });
+  for (const division of cfg.DIVISIONS) {
+    for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+      const parsed = parseAnswer(keyIndividualInputs[division][p - 1].value);
+      if (!parsed.ok) {
+        toast(`Division ${division} problem ${p}: whole numbers only.`, 'error');
+        return;
+      }
+      rows.push({
+        round: 'individual', division, problem: p,
+        answer: parsed.value, points: cfg.INDIVIDUAL_POINTS,
+      });
+    }
   }
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
     const points = Number(keyPointInputs[set - 1].value);
@@ -850,7 +877,7 @@ async function saveKey() {
     for (const p of problemsInSet(set, cfg)) {
       const parsed = parseAnswer(keyGutsInputs[p - 1].value);
       if (!parsed.ok) { toast(`Guts problem ${p}: whole numbers only.`, 'error'); return; }
-      rows.push({ round: 'guts', problem: p, answer: parsed.value, points });
+      rows.push({ round: 'guts', division: GUTS_DIVISION, problem: p, answer: parsed.value, points });
     }
   }
   try {
@@ -1144,7 +1171,11 @@ function wire() {
       refreshIndividualContext();
     });
   }
-  $('#divisionPick').addEventListener('change', refreshIndividualContext);
+  // Switching division changes which paper the answers are marked against.
+  $('#divisionPick').addEventListener('change', () => {
+    markSheetAgainstKey();
+    refreshIndividualContext();
+  });
   $('#saveSheet').addEventListener('click', saveSheet);
   $('#clearSheet').addEventListener('click', () => clearSheet());
 
@@ -1166,6 +1197,17 @@ function wire() {
   });
 
   buildKeyEditor();
+  for (const btn of $$('.tab[data-keydiv]')) {
+    btn.addEventListener('click', () => {
+      activeKeyDivision = btn.dataset.keydiv;
+      for (const b of $$('.tab[data-keydiv]')) {
+        b.setAttribute('aria-selected', String(b === btn));
+      }
+      for (const division of cfg.DIVISIONS) {
+        $(`#keyIndividual${division}`).classList.toggle('hidden', division !== activeKeyDivision);
+      }
+    });
+  }
   $('#saveKey').addEventListener('click', saveKey);
 
   $('#clockStart').addEventListener('click', () => clockAction('start'));
@@ -1282,11 +1324,19 @@ function wire() {
 async function seedDemo() {
   const names = ['Cowbell', 'Coconut Crew', 'Milk Maids', 'Udder Chaos', 'Moo Point'];
   const keyRows = [];
-  for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
-    keyRows.push({ round: 'individual', problem: p, answer: (p * 7) % 100, points: 1 });
+  for (const division of cfg.DIVISIONS) {
+    for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
+      keyRows.push({
+        round: 'individual', division, problem: p,
+        answer: (p * (division === 'A' ? 7 : 9)) % 100, points: 1,
+      });
+    }
   }
   for (let p = 1; p <= GUTS_N; p += 1) {
-    keyRows.push({ round: 'guts', problem: p, answer: (p * 13) % 50, points: Math.ceil(p / cfg.GUTS_PER_SET) });
+    keyRows.push({
+      round: 'guts', division: GUTS_DIVISION, problem: p,
+      answer: (p * 13) % 50, points: Math.ceil(p / cfg.GUTS_PER_SET),
+    });
   }
   await store.saveKey(keyRows);
 
@@ -1294,8 +1344,9 @@ async function seedDemo() {
     const division = team % 2 ? 'A' : 'B';
     for (const member of cfg.MEMBERS.slice(0, 2 + (team % 3))) {
       const skill = 4 + ((team * 3 + member.charCodeAt(0)) % 9);
+      const mult = division === 'A' ? 7 : 9;
       const answers = Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => (
-        (i * 7 + team) % 13 < skill ? ((i + 1) * 7) % 100 : ((i + 1) * 7 + 1) % 100));
+        (i * 7 + team) % 13 < skill ? ((i + 1) * mult) % 100 : ((i + 1) * mult + 1) % 100));
       await store.saveContestant({
         individual_id: `${team}${member}`,
         team, member, division,

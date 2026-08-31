@@ -12,6 +12,12 @@ No accounts, no per-scorer logins, no monthly bill.
 
 ## What it does
 
+**The two divisions sit different papers.** Division A and Division B each have their
+own 20-problem individual key, edited on their own tab. Guts is one paper for
+everybody. A sheet is always marked against the division you picked for it, and
+switching the dropdown re-marks it — so a sheet keyed against the wrong paper shows
+up as a wall of red rather than a plausible score.
+
 **Type a sheet, not a score.** Enter `12C` and the team and member boxes fill
 themselves in — both stay editable. Pick a division, optionally a name, then key the
 20 answers. Boxes turn green or red against the answer key as you type, so a
@@ -58,7 +64,7 @@ points against 112 from guts — so the weights apply to each round's **share of
 own maximum**, never to raw points:
 
 ```
-individualPct = team individual total / (4 members × 20 problems × 1 point)
+individualPct = team individual total / (4 members × that division's paper)
 gutsPct       = team guts total       / (sum of every guts problem's points)
 combined      = 100 × (80 × individualPct + 20 × gutsPct) / 100
 ```
@@ -76,6 +82,10 @@ carries the percentages and both maxima so a result can be rechecked by hand.
 Free tier. **SQL Editor → New query →** paste all of
 [`supabase/schema.sql`](supabase/schema.sql) → **Run**. Safe to re-run.
 
+> Already ran an earlier version? Re-run the file. It migrates the answer key to the
+> per-division layout in place: whatever you had typed becomes Division A, and
+> Division B starts as a copy of it rather than empty.
+>
 > Reusing the old SFPO project? Run the DROP block at the bottom of that file first —
 > the proof-grading tables are gone. A fresh project is cleaner.
 
@@ -149,8 +159,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 37 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 62 browser checks, including ten scorers at once
+npm test               # 42 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 67 browser checks, including ten scorers at once
 ```
 
 Ten scorers at once is covered from both ends: the lock's mutual exclusion is unit

@@ -250,8 +250,13 @@
           nobody is marked right or wrong against an answer you have not set yet.
           Guts point values are set per set, right here.
         </p>
-        <h3 class="subhead">Individual — 20 problems, 1 point each</h3>
-        <div class="answers" id="keyIndividual"></div>
+        <div class="chip-row" style="margin-bottom:12px">
+          <button class="tab" data-keydiv="A" aria-selected="true">Individual · Division A</button>
+          <button class="tab" data-keydiv="B" aria-selected="false">Individual · Division B</button>
+          <span class="tag" id="keyDivState" style="margin-left:auto"></span>
+        </div>
+        <div class="answers" id="keyIndividualA"></div>
+        <div class="answers hidden" id="keyIndividualB"></div>
         <h3 class="subhead" style="margin-top:22px">Guts — 7 sets of 4</h3>
         <div id="keyGuts"></div>
         <button class="btn btn--primary" id="saveKey" style="margin-top:16px">Save answer key</button>

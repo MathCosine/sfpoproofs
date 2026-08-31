@@ -53,32 +53,49 @@ export function gutsProblemCount(cfg) {
 // The answer key
 // ---------------------------------------------------------------------
 
-/** round -> problem -> { answer, points } */
+/**
+ * The two divisions sit different individual papers, so there are two
+ * individual keys. Guts is one paper for everybody and is stored under
+ * the division '*'.
+ *
+ *   { individual: { A: Map, B: Map }, guts: Map }
+ */
+export const GUTS_DIVISION = '*';
+
 export function indexKey(rows) {
-  const key = { individual: new Map(), guts: new Map() };
+  const key = { individual: { A: new Map(), B: new Map() }, guts: new Map() };
   for (const row of rows) {
-    if (!key[row.round]) continue;
-    key[row.round].set(Number(row.problem), {
+    const problem = Number(row.problem);
+    const entry = {
       answer: row.answer == null ? null : Number(row.answer),
       points: Number(row.points ?? 1),
-    });
+    };
+    if (row.round === 'guts') key.guts.set(problem, entry);
+    else if (key.individual[row.division]) key.individual[row.division].set(problem, entry);
   }
   return key;
 }
 
-/** How many problems in a round still have no answer set. */
-export function keyGaps(key, round, count) {
+/** The individual key for one division, or an empty one if unknown. */
+export function individualKey(key, division) {
+  return key.individual[division] ?? new Map();
+}
+
+/**
+ * Problems still missing an answer. `division` picks the individual
+ * paper; pass GUTS_DIVISION for the guts key.
+ */
+export function keyGaps(key, round, count, division = 'A') {
+  const table = round === 'guts' ? key.guts : individualKey(key, division);
   const missing = [];
-  for (let p = 1; p <= count; p += 1) {
-    if (key[round].get(p)?.answer == null) missing.push(p);
-  }
+  for (let p = 1; p <= count; p += 1) if (table.get(p)?.answer == null) missing.push(p);
   return missing;
 }
 
-/** Points available in a round once its key is complete. */
-export function keyMaxPoints(key, round, count) {
+export function keyMaxPoints(key, round, count, division = 'A') {
+  const table = round === 'guts' ? key.guts : individualKey(key, division);
   let total = 0;
-  for (let p = 1; p <= count; p += 1) total += key[round].get(p)?.points ?? 0;
+  for (let p = 1; p <= count; p += 1) total += table.get(p)?.points ?? 0;
   return total;
 }
 
@@ -90,13 +107,14 @@ export function keyMaxPoints(key, round, count) {
  * Score one answer sheet. An unset key entry never scores — a blank key
  * must not silently mark every blank answer correct.
  */
-export function scoreSheet(answers, key, cfg) {
+export function scoreSheet(answers, key, cfg, division) {
+  const table = individualKey(key, division);
   const marks = [];
   let score = 0;
   let answered = 0;
   for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
     const given = answers?.[p - 1] ?? null;
-    const entry = key.individual.get(p);
+    const entry = table.get(p);
     const expected = entry?.answer ?? null;
     if (given != null) answered += 1;
     let mark = 'blank';
@@ -112,7 +130,7 @@ export function scoreSheet(answers, key, cfg) {
 export function individualStandings(contestants, key, cfg, dq = new Set()) {
   return contestants
     .map((c) => {
-      const result = scoreSheet(c.answers, key, cfg);
+      const result = scoreSheet(c.answers, key, cfg, c.division);
       return {
         individualId: c.individual_id,
         team: Number(c.team),
@@ -192,12 +210,12 @@ export function dqTeams(teams) {
   return new Set(teams.filter((t) => t.disqualified).map((t) => Number(t.team)));
 }
 
-export function individualMaxPoints(key, cfg) {
-  return keyMaxPoints(key, 'individual', cfg.INDIVIDUAL_PROBLEMS) * cfg.MEMBERS.length;
+export function individualMaxPoints(key, cfg, division = 'A') {
+  return keyMaxPoints(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, division) * cfg.MEMBERS.length;
 }
 
 export function gutsMaxPoints(key, cfg) {
-  return keyMaxPoints(key, 'guts', gutsProblemCount(cfg));
+  return keyMaxPoints(key, 'guts', gutsProblemCount(cfg), GUTS_DIVISION);
 }
 
 /**
@@ -210,7 +228,6 @@ export function combinedStandings(individuals, guts, key, cfg, teams = []) {
   const meta = new Map(teams.map((t) => [Number(t.team), t]));
   const gutsByTeam = new Map(guts.map((g) => [g.team, g]));
 
-  const indMax = individualMaxPoints(key, cfg);
   const gutsMax = gutsMaxPoints(key, cfg);
   const wInd = Number(cfg.INDIVIDUAL_WEIGHT);
   const wGuts = Number(cfg.GUTS_WEIGHT);
@@ -249,6 +266,9 @@ export function combinedStandings(individuals, guts, key, cfg, teams = []) {
   return [...rows.values()]
     .map((r) => {
       r.members.sort((a, b) => a.member.localeCompare(b.member));
+      // Each division sits its own paper, so a team is measured against
+      // the maximum of the paper it actually took.
+      const indMax = individualMaxPoints(key, cfg, r.division);
       const indPct = indMax ? (r.individual / indMax) * 100 : 0;
       const gutsPct = gutsMax && r.guts != null ? (r.guts / gutsMax) * 100 : 0;
       const total = wTotal ? (wInd * indPct + wGuts * gutsPct) / wTotal : 0;
