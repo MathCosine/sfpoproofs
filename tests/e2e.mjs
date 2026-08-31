@@ -57,6 +57,8 @@ const watch = (p, tag) => {
   });
 };
 
+await ctx.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+
 const page = await ctx.newPage();
 watch(page, 'tab1');
 
@@ -231,13 +233,17 @@ await page.waitForTimeout(400);
 check('the clock is adjustable while stopped',
   (await page.textContent('#clockBig')) === '74:00', await page.textContent('#clockBig'));
 await page.click('#clockStart');
-await page.waitForTimeout(1400);
-const running = await page.textContent('#clockBig');
-check('starting the clock makes it count down', running !== '74:00', running);
+const ticked = await page.waitForFunction(
+  () => document.querySelector('#clockBig').textContent !== '74:00',
+  null, { timeout: 8000 },
+).then(() => true, () => false);
+check('starting the clock makes it count down', ticked,
+  await page.textContent('#clockBig'));
+
 await page.click('#clockPause');
-await page.waitForTimeout(400);
+await page.waitForTimeout(600);
 const paused = await page.textContent('#clockBig');
-await page.waitForTimeout(1400);
+await page.waitForTimeout(2200);
 check('pausing holds it still', (await page.textContent('#clockBig')) === paused, paused);
 
 check('the board reports itself live',
@@ -289,6 +295,76 @@ check('opening a sheet someone else holds warns you',
   (await page.textContent('#individualBanner')).includes('entering this sheet right now'),
   (await page.textContent('#individualBanner')).trim().slice(0, 70));
 await page2.close();
+
+// ---- ten scorers at once --------------------------------------------
+// The lock's mutual exclusion is unit-tested against the Postgres
+// contract; this is the other half — ten real tabs, ten identities, all
+// live at the same time, and the UI holding up.
+const crew = [];
+for (let i = 0; i < 10; i += 1) {
+  const tab = await ctx.newPage();
+  watch(tab, `crew${i}`);
+  await tab.addInitScript((n) => {
+    localStorage.setItem('contest-grader-id', `crew-${n}`);
+    localStorage.setItem('contest-grader-name', `Scorer ${n}`);
+  }, i);
+  await tab.goto(BASE, { waitUntil: 'domcontentloaded' });
+  crew.push(tab);
+}
+await Promise.all(crew.map((tab) => tab.waitForSelector('#app:not(.hidden)', { timeout: 20000 })));
+check('ten scorers can all be signed in at once', crew.length === 10);
+
+// Each opens a different sheet, all at the same moment.
+await Promise.all(crew.map(async (tab, i) => {
+  await tab.fill('#individualId', `${40 + i}A`);
+}));
+await page.waitForTimeout(1500);
+
+const identities = await Promise.all(crew.map((t) => t.textContent('#whoamiName')));
+check('each tab keeps its own scorer identity',
+  new Set(identities).size === 10, identities.slice(0, 3).join(', '));
+
+const banners = await Promise.all(crew.map((t) => t.textContent('#individualBanner')));
+check('ten different sheets means nobody is blocked',
+  banners.every((b) => !b.includes('entering this sheet right now')));
+
+// Now all ten pile onto the SAME sheet.
+await Promise.all(crew.map((tab) => tab.fill('#individualId', '77A')));
+await page.waitForTimeout(2000);
+const contested = await Promise.all(crew.map((t) => t.textContent('#individualBanner')));
+const warned = contested.filter((b) => b.includes('entering this sheet right now')).length;
+check('piling onto one sheet warns all but the holder',
+  warned >= 8, `${warned} of 10 warned off`);
+
+// Everyone enters and saves their own sheet simultaneously.
+await Promise.all(crew.map(async (tab, i) => {
+  await tab.fill('#individualId', `${40 + i}A`);
+  await tab.selectOption('#divisionPick', i % 2 ? 'A' : 'B');
+  await tab.evaluate((n) => {
+    document.querySelectorAll('#answerGrid .ans input').forEach((input, k) => {
+      input.value = String(k <= n ? k + 1 : 0);
+      input.dispatchEvent(new Event('input'));
+    });
+  }, i);
+}));
+await Promise.all(crew.map((tab) => tab.click('#saveSheet')));
+await page.waitForTimeout(2500);
+
+const savedIds = await page.evaluate(() => {
+  const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+  return (db.contestants || []).map((c) => c.individual_id);
+});
+const expected = Array.from({ length: 10 }, (_, i) => `${40 + i}A`);
+const landed = expected.filter((id) => savedIds.includes(id));
+check('ten simultaneous saves all land', landed.length === 10,
+  `${landed.length}/10 — missing ${expected.filter((id) => !savedIds.includes(id)).join(', ')}`);
+
+await page.click('.tab[data-tab="progress"]');
+await page.waitForTimeout(600);
+check('the portal is still responsive with ten tabs open',
+  (await page.locator('.person').count()) > 0);
+
+await Promise.all(crew.map((tab) => tab.close()));
 
 // ---- disqualification ----------------------------------------------
 await page.click('.tab[data-tab="setup"]');

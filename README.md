@@ -149,9 +149,14 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 32 unit tests: scoring, the clock, realtime patching, CSV
-npm run test:e2e       # 56 browser checks, two tabs as two scorers
+npm test               # 37 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 62 browser checks, including ten scorers at once
 ```
+
+Ten scorers at once is covered from both ends: the lock's mutual exclusion is unit
+tested against the Postgres contract (ten racing claims on one sheet, exactly one
+wins; an abandoned claim can be taken over, a live one cannot), and the browser
+suite runs ten real tabs with ten identities entering and saving simultaneously.
 
 The unit tests cover where a mistake would silently produce a wrong winner: blank
 versus wrong versus unkeyed answers, zero as a real answer, rising guts points, the

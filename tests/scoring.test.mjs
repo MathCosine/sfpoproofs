@@ -343,3 +343,122 @@ test('CSV round-trips through the exporter', () => {
   const rows = parseCsv(csv);
   assert.deepEqual(rows[1], ['x,1', 'y"2']);
 });
+
+// ---------------------------------------------------------------------
+// Lock contention — what actually decides whether ten scorers can work
+// at once. Postgres is the thing that makes this safe (the claim's
+// primary key), so these drive the real Supabase code path against a
+// stand-in client rather than the localStorage demo store.
+// ---------------------------------------------------------------------
+
+import { supabaseBackend } from '../assets/store.js';
+
+/**
+ * A stand-in for supabase-js holding one `claims` table in memory, with
+ * PostgREST's behaviour on the parts that matter: a duplicate insert
+ * raises 23505, and an update only touches rows matching every filter.
+ */
+function fakeClient(rows = []) {
+  // Clone, or an update in one test mutates the fixture the next one uses.
+  const claims = rows.map((r) => ({ ...r }));
+  const calls = { insert: 0, update: 0 };
+
+  const builder = (op, payload) => {
+    const filters = [];
+    const api = {
+      eq(col, value) { filters.push((r) => String(r[col]) === String(value)); return api; },
+      lt(col, value) { filters.push((r) => new Date(r[col]) < new Date(value)); return api; },
+      select() { return api.then ? api : api; },
+      maybeSingle() { return api; },
+      then(resolve) {
+        const match = claims.filter((r) => filters.every((f) => f(r)));
+        if (op === 'insert') {
+          calls.insert += 1;
+          const clash = claims.some(
+            (r) => r.scope === payload.scope && r.ref === payload.ref);
+          if (clash) return resolve({ data: null, error: { code: '23505', message: 'duplicate' } });
+          claims.push({ ...payload });
+          return resolve({ data: [payload], error: null });
+        }
+        if (op === 'update') {
+          calls.update += 1;
+          for (const row of match) Object.assign(row, payload);
+          return resolve({ data: match, error: null });
+        }
+        return resolve({ data: match[0] ?? null, error: null });
+      },
+    };
+    return api;
+  };
+
+  return {
+    claims,
+    calls,
+    auth: { getSession: async () => ({ data: { session: {} } }) },
+    from() {
+      return {
+        insert: (payload) => builder('insert', payload),
+        update: (payload) => builder('update', payload),
+        select: () => builder('select'),
+      };
+    },
+  };
+}
+
+const scorer = (n) => ({ id: `g${n}`, name: `Scorer ${n}` });
+
+test('an unheld sheet is claimed on the first try', async () => {
+  const client = fakeClient();
+  const store = supabaseBackend(cfg, client);
+  const out = await store.claim('individual', '12C', scorer(1), 120000);
+  assert.deepEqual(out, { ok: true });
+  assert.equal(client.claims.length, 1);
+});
+
+test('ten scorers on ten different sheets all get their lock', async () => {
+  const client = fakeClient();
+  const store = supabaseBackend(cfg, client);
+  const results = await Promise.all(
+    Array.from({ length: 10 }, (_, i) => store.claim('individual', `${i + 1}A`, scorer(i), 120000)));
+  assert.ok(results.every((r) => r.ok), 'nobody is turned away for somebody else’s sheet');
+  assert.equal(client.claims.length, 10);
+});
+
+test('ten scorers racing for ONE sheet: exactly one wins', async () => {
+  const client = fakeClient();
+  const store = supabaseBackend(cfg, client);
+  const results = await Promise.all(
+    Array.from({ length: 10 }, (_, i) => store.claim('individual', '12C', scorer(i), 120000)));
+  const winners = results.filter((r) => r.ok);
+  assert.equal(winners.length, 1, 'the primary key decides, not whoever clicked last');
+  assert.equal(client.claims.length, 1);
+  for (const loser of results.filter((r) => !r.ok)) {
+    assert.equal(loser.heldBy.grader_id, 'g0', 'and the losers are told who has it');
+  }
+});
+
+test('refreshing your own claim is not a takeover', async () => {
+  const client = fakeClient();
+  const store = supabaseBackend(cfg, client);
+  await store.claim('guts', '4:2', scorer(1), 120000);
+  const again = await store.claim('guts', '4:2', scorer(1), 120000);
+  assert.deepEqual(again, { ok: true });
+  assert.equal(client.claims.length, 1);
+  assert.equal(client.claims[0].grader_id, 'g1');
+});
+
+test('an abandoned claim can be taken over, a live one cannot', async () => {
+  const stale = {
+    scope: 'individual', ref: '9B', grader_id: 'gone', grader_name: 'Gone Home',
+    claimed_at: new Date(Date.now() - 10 * 60000).toISOString(),
+  };
+  const takeover = await supabaseBackend(cfg, fakeClient([stale]))
+    .claim('individual', '9B', scorer(2), 120000);
+  assert.equal(takeover.ok, true, 'a laptop closed ten minutes ago does not hold a sheet forever');
+
+  const live = { ...stale, claimed_at: new Date().toISOString() };
+  const refused = await supabaseBackend(cfg, fakeClient([live]))
+    .claim('individual', '9B', scorer(2), 120000);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.heldBy.grader_name, 'Gone Home');
+});
