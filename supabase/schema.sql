@@ -304,6 +304,30 @@ drop policy if exists anon_read_state on contest_state;
 create policy anon_read_state on contest_state for select to anon using (true);
 
 -- ---------------------------------------------------------------------
+-- Function privileges
+--
+-- PostgREST exposes every function in the public schema as an RPC, and
+-- by default the anonymous role may call them. refresh_guts_public() is
+-- SECURITY DEFINER, so an anonymous caller could make it run a full
+-- aggregate over the guts answers as often as it liked — no data leaks,
+-- but it is a free lever against a free-tier project and no business of
+-- anyone who is not signed in. None of these are meant to be called from
+-- the public leaderboard, so take them away from anon entirely.
+-- ---------------------------------------------------------------------
+do $$
+declare fn text;
+begin
+  foreach fn in array array[
+    'refresh_guts_public()',
+    'set_guts_frozen(boolean)',
+    'release_stale_claims(int)'
+  ] loop
+    execute format('revoke all on function %s from public, anon', fn);
+    execute format('grant execute on function %s to authenticated', fn);
+  end loop;
+end $$;
+
+-- ---------------------------------------------------------------------
 -- Realtime
 -- ---------------------------------------------------------------------
 do $$

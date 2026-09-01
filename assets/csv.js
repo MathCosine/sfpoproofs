@@ -28,9 +28,19 @@ export function parseCsv(text) {
   return rows.filter((r) => r.some((c) => c.trim() !== ''));
 }
 
+/**
+ * Spreadsheets treat a cell starting with = + - @ (or a tab/return) as a
+ * formula, so a team calling itself `=HYPERLINK(...)` would execute when
+ * somebody opens the results in Excel. Prefixing a single quote makes it
+ * text; the quote is not shown by any spreadsheet that honours it.
+ */
+function deFormula(text) {
+  return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+}
+
 export function toCsv(header, rows) {
   const esc = (v) => {
-    const s = v == null ? '' : String(v);
+    const s = deFormula(v == null ? '' : String(v));
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
   return [header, ...rows].map((r) => r.map(esc).join(',')).join('\n');

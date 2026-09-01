@@ -173,13 +173,17 @@ function render() {
   shown.slice(0, 10).forEach((row, i) => {
     const node = document.createElement('div');
     node.className = `row${i < 3 ? ` row--${i + 1}` : ''}`;
-    node.innerHTML = `
-      <span class="rank">${i + 1}</span>
-      <span class="who">
-        <span class="name"></span>
-        <span class="meta"></span>
-      </span>
-      <span class="score"></span>`;
+    // Built rather than assigned as markup: nothing here should ever be
+    // able to become HTML, and team names come from people.
+    const span = (cls, text) => {
+      const n = document.createElement('span');
+      n.className = cls;
+      if (text != null) n.textContent = text;
+      return n;
+    };
+    const who = span('who');
+    who.append(span('name'), span('meta'));
+    node.append(span('rank', String(i + 1)), who, span('score'));
     node.querySelector('.name').textContent = row.name || `Team ${row.team}`;
     node.querySelector('.meta').textContent =
       `#${row.team}${row.division ? ` · DIV ${row.division}` : ''} · ${row.solved} correct`;
@@ -201,7 +205,14 @@ function render() {
   for (const row of rest) {
     const node = document.createElement('div');
     node.className = `restrow${row.disqualified ? ' restrow--dq' : ''}`;
-    node.innerHTML = '<span class="rank"></span><span class="who"><span class="name"></span></span><span class="score"></span>';
+    const cell = (cls) => {
+      const n = document.createElement('span');
+      n.className = cls;
+      return n;
+    };
+    const holder = cell('who');
+    holder.append(cell('name'));
+    node.append(cell('rank'), holder, cell('score'));
     const place = row.disqualified ? 'DQ' : String(shown.indexOf(row) + 1);
     node.querySelector('.rank').textContent = place;
     node.querySelector('.name').textContent = row.name || `Team ${row.team}`;

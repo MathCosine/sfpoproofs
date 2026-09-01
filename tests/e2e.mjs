@@ -119,6 +119,33 @@ await page.waitForTimeout(500);
 check('the key saves and reports complete',
   (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
 
+// ---- the key editor must not be eaten either -------------------------
+// Same bug as the guts grid: focus alone was not enough of a guard, so
+// clicking the other division's tab or simply pausing let a background
+// render overwrite everything unsaved.
+await page.click('.tab[data-keydiv="B"]');
+await page.waitForTimeout(150);
+await page.evaluate(() => {
+  const box = document.querySelectorAll('#keyIndividualB .ans input')[0];
+  box.value = '4242';
+  box.dispatchEvent(new Event('input'));
+});
+await page.click('.tab[data-keydiv="A"]');          // focus leaves the box
+await page.evaluate(() => {
+  window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+});
+await page.waitForTimeout(600);
+await page.click('.tab[data-keydiv="B"]');
+check('an unsaved key edit survives a background render',
+  (await page.locator('#keyIndividualB .ans input').first().inputValue()) === '4242',
+  await page.locator('#keyIndividualB .ans input').first().inputValue());
+await page.evaluate(() => {
+  const box = document.querySelectorAll('#keyIndividualB .ans input')[0];
+  box.value = '101';
+  box.dispatchEvent(new Event('input'));
+});
+await page.click('.tab[data-keydiv="A"]');
+
 // ---- clearing the key ----------------------------------------------
 check('clearing the key takes two clicks', await page.isVisible('#clearKey'));
 await page.click('#clearKey');

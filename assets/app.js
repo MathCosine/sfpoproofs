@@ -586,26 +586,35 @@ function renderSuggestions() {
 // Progress — individual by individual, never twenty boxes
 // ---------------------------------------------------------------------
 
-function renderProgress() {
-  const host = $('#progressPanel');
-  host.replaceChildren();
+// The progress panel is the expensive one: 400 chips and 700 pips at
+// full scale, rebuilt on every realtime event. Build the DOM when the
+// roster's shape changes, and only repaint after that — the same trick
+// the coverage matrix used, measured at 55ms down to single figures.
+let progressShape = null;
+const progressChips = new Map();     // individualId -> element
+const progressPips = new Map();      // "team:set"   -> element
+const progressTeams = new Map();     // team         -> { card, head }
 
+function progressSignature() {
   const teams = [...new Set([
     ...data.teams.map((t) => Number(t.team)),
     ...data.contestants.map((c) => Number(c.team)),
   ])].sort((a, b) => a - b);
+  return teams.map((t) => `${t}${derived.teamsByNo.get(t)?.name ?? ''}`).join(',');
+}
 
-  const donePeople = derived.individuals.filter((p) => p.answered > 0).length;
+function buildProgress(teams) {
+  const host = $('#progressPanel');
+  host.replaceChildren();
+  progressChips.clear();
+  progressPips.clear();
+  progressTeams.clear();
+
   const bar = el('div', 'matrix__bar');
-  bar.append(
-    el('span', 'tag tag--a', `${teams.length} of ${cfg.TEAM_COUNT} teams`),
-    el('span', 'muted', `${donePeople} sheets entered`),
-  );
-  bar.appendChild(el('span', 'spacer'));
-  const gutsDone = derived.guts.reduce(
-    (n, g) => n + g.perSet.filter((s) => s.complete).length, 0);
-  bar.appendChild(el('span', 'muted', `${gutsDone}/${teams.length * cfg.GUTS_SETS} guts sets`));
+  bar.append(el('span', 'tag tag--a', ''), el('span', 'muted', ''), el('span', 'spacer'),
+    el('span', 'muted', ''));
   host.appendChild(bar);
+  progressTeams.set('__bar', bar);
 
   if (!teams.length) {
     host.appendChild(el('div', 'empty',
@@ -615,27 +624,14 @@ function renderProgress() {
 
   const roster = el('div', 'roster');
   for (const teamNo of teams) {
-    const team = derived.teamsByNo.get(teamNo);
-    const card = el('div', `rosterteam${team?.disqualified ? ' rosterteam--dq' : ''}`);
-
+    const card = el('div', 'rosterteam');
     const head = el('div', 'rosterteam__head');
-    head.append(el('span', null, `TEAM ${teamNo}`));
-    if (team?.name) head.append(el('span', 'rosterteam__name', team.name));
-    if (team?.division) head.append(el('span', `tag tag--${team.division.toLowerCase()}`, team.division));
-    if (team?.disqualified) head.append(el('span', 'tag tag--flag', 'DQ'));
-    head.appendChild(el('span', 'spacer'));
-
-    const answers = derived.gutsByTeam.get(teamNo);
-    const gutsResult = scoreGutsTeam(answers, derived.key, cfg);
+    head.append(el('span', null, `TEAM ${teamNo}`), el('span', 'rosterteam__name'),
+      el('span', 'tag'), el('span', 'tag tag--flag', 'DQ'), el('span', 'spacer'));
     const pips = el('div', 'setpips');
-    for (const set of gutsResult.perSet) {
-      const claimed = derived.claims.has(`guts|${teamNo}:${set.set}`);
-      let cls = 'setpip';
-      if (set.complete) cls += ' setpip--done';
-      else if (set.answered) cls += ' setpip--partial';
-      else if (claimed) cls += ' setpip--claimed';
-      const pip = el('div', cls, String(set.set));
-      pip.title = `Guts set ${set.set} — ${set.answered}/${cfg.GUTS_PER_SET} entered, ${set.score} pts`;
+    for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+      const pip = el('div', 'setpip', String(set));
+      progressPips.set(`${teamNo}:${set}`, pip);
       pips.appendChild(pip);
     }
     head.appendChild(pips);
@@ -644,31 +640,87 @@ function renderProgress() {
     const people = el('div', 'people');
     for (const member of cfg.MEMBERS) {
       const id = `${teamNo}${member}`;
+      const chip = el('button', 'person');
+      chip.type = 'button';
+      chip.dataset.id = id;
+      chip.append(el('span', null, id), el('span', 'person__score'));
+      progressChips.set(id, chip);
+      people.appendChild(chip);
+    }
+    card.appendChild(people);
+    progressTeams.set(teamNo, { card, head });
+    roster.appendChild(card);
+  }
+  host.appendChild(roster);
+}
+
+function paintProgress(teams) {
+  const bar = progressTeams.get('__bar');
+  if (bar) {
+    const done = derived.individuals.filter((p) => p.answered > 0).length;
+    const gutsDone = derived.guts.reduce(
+      (n, g) => n + g.perSet.filter((x) => x.complete).length, 0);
+    const [tag, sheets, , sets] = bar.children;
+    tag.textContent = `${teams.length} of ${cfg.TEAM_COUNT} teams`;
+    sheets.textContent = `${done} sheets entered`;
+    sets.textContent = `${gutsDone}/${teams.length * cfg.GUTS_SETS} guts sets`;
+  }
+
+  for (const teamNo of teams) {
+    const entry = progressTeams.get(teamNo);
+    if (!entry) continue;
+    const team = derived.teamsByNo.get(teamNo);
+    entry.card.classList.toggle('rosterteam--dq', Boolean(team?.disqualified));
+    const [, name, division, dq] = entry.head.children;
+    name.textContent = team?.name ?? '';
+    division.textContent = team?.division ?? '';
+    division.className = team?.division ? `tag tag--${team.division.toLowerCase()}` : 'tag';
+    division.hidden = !team?.division;
+    dq.hidden = !team?.disqualified;
+
+    const result = scoreGutsTeam(derived.gutsByTeam.get(teamNo), derived.key, cfg);
+    for (const set of result.perSet) {
+      const pip = progressPips.get(`${teamNo}:${set.set}`);
+      if (!pip) continue;
+      let cls = 'setpip';
+      if (set.complete) cls += ' setpip--done';
+      else if (set.answered) cls += ' setpip--partial';
+      else if (derived.claims.has(`guts|${teamNo}:${set.set}`)) cls += ' setpip--claimed';
+      if (pip.className !== cls) pip.className = cls;
+      pip.title = `Guts set ${set.set} — ${set.answered}/${cfg.GUTS_PER_SET} entered, ${set.score} pts`;
+    }
+
+    for (const member of cfg.MEMBERS) {
+      const id = `${teamNo}${member}`;
+      const chip = progressChips.get(id);
+      if (!chip) continue;
       const person = derived.byId.get(id);
       const claimed = derived.claims.get(`individual|${id}`);
       let cls = 'person';
       if (person && person.answered === cfg.INDIVIDUAL_PROBLEMS) cls += ' person--done';
       else if (person && person.answered > 0) cls += ' person--partial';
       else if (claimed) cls += ' person--claimed';
-
-      const chip = el('button', cls);
-      chip.type = 'button';
-      chip.append(el('span', null, id));
-      if (person) chip.append(el('span', 'person__score', String(person.score)));
+      if (chip.className !== cls) chip.className = cls;
+      const score = person ? String(person.score) : '';
+      if (chip.lastChild.textContent !== score) chip.lastChild.textContent = score;
       chip.title = person
         ? `${person.name || id} — ${person.answered}/${cfg.INDIVIDUAL_PROBLEMS} answered, ${person.score} pts`
         : (claimed ? `${claimed.grader_name} is entering this` : 'not entered');
-      chip.addEventListener('click', () => {
-        setEntryMode('individual');
-        $('#individualId').value = id;
-        onIdTyped();
-      });
-      people.appendChild(chip);
     }
-    card.appendChild(people);
-    roster.appendChild(card);
   }
-  host.appendChild(roster);
+}
+
+function renderProgress() {
+  const teams = [...new Set([
+    ...data.teams.map((t) => Number(t.team)),
+    ...data.contestants.map((c) => Number(c.team)),
+  ])].sort((a, b) => a - b);
+  const shape = progressSignature();
+  if (shape !== progressShape) {
+    progressShape = shape;
+    buildProgress(teams);
+  }
+  paintProgress(teams);
 }
 
 // ---------------------------------------------------------------------
@@ -799,8 +851,18 @@ const keyIndividualInputs = {};     // division -> inputs
 let keyGutsInputs = [];
 let keyPointInputs = [];
 let activeKeyDivision = 'A';
+let keyDirty = false;
+let keyLoadedSignature = null;
+
+function markKeyDirty() { keyDirty = true; }
+
+function settleKey() {
+  keyDirty = false;
+  keyLoadedSignature = null;   // force one reload from what was just saved
+}
 
 function buildKeyEditor() {
+  $('#tab-key').addEventListener('input', markKeyDirty);
   for (const division of cfg.DIVISIONS) {
     keyIndividualInputs[division] = buildAnswerGrid(
       $(`#keyIndividual${division}`), cfg.INDIVIDUAL_PROBLEMS);
@@ -835,10 +897,20 @@ function buildKeyEditor() {
   }
 }
 
+/**
+ * A signature of the key as saved. When it changes, somebody else edited
+ * the key and the editor should show the new one; when it has not, a
+ * render must leave the boxes completely alone.
+ */
+function savedKeySignature() {
+  return data.key
+    .map((r) => `${r.round}${r.division ?? '*'}${r.problem}=${r.answer ?? ''}:${r.points}`)
+    .sort()
+    .join('|');
+}
+
 function fillKeyEditor() {
-  // The status line always reflects the saved key. Only the input boxes
-  // are held back, and only while somebody is typing in them — otherwise
-  // saving from a button inside this tab would leave the status stale.
+  // The status line always reflects the saved key.
   const perDivision = cfg.DIVISIONS.map((d) => derived.keyGapsIndividual[d].length);
   const gaps = perDivision.reduce((a, b) => a + b, 0) + derived.keyGapsGuts.length;
   $('#keyState').textContent = gaps ? `${gaps} unset` : 'complete';
@@ -847,7 +919,14 @@ function fillKeyEditor() {
     .map((d, i) => `${d}: ${perDivision[i] ? `${perDivision[i]} unset` : 'complete'}`)
     .join(' · ');
 
-  if (document.activeElement?.closest('#tab-key .ans')) return;
+  // Never overwrite unsaved edits. Focus is not enough of a guard: you
+  // lose focus every time you click the other division's tab, or pause,
+  // and any other scorer saving a sheet fires a render. Keep the boxes
+  // until the saved key actually changes underneath them.
+  const signature = savedKeySignature();
+  if (keyDirty || signature === keyLoadedSignature) return;
+  keyLoadedSignature = signature;
+
   for (const division of cfg.DIVISIONS) {
     const table = individualKey(derived.key, division);
     for (let p = 1; p <= cfg.INDIVIDUAL_PROBLEMS; p += 1) {
@@ -917,6 +996,7 @@ async function saveKey() {
   if (!rows) return;
   try {
     await store.saveKey(rows);
+    settleKey();
     await refresh();
     toast('Answer key saved. Every score just recalculated.');
   } catch (err) {
@@ -1136,6 +1216,8 @@ function render() {
       + `${data.teams.length} teams · ${data.claims.length} open locks`
     : 'Nothing to delete.';
 
+  // Same rule as the answer key: an edit you have not saved yet survives
+  // a background render, however long you leave it sitting there.
   for (const [id, value] of [
     ['#teamCount', cfg.TEAM_COUNT],
     ['#individualWeight', cfg.INDIVIDUAL_WEIGHT],
@@ -1144,7 +1226,9 @@ function render() {
     ['#freezeMinutes', data.state?.freeze_minutes ?? cfg.FREEZE_MINUTES],
   ]) {
     const input = $(id);
-    if (input && input !== document.activeElement) input.value = value;
+    if (input && !input.dataset.dirty && input !== document.activeElement) {
+      input.value = value;
+    }
   }
 }
 
@@ -1185,6 +1269,14 @@ function setEntryMode(mode) {
 }
 
 function wire() {
+  $('#progressPanel').addEventListener('click', (e) => {
+    const chip = e.target.closest('.person');
+    if (!chip) return;
+    setEntryMode('individual');
+    $('#individualId').value = chip.dataset.id;
+    onIdTyped();
+  });
+
   for (const tab of $$('.tab[data-entry]')) {
     tab.addEventListener('click', () => setEntryMode(tab.dataset.entry));
   }
@@ -1278,6 +1370,7 @@ function wire() {
     disarmClear();
     try {
       await store.saveKey(buildKeyRows({ blank: true }));
+      settleKey();
       await refresh();
       toast('Answer key cleared. Nothing is scored until you set it again.', 'info');
     } catch (err) {
@@ -1312,6 +1405,7 @@ function wire() {
       freeze_minutes: Math.max(0, Number($('#freezeMinutes').value) || 0),
       ...(running ? {} : { guts_remaining: Math.round(minutes * 60) }),
     });
+    for (const id of ['#durationMinutes', '#freezeMinutes']) delete $(id).dataset.dirty;
     await refresh();
     toast('Clock settings saved.');
   });
@@ -1321,6 +1415,10 @@ function wire() {
   });
   $('#publicLink').href = `guts.html${location.search}`;
 
+  for (const id of ['#teamCount', '#individualWeight', '#gutsWeight',
+    '#durationMinutes', '#freezeMinutes']) {
+    $(id).addEventListener('input', () => { $(id).dataset.dirty = '1'; });
+  }
   for (const id of ['#individualWeight', '#gutsWeight']) {
     $(id).addEventListener('input', renderWeightPreview);
   }
@@ -1333,6 +1431,9 @@ function wire() {
       individual_weight: ind,
       guts_weight: guts,
     });
+    for (const id of ['#teamCount', '#individualWeight', '#gutsWeight']) {
+      delete $(id).dataset.dirty;
+    }
     await refresh();
     toast('Settings saved for everyone.');
   });

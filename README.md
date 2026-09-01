@@ -138,6 +138,14 @@ The anon key is a public identifier and is meant to ship in client code. Every s
 table denies the anonymous role outright — reading one answer requires the shared
 staff sign-in.
 
+None of the database functions are callable without signing in either — PostgREST
+exposes every function in the public schema as an RPC, and `refresh_guts_public()` is
+SECURITY DEFINER, so `EXECUTE` is revoked from `anon` and granted only to
+`authenticated`.
+
+Results exports quote any cell starting with `=`, `+`, `-` or `@`, so a team name
+cannot become a formula when somebody opens the CSV in Excel.
+
 Two tables are readable without logging in, because the public board has no login:
 `guts_public` (team, name, division, score, solved) and `contest_state` (the clock).
 Neither holds an answer or any part of the key, so the board can be on a screen in
@@ -182,8 +190,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 42 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 82 browser checks, including ten scorers at once
+npm test               # 44 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 83 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

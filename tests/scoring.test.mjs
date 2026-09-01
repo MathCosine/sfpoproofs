@@ -536,3 +536,25 @@ test('a team is measured against the maximum of the paper it sat', () => {
   assert.equal(row.indPct, 100, 'a perfect B team is 100% of the B paper, not half of the A one');
   assert.equal(row.total, 80, 'and so banks the full individual weight');
 });
+
+test('CSV export neutralises spreadsheet formulas', () => {
+  // A team name is free text, and Excel executes a cell starting with =.
+  const csv = toCsv(['team', 'name'], [
+    ['1', '=HYPERLINK("http://evil","click")'],
+    ['2', '+1+1'],
+    ['3', '@SUM(A1:A9)'],
+    ['4', '-2'],
+    ['5', 'Cowbell'],
+  ]);
+  const rows = parseCsv(csv);
+  assert.ok(rows[1][1].startsWith("'="), 'a formula is quoted into text');
+  assert.ok(rows[2][1].startsWith("'+"));
+  assert.ok(rows[3][1].startsWith("'@"));
+  assert.ok(rows[4][1].startsWith("'-"));
+  assert.equal(rows[5][1], 'Cowbell', 'an ordinary name is untouched');
+});
+
+test('CSV still round-trips commas and quotes', () => {
+  const rows = parseCsv(toCsv(['a', 'b'], [['x,1', 'y"2']]));
+  assert.deepEqual(rows[1], ['x,1', 'y"2']);
+});
