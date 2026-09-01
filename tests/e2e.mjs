@@ -285,6 +285,39 @@ check('guts points rise by set: 4 x 1 + 4 x 7 = 32',
   gutsRow.includes('32'), gutsRow.trim());
 check('the team name reaches the leaderboard', gutsRow.includes('Cowbell'), gutsRow.trim());
 
+// ---- a background refresh must not eat what you are typing ----------
+// The bug: refreshGutsContext() reloaded the boxes from the database on
+// every render, so any other scorer saving anything wiped your entry.
+await page.selectOption('#gutsSet', '4');
+await page.waitForTimeout(300);
+await page.evaluate(() => {
+  document.querySelectorAll('#gutsGrid .ans input').forEach((input, i) => {
+    input.value = String(700 + i);
+    input.dispatchEvent(new Event('input'));
+  });
+});
+const typed = await page.locator('#gutsGrid .ans input').allTextContents()
+  .then(() => page.evaluate(() => [...document.querySelectorAll('#gutsGrid .ans input')].map((i) => i.value)));
+check('typed guts answers are in the boxes', typed.join(',') === '700,701,702,703', typed.join(','));
+
+// Force the exact code path a realtime event from another scorer takes.
+await page.evaluate(() => {
+  window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+});
+await page.waitForTimeout(600);
+const after = await page.evaluate(
+  () => [...document.querySelectorAll('#gutsGrid .ans input')].map((i) => i.value));
+check('a background refresh leaves half-typed guts answers alone',
+  after.join(',') === '700,701,702,703', after.join(','));
+
+// Switching set must still load that set's stored answers.
+await page.selectOption('#gutsSet', '1');
+await page.waitForTimeout(400);
+const reloaded = await page.evaluate(
+  () => [...document.querySelectorAll('#gutsGrid .ans input')].map((i) => i.value));
+check('but switching set still loads what was saved',
+  reloaded.join(',') === '2,4,6,8', reloaded.join(','));
+
 // ---- clock ---------------------------------------------------------
 await page.click('.tab[data-tab="run"]');
 await page.waitForTimeout(250);
@@ -466,6 +499,13 @@ const width = indLines[0].split(',').length;
 check('individual CSV columns line up',
   indLines.slice(1).every((l) => l.split(',').length === width),
   `header ${width} cols`);
+check('the individual CSV ranks within each division, not across both',
+  indLines[0].startsWith('rank_in_division'), indLines[0].split(',')[0]);
+const firstOfEachDivision = ['A', 'B'].map((d) =>
+  indLines.slice(1).find((l) => l.split(',')[1] === d)?.split(',')[0]);
+check('each division starts again at rank 1',
+  firstOfEachDivision.every((r) => r === undefined || r === '1'),
+  firstOfEachDivision.join(' / '));
 
 // ---- clear test data -------------------------------------------------
 check('the wipe panel shows what would go',
@@ -489,17 +529,18 @@ await page.waitForTimeout(3000);
 await page.click('.tab[data-entry="individual"]');
 await page.click('.tab[data-tab="progress"]');
 await page.waitForTimeout(600);
-await page.screenshot({ path: 'docs/screenshot-portal.png' });
+const wantShots = process.env.SCREENSHOTS === '1';
+if (wantShots) await page.screenshot({ path: 'docs/screenshot-portal.png' });
 await page.click('.tab[data-tab="leaderboard"]');
 await page.click('.tab[data-board="combined"]');
 await page.waitForTimeout(400);
-await page.screenshot({ path: 'docs/screenshot-leaderboard.png' });
+if (wantShots) await page.screenshot({ path: 'docs/screenshot-leaderboard.png' });
 
 const shot = await ctx.newPage();
 await shot.setViewportSize({ width: 1600, height: 900 });
 await shot.goto(BOARD_URL, { waitUntil: 'networkidle' });
 await shot.waitForTimeout(1500);
-await shot.screenshot({ path: 'docs/screenshot-guts-board.png' });
+if (wantShots) await shot.screenshot({ path: 'docs/screenshot-guts-board.png' });
 await shot.close();
 
 // ---- half-updated cache ----------------------------------------------

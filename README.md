@@ -112,6 +112,18 @@ be pointed at a project without touching storage.
 
 ---
 
+## Weight
+
+A visitor downloads about 35 KB gzipped for the portal and 11 KB for the public board.
+Against GitHub Pages' 100 GB/month soft bandwidth limit, a whole contest day — every
+scorer reloading repeatedly, the board on a projector — is a rounding error, and the
+published site is well under a megabyte against a 1 GB limit. There is nothing to
+optimise here; the only real cost is Supabase egress, which is why the portal patches
+its cache instead of refetching.
+
+Test screenshots are only written when `SCREENSHOTS=1`, so ordinary runs do not push
+half a megabyte of new binaries into git history every time.
+
 ## When a deploy looks half-broken
 
 GitHub Pages caches each file separately, so a browser can end up holding a new
@@ -171,7 +183,8 @@ data. The bar reads **demo mode** in amber throughout.
 
 ```bash
 npm test               # 42 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 77 browser checks, including ten scorers at once
+npm run test:e2e       # 82 browser checks, including ten scorers at once
+SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
 Ten scorers at once is covered from both ends: the lock's mutual exclusion is unit

@@ -134,7 +134,7 @@ function buildQueue(claims, dq, gutsByTeam) {
  * on, arrows and backspace move you back, and paste spreads a whole row
  * of numbers across the grid.
  */
-function buildAnswerGrid(host, count, { offset = 0, onChange } = {}) {
+function buildAnswerGrid(host, count, { offset = 0, onChange, columns = 5 } = {}) {
   // A null host means the markup and this script disagree — usually a
   // half-updated cache. Returning empty keeps the rest of the tab alive
   // instead of throwing and leaving a panel with no controls at all.
@@ -161,8 +161,8 @@ function buildAnswerGrid(host, count, { offset = 0, onChange } = {}) {
       if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); inputs[i + 1]?.focus(); }
       if (e.key === 'ArrowRight' && input.selectionStart === input.value.length) inputs[i + 1]?.focus();
       if (e.key === 'ArrowLeft' && input.selectionStart === 0) inputs[i - 1]?.focus();
-      if (e.key === 'ArrowDown') { e.preventDefault(); inputs[i + 5]?.focus(); }
-      if (e.key === 'ArrowUp') { e.preventDefault(); inputs[i - 5]?.focus(); }
+      if (e.key === 'ArrowDown') { e.preventDefault(); inputs[i + columns]?.focus(); }
+      if (e.key === 'ArrowUp') { e.preventDefault(); inputs[i - columns]?.focus(); }
       if (e.key === 'Backspace' && input.value === '') inputs[i - 1]?.focus();
     });
     input.addEventListener('paste', (e) => {
@@ -209,6 +209,7 @@ function fillGrid(inputs, values) {
 
 let sheetInputs = [];
 let gutsInputs = [];
+let gutsLoadedRef = null;
 
 function currentIndividualId() {
   const team = Number($('#teamNo').value);
@@ -424,8 +425,16 @@ function refreshGutsContext() {
     : 'First time this team is scored, so give it a name for the public board.';
   if (team?.division && !$('#gutsDivision').value) $('#gutsDivision').value = team.division;
 
+  // Load the stored answers only when the selection actually changes.
+  // This used to run on every render, which meant another scorer saving
+  // anything at all wiped whatever you were half way through typing.
   const answers = derived.gutsByTeam.get(current.team);
-  fillGrid(gutsInputs, problems.map((p) => answers?.get(p) ?? null));
+  const ref = `${current.team}:${current.set}`;
+  const typing = document.activeElement?.closest('#gutsGrid');
+  if (ref !== gutsLoadedRef && !typing) {
+    gutsLoadedRef = ref;
+    fillGrid(gutsInputs, problems.map((p) => answers?.get(p) ?? null));
+  }
 
   const result = scoreGutsTeam(answers, derived.key, cfg);
   $('#gutsProgress').textContent =
@@ -481,6 +490,7 @@ async function saveGutsSet() {
     $('#gutsTeamName').dataset.dirty = '';
     const next = current.set < cfg.GUTS_SETS ? current.set + 1 : current.set;
     $('#gutsSet').value = String(next);
+    gutsLoadedRef = null;
     fillGrid(gutsInputs, []);
     await refresh();
     gutsInputs[0]?.focus();
@@ -819,7 +829,8 @@ function buildKeyEditor() {
 
     const grid = el('div', 'answers answers--guts');
     box.appendChild(grid);
-    keyGutsInputs.push(...buildAnswerGrid(grid, cfg.GUTS_PER_SET, { offset: problems[0] - 1 }));
+    keyGutsInputs.push(...buildAnswerGrid(grid, cfg.GUTS_PER_SET,
+      { offset: problems[0] - 1, columns: cfg.GUTS_PER_SET }));
     host.appendChild(box);
   }
 }
@@ -1038,26 +1049,43 @@ function renderDqList() {
   }
 }
 
+/**
+ * Rank inside each division, not across both. The divisions are separate
+ * contests — a single global rank column would have read as a combined
+ * placing that nobody is actually competing for.
+ */
+function rankedByDivision(rows) {
+  const out = [];
+  for (const division of [...cfg.DIVISIONS, null]) {
+    const group = division === null
+      ? rows.filter((r) => r.division !== 'A' && r.division !== 'B')
+      : rows.filter((r) => r.division === division);
+    let rank = 0;
+    for (const row of group) out.push([row, row.disqualified ? 'DQ' : String(++rank)]);
+  }
+  return out;
+}
+
 function exportIndividualCsv() {
-  const rows = derived.individuals.map((r, i) => [
-    r.disqualified ? 'DQ' : i + 1, r.division ?? '', r.individualId, r.team, r.member, r.name,
+  const rows = rankedByDivision(derived.individuals).map(([r, rank]) => [
+    rank, r.division ?? '', r.individualId, r.team, r.member, r.name,
     r.correct, r.score, r.answered, r.enteredBy, r.disqualified ? 'yes' : 'no',
     ...r.marks.map((m) => m[0].toUpperCase()),
   ]);
   downloadCsv('cowconuts-2026-individual.csv', toCsv(
-    ['rank', 'division', 'individual_id', 'team', 'member', 'name', 'correct', 'points',
-      'answered', 'entered_by', 'disqualified',
+    ['rank_in_division', 'division', 'individual_id', 'team', 'member', 'name', 'correct',
+      'points', 'answered', 'entered_by', 'disqualified',
       ...Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => `q${i + 1}`)],
     rows));
 }
 
 function exportGutsCsv() {
-  const rows = derived.guts.map((r, i) => [
-    r.disqualified ? 'DQ' : i + 1, r.division ?? '', r.team, r.name, r.correct, r.score,
+  const rows = rankedByDivision(derived.guts).map(([r, rank]) => [
+    rank, r.division ?? '', r.team, r.name, r.correct, r.score,
     r.disqualified ? 'yes' : 'no', ...r.perSet.map((s) => s.score),
   ]);
   downloadCsv('cowconuts-2026-guts.csv', toCsv(
-    ['rank', 'division', 'team', 'team_name', 'correct', 'points', 'disqualified',
+    ['rank_in_division', 'division', 'team', 'team_name', 'correct', 'points', 'disqualified',
       ...Array.from({ length: cfg.GUTS_SETS }, (_, i) => `set${i + 1}`)],
     rows));
 }
@@ -1185,7 +1213,8 @@ function wire() {
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
     setSelect.appendChild(new Option(`Set ${set}`, String(set)));
   }
-  gutsInputs = buildAnswerGrid($('#gutsGrid'), cfg.GUTS_PER_SET);
+  gutsInputs = buildAnswerGrid($('#gutsGrid'), cfg.GUTS_PER_SET,
+    { columns: cfg.GUTS_PER_SET });
 
   $('#individualId').addEventListener('input', onIdTyped);
   for (const id of ['#teamNo', '#memberLetter']) {
@@ -1211,13 +1240,18 @@ function wire() {
   $('#gutsSet').addEventListener('change', () => { refreshGutsContext(); claimCurrent(); });
   $('#gutsTeamName').addEventListener('input', () => { $('#gutsTeamName').dataset.dirty = '1'; });
   $('#saveGuts').addEventListener('click', saveGutsSet);
-  $('#clearGuts').addEventListener('click', () => { fillGrid(gutsInputs, []); });
+  $('#clearGuts').addEventListener('click', () => {
+    gutsLoadedRef = null;
+    fillGrid(gutsInputs, []);
+  });
 
   document.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      if (entryMode === 'individual') saveSheet(); else saveGutsSet();
-    }
+    if (!(e.metaKey || e.ctrlKey) || e.key !== 'Enter') return;
+    e.preventDefault();
+    // Save whatever the cursor is actually in.
+    if (document.activeElement?.closest('#tab-key')) saveKey();
+    else if (entryMode === 'individual') saveSheet();
+    else saveGutsSet();
   });
 
   buildKeyEditor();
