@@ -41,9 +41,10 @@ who lands there is told who has it, and it drops out of their queue.
 
 **Three leaderboards**, split by division: individual, guts, and a combined score.
 
-**A public guts board on its own URL** (`guts.html`) — top ten large on the left,
-everyone else scrolling on the right, a live clock, and nothing whatsoever from the
-staff portal.
+**A public guts board on its own URL** (`guts.html`) — the top ten as cards on the
+left with a seven-segment bar showing which sets each team has turned in and which
+one they are on, everyone else scrolling on the right, a live clock, and nothing
+whatsoever from the staff portal.
 
 ![The public guts board](docs/screenshot-guts-board.png)
 
@@ -191,7 +192,7 @@ data. The bar reads **demo mode** in amber throughout.
 
 ```bash
 npm test               # 44 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 83 browser checks, including ten scorers at once
+npm run test:e2e       # 84 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

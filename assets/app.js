@@ -267,7 +267,7 @@ function refreshIndividualContext() {
   const division = $('#divisionPick').value;
   const gaps = division ? (derived?.keyGapsIndividual?.[division] ?? []) : [];
   $('#answersHint').textContent = !division
-    ? `— out of ${cfg.INDIVIDUAL_PROBLEMS}, pick a division to check them against the key`
+    ? `— out of ${cfg.INDIVIDUAL_PROBLEMS}`
     : gaps.length
       ? `— ${gaps.length} of ${cfg.INDIVIDUAL_PROBLEMS} not in the Division ${division} key yet`
       : `— out of ${cfg.INDIVIDUAL_PROBLEMS}, Division ${division} key`;
@@ -395,6 +395,14 @@ function clearSheet({ keepTeam = false } = {}) {
 // ---------------------------------------------------------------------
 // Guts entry
 // ---------------------------------------------------------------------
+
+/** Clear the per-team guts fields so one team's details never carry to the next. */
+function resetGutsTeamFields() {
+  $('#gutsTeamName').dataset.dirty = '';
+  $('#gutsTeamName').value = '';
+  $('#gutsDivision').value = '';
+  gutsLoadedRef = null;
+}
 
 function currentGuts() {
   const team = Number($('#gutsTeam').value);
@@ -572,7 +580,7 @@ function renderSuggestions() {
       } else {
         $('#gutsTeam').value = String(item.team);
         $('#gutsSet').value = String(item.set);
-        $('#gutsTeamName').dataset.dirty = '';
+        resetGutsTeamFields();
         refreshGutsContext();
         claimCurrent();
         gutsInputs[0]?.focus();
@@ -769,6 +777,31 @@ function renderBoards() {
     note.textContent = 'Team guts scores, with points rising by set.';
   }
   host.appendChild(note);
+
+  // A team with no division appears in neither table. That is easy to
+  // miss at the end of a contest, so say it rather than let the team
+  // quietly go missing from the results.
+  const orphans = splitByDivision(
+    activeBoard === 'individual' ? derived.individuals
+      : activeBoard === 'guts' ? derived.guts : derived.combined,
+  ).unassigned;
+  if (orphans.length) {
+    const warn = el('div', 'banner banner--warn');
+    const d = el('div');
+    const who = activeBoard === 'individual' ? 'contestant' : 'team';
+    d.append(
+      el('b', null, orphans.length === 1
+        ? `One ${who} has no division and is not ranked below`
+        : `${orphans.length} ${who}s have no division and are not ranked below`),
+      el('span', null, activeBoard === 'individual'
+        ? 'Open each one and pick a division, then save.'
+        : `Team${orphans.length === 1 ? '' : 's'} `
+          + `${orphans.slice(0, 8).map((r) => r.team).join(', ')}`
+          + `${orphans.length > 8 ? '…' : ''} — set a division from the Guts tab.`),
+    );
+    warn.append(el('div', null, '⚠'), d);
+    host.appendChild(warn);
+  }
 
   for (const division of ['A', 'B']) {
     const heading = el('h3', null, `Division ${division}`);
@@ -1325,7 +1358,7 @@ function wire() {
   $('#clearSheet').addEventListener('click', () => clearSheet());
 
   $('#gutsTeam').addEventListener('input', () => {
-    $('#gutsTeamName').dataset.dirty = '';
+    resetGutsTeamFields();
     refreshGutsContext();
     claimCurrent();
   });

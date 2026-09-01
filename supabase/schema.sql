@@ -168,9 +168,13 @@ create table if not exists guts_public (
   score        numeric not null default 0,
   solved       int not null default 0,
   answered     int not null default 0,
+  set_mask     int not null default 0,   -- bit n = set n+1 fully entered
   disqualified boolean not null default false,
   updated_at   timestamptz not null default now()
 );
+
+-- Upgrading a database from before the board showed set progress.
+alter table guts_public add column if not exists set_mask int not null default 0;
 
 -- Recompute the public board from the private tables.
 -- Returns early while the board is frozen, which is what makes the
@@ -183,13 +187,15 @@ begin
     return;
   end if;
 
-  insert into guts_public (team, name, division, score, solved, answered, disqualified, updated_at)
+  insert into guts_public (team, name, division, score, solved, answered, set_mask,
+                           disqualified, updated_at)
   select t.team,
          t.name,
          t.division,
          coalesce(sc.score, 0),
          coalesce(sc.solved, 0),
          coalesce(sc.answered, 0),
+         coalesce(sm.set_mask, 0),
          t.disqualified,
          now()
   from teams t
@@ -204,12 +210,27 @@ begin
                             and ak.problem = ga.problem
      group by ga.team
   ) sc on sc.team = t.team
+  -- Which sets a team has fully turned in, as a bitmask: bit 0 is set 1.
+  -- A set counts as done only when all four of its answers are in, so a
+  -- team that skipped one is not shown as further along than it is.
+  left join (
+    select team, sum(bit)::int as set_mask
+      from (
+        select team, (1 << ((problem - 1) / 4)) as bit
+          from guts_answers
+         where answer is not null
+         group by team, (problem - 1) / 4
+        having count(*) = 4
+      ) per_set
+     group by team
+  ) sm on sm.team = t.team
   on conflict (team) do update set
     name = excluded.name,
     division = excluded.division,
     score = excluded.score,
     solved = excluded.solved,
     answered = excluded.answered,
+    set_mask = excluded.set_mask,
     disqualified = excluded.disqualified,
     updated_at = now()
   -- Only write rows that actually changed. Without this guard a single
@@ -219,6 +240,7 @@ begin
   where guts_public.score        is distinct from excluded.score
      or guts_public.solved       is distinct from excluded.solved
      or guts_public.answered     is distinct from excluded.answered
+     or guts_public.set_mask     is distinct from excluded.set_mask
      or guts_public.name         is distinct from excluded.name
      or guts_public.division     is distinct from excluded.division
      or guts_public.disqualified is distinct from excluded.disqualified;

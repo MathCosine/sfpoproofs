@@ -488,6 +488,29 @@ check('the portal is still responsive with ten tabs open',
 
 await Promise.all(crew.map((tab) => tab.close()));
 
+// ---- a team with no division must not vanish silently ---------------
+await page.click('.tab[data-entry="guts"]');
+await page.fill('#gutsTeam', '91');
+await page.selectOption('#gutsSet', '1');
+await page.fill('#gutsTeamName', 'No Division Yet');
+await page.waitForTimeout(200);
+await page.evaluate(() => {
+  document.querySelectorAll('#gutsGrid .ans input').forEach((input, i) => {
+    input.value = String((i + 1) * 2);
+    input.dispatchEvent(new Event('input'));
+  });
+});
+await page.click('#saveGuts');
+await page.waitForTimeout(700);
+await page.click('.tab[data-tab="leaderboard"]');
+await page.click('.tab[data-board="guts"]');
+await page.waitForTimeout(400);
+const orphanWarn = await page.textContent('#boards .banner--warn').catch(() => '');
+check('a team with no division is called out rather than dropped',
+  orphanWarn.includes('One team has no division') && orphanWarn.includes('91'),
+  orphanWarn.trim().slice(0, 80));
+await page.click('.tab[data-entry="individual"]');
+
 // ---- disqualification ----------------------------------------------
 await page.click('.tab[data-tab="setup"]');
 await page.fill('#dqTeam', '12');

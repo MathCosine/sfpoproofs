@@ -1,275 +1,352 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cowconuts 2026 — Guts Round</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 <style>
 /* =====================================================================
-   Public guts board. Built for a projector at the back of a room:
-   one screen, no scrolling, no chrome, nothing from the staff portal.
-   Deliberately single-theme — a room's lighting is not the viewer's
-   OS setting — so every colour is stated outright.
+   Cowconuts guts board.
+
+   Light, quiet, and built to be read from the back of a room. The work
+   is done by type weight, alignment and a single hairline — not by
+   borders and drop shadows on every element. Placings are marked with a
+   thin metal rule and a coloured numeral rather than a filled block, so
+   first place reads as first without the row shouting.
+
+   Single-theme on purpose: a hall's lighting is not the viewer's OS
+   setting, so every colour is stated outright.
    ===================================================================== */
 :root{
-  --ink:#0b0d12; --paper:#0b0d12; --card:#151922; --line:#000;
-  --text:#f2f5fa; --muted:#8b97ab;
-  --lime:#7be495; --cyan:#5bc8f5; --amber:#ffd84d; --violet:#b98cff; --red:#ff6b6b;
-  --gold:#ffd84d; --silver:#d8dee9; --bronze:#e0955c;
-  --font:"Space Grotesk",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  --paper:#fbfaf7;
+  --card:#ffffff;
+  --ink:#16181d;
+  --ink-soft:#4d525c;
+  --ink-faint:#8b909b;
+  --rule:#e7e4dc;
+  --rule-soft:#f0ede6;
+  --accent:#1f6f5c;          /* one accent, used sparingly */
+  --gold:#b08423;
+  --silver:#7c828c;
+  --bronze:#a26a41;
+  --live:#1f9d5b;
+  --stop:#b3402f;
+  --sans:"Instrument Sans",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;overflow:hidden}
 body{
-  background:var(--paper); color:var(--text); font-family:var(--font);
-  background-image:radial-gradient(rgba(255,255,255,.05) 1.4px,transparent 1.4px);
-  background-size:26px 26px;
-  -webkit-font-smoothing:antialiased;
+  background:var(--paper); color:var(--ink); font-family:var(--sans);
+  -webkit-font-smoothing:antialiased; font-feature-settings:"tnum" 1;
 }
-.wrap{height:100%;display:flex;flex-direction:column;padding:20px 22px 16px;gap:16px}
+.wrap{height:100%;display:flex;flex-direction:column;padding:26px 30px 18px;gap:20px}
 
-/* ---------- header ---------- */
-header{display:flex;align-items:center;gap:20px;flex:none}
-.title{font-size:clamp(20px,2.4vw,32px);font-weight:700;letter-spacing:-.02em;margin:0}
-.title span{color:var(--muted);font-weight:600;font-size:.6em;display:block;letter-spacing:.1em;text-transform:uppercase}
-.clock{
-  margin-left:auto;display:flex;align-items:center;gap:14px;
-  padding:8px 22px;border:4px solid var(--line);border-radius:18px;
-  background:var(--lime);color:#0b0d12;box-shadow:7px 7px 0 var(--line);
+/* ---------- masthead ---------- */
+header{display:flex;align-items:flex-end;gap:24px;flex:none;
+  padding-bottom:16px;border-bottom:1px solid var(--rule)}
+.brand{display:flex;flex-direction:column;gap:3px}
+.brand__contest{font-size:12px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--ink-faint)}
+.brand__round{font-size:clamp(24px,2.6vw,38px);font-weight:700;letter-spacing:-.025em;line-height:1}
+
+.state{margin-left:auto;display:flex;align-items:flex-end;gap:26px}
+.stat{display:flex;flex-direction:column;align-items:flex-end;gap:3px}
+.stat__label{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--ink-faint)}
+.stat__value{font-family:var(--mono);font-size:clamp(15px,1.5vw,20px);font-weight:500;line-height:1}
+.clock .stat__value{font-size:clamp(34px,4.4vw,56px);font-weight:500;letter-spacing:-.02em;
+  line-height:.9}
+.clock--stopped .stat__value{color:var(--ink-faint)}
+.clock--out .stat__value{color:var(--stop)}
+.frozen{
+  align-self:center;padding:5px 12px;border:1px solid var(--gold);border-radius:4px;
+  color:var(--gold);font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;
 }
-.clock--stopped{background:#3a4152;color:var(--text)}
-.clock--frozen{background:var(--violet);color:#0b0d12}
-.clock--out{background:var(--red);color:#0b0d12}
-.clock__label{font-size:11px;font-weight:800;letter-spacing:.16em;text-transform:uppercase;opacity:.75}
-.clock__time{font-family:var(--mono);font-size:clamp(30px,4.6vw,58px);font-weight:700;
-  line-height:1;font-variant-numeric:tabular-nums}
-.frozen-flag{
-  padding:7px 16px;border:4px solid var(--line);border-radius:14px;
-  background:var(--violet);color:#0b0d12;font-weight:800;letter-spacing:.08em;
-  text-transform:uppercase;font-size:13px;box-shadow:5px 5px 0 var(--line);
-}
 
-/* ---------- body ---------- */
-.cols{flex:1;display:grid;grid-template-columns:1.15fr .85fr;gap:18px;min-height:0}
-@media (max-width:900px){.cols{grid-template-columns:1fr}.rest{display:none}}
+/* ---------- columns ---------- */
+.cols{flex:1;display:grid;grid-template-columns:1.5fr 1fr;gap:34px;min-height:0}
+@media (max-width:980px){.cols{grid-template-columns:1fr}.rest{display:none}}
+.colhead{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;
+  font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint)}
+.colhead .count{margin-left:auto;font-family:var(--mono);font-weight:400}
 
-.panelhead{
-  display:flex;align-items:baseline;gap:10px;margin-bottom:10px;
-  font-size:12px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);
-}
-.panelhead b{color:var(--text)}
-
-.top{display:flex;flex-direction:column;min-height:0}
-.toplist{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0}
-.row{
-  display:flex;align-items:center;gap:14px;
-  padding:10px 16px;border:4px solid var(--line);border-radius:14px;
-  background:var(--card);box-shadow:5px 5px 0 var(--line);
+/* ---------- leader cards ---------- */
+.lead{display:flex;flex-direction:column;min-height:0}
+.leadlist{display:flex;flex-direction:column;gap:7px;flex:1;min-height:0}
+.card{
+  display:grid;
+  grid-template-columns:auto minmax(0,1fr) auto auto;
+  align-items:center;
+  gap:18px;
+  background:var(--card);
+  border:1px solid var(--rule);
+  border-left:3px solid transparent;
+  border-radius:6px;
+  padding:0 18px;
   flex:1;min-height:0;
 }
-.row--1{background:var(--gold);color:#0b0d12}
-.row--2{background:var(--silver);color:#0b0d12}
-.row--3{background:var(--bronze);color:#0b0d12}
-.rank{font-family:var(--mono);font-weight:800;font-size:clamp(18px,2.3vw,30px);min-width:1.6em;text-align:right}
-.who{flex:1;min-width:0}
-.name{font-weight:700;font-size:clamp(15px,1.9vw,26px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.meta{font-size:clamp(10px,1vw,13px);font-weight:600;opacity:.65;font-family:var(--mono)}
-.score{font-family:var(--mono);font-weight:800;font-size:clamp(20px,2.6vw,36px);font-variant-numeric:tabular-nums}
+.card--1{border-left-color:var(--gold)}
+.card--2{border-left-color:var(--silver)}
+.card--3{border-left-color:var(--bronze)}
+.place{font-family:var(--mono);font-size:clamp(17px,1.9vw,26px);font-weight:400;
+  color:var(--ink-faint);min-width:1.4em;text-align:right}
+.card--1 .place{color:var(--gold);font-weight:500}
+.card--2 .place{color:var(--silver);font-weight:500}
+.card--3 .place{color:var(--bronze);font-weight:500}
 
-/* ---------- scrolling remainder ---------- */
+.who{min-width:0;display:flex;flex-direction:column;gap:2px}
+.name{font-size:clamp(15px,1.7vw,23px);font-weight:600;letter-spacing:-.015em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sub{display:flex;align-items:center;gap:8px;font-size:clamp(10px,.95vw,13px);color:var(--ink-faint)}
+.sub .num{font-family:var(--mono)}
+.div{font-weight:600;letter-spacing:.06em;color:var(--ink-soft)}
+
+/* seven segments, one per guts set */
+.sets{display:flex;align-items:center;gap:8px}
+.segs{display:flex;gap:3px}
+.seg{width:9px;height:16px;border-radius:1.5px;background:var(--rule)}
+.seg--done{background:var(--accent)}
+.seg--now{background:transparent;box-shadow:inset 0 0 0 1.5px var(--accent)}
+.onset{font-family:var(--mono);font-size:clamp(10px,.95vw,12px);color:var(--ink-soft);
+  white-space:nowrap;min-width:3.2em}
+
+.score{font-family:var(--mono);font-size:clamp(21px,2.5vw,34px);font-weight:500;
+  letter-spacing:-.02em;text-align:right;min-width:2.2em}
+
+/* ---------- the rest ---------- */
 .rest{display:flex;flex-direction:column;min-height:0}
-.restview{
-  flex:1;min-height:0;overflow:hidden;position:relative;
-  border:4px solid var(--line);border-radius:14px;background:var(--card);
-  box-shadow:5px 5px 0 var(--line);
-}
-.resttrack{position:absolute;inset:0;padding:10px 14px;display:flex;flex-direction:column;gap:2px}
-.restrow{
-  display:flex;align-items:center;gap:12px;padding:7px 6px;
-  border-bottom:2px solid rgba(255,255,255,.07);font-size:clamp(12px,1.25vw,17px);
-}
-.restrow:last-child{border-bottom:0}
-.restrow .rank{font-size:1em;min-width:2.2em;opacity:.6}
-.restrow .name{font-size:1em;font-weight:600}
-.restrow .score{font-size:1.05em}
-.restrow--dq{opacity:.42;text-decoration:line-through}
+.restview{flex:1;min-height:0;overflow:hidden;position:relative;
+  border-top:1px solid var(--rule)}
+.resttrack{position:absolute;inset:0}
+.rrow{display:grid;grid-template-columns:2.4em minmax(0,1fr) auto auto;
+  align-items:center;gap:12px;padding:9px 2px;border-bottom:1px solid var(--rule-soft);
+  font-size:clamp(12px,1.15vw,15px)}
+.rrow .place{font-size:1em;min-width:0}
+.rrow .name{font-size:1em;font-weight:500}
+.rrow .onset{font-size:.85em;color:var(--ink-faint);min-width:0}
+.rrow .score{font-size:1.05em;font-weight:500;min-width:0}
+.rrow--dq{color:var(--ink-faint)}
+.rrow--dq .name{text-decoration:line-through}
 
-.empty{display:grid;place-items:center;height:100%;color:var(--muted);font-weight:700;padding:30px;text-align:center}
-footer{flex:none;display:flex;align-items:center;gap:12px;font-size:11px;font-weight:700;
-  letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
-.dot{width:9px;height:9px;border-radius:50%;background:var(--lime)}
-.dot--down{background:var(--red)}
+.empty{display:grid;place-items:center;height:100%;color:var(--ink-faint);
+  font-size:14px;padding:30px;text-align:center}
+
+footer{flex:none;display:flex;align-items:center;gap:9px;padding-top:12px;
+  border-top:1px solid var(--rule);
+  font-size:11px;font-weight:500;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint)}
+.pulse{width:6px;height:6px;border-radius:50%;background:var(--live)}
+.pulse--down{background:var(--stop)}
 footer .spacer{margin-left:auto}
 @media (prefers-reduced-motion:reduce){.resttrack{transition:none!important}}
 </style>
 </head>
-<body data-app-version="2026.08.31.1">
+<body data-app-version="2026.08.31.2">
 <div class="wrap">
   <header>
-    <h1 class="title" id="title">Guts Round<span id="subtitle">Cowconuts 2026</span></h1>
-    <div class="frozen-flag" id="frozenFlag" hidden>Standings frozen</div>
-    <div class="clock" id="clock">
-      <span class="clock__label">Time left</span>
-      <span class="clock__time" id="clockTime">--:--</span>
+    <div class="brand">
+      <span class="brand__contest" id="contestName">Cowconuts 2026</span>
+      <h1 class="brand__round">Guts Round</h1>
+    </div>
+    <div class="state">
+      <div class="frozen" id="frozenFlag" hidden>Frozen</div>
+      <div class="stat"><span class="stat__label">Teams</span>
+        <span class="stat__value" id="teamCount">—</span></div>
+      <div class="stat"><span class="stat__label">Leader</span>
+        <span class="stat__value" id="leadScore">—</span></div>
+      <div class="stat clock" id="clock"><span class="stat__label">Time left</span>
+        <span class="stat__value" id="clockTime">--:--</span></div>
     </div>
   </header>
 
   <div class="cols">
-    <section class="top">
-      <div class="panelhead"><b>Top 10</b></div>
-      <div class="toplist" id="topList"><div class="empty">Waiting for the first scores…</div></div>
+    <section class="lead">
+      <div class="colhead"><span>Leaders</span><span class="count" id="leadCount"></span></div>
+      <div class="leadlist" id="leadList">
+        <div class="empty">Waiting for the first set to be scored.</div>
+      </div>
     </section>
     <section class="rest">
-      <div class="panelhead"><b>Everyone else</b><span id="restCount"></span></div>
+      <div class="colhead"><span>Standings</span><span class="count" id="restCount"></span></div>
       <div class="restview"><div class="resttrack" id="restTrack"></div></div>
     </section>
   </div>
 
   <footer>
-    <span class="dot" id="liveDot"></span>
-    <span id="liveLabel">live</span>
+    <span class="pulse" id="pulse"></span><span id="liveLabel">Live</span>
     <span class="spacer"></span>
-    <span id="teamCount"></span>
+    <span id="updated"></span>
   </footer>
 </div>
 
 <script type="module">
-import { resolvedConfig } from './assets/config.js';
-import { createPublicStore } from './assets/store.js';
-import { gutsRemaining, formatClock } from './assets/scoring.js';
+import { resolvedConfig } from './assets/config.js?v=2026.08.31.2';
+import { createPublicStore } from './assets/store.js?v=2026.08.31.2';
+import { gutsRemaining, formatClock } from './assets/scoring.js?v=2026.08.31.2';
 
 const cfg = resolvedConfig(location.search);
 const $ = (s) => document.querySelector(s);
+const SETS = cfg.GUTS_SETS;
 
 let board = [];
 let state = null;
-let live = false;
 
-const demo = new URLSearchParams(location.search).has('demo');
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text != null) n.textContent = text;
+  return n;
+};
+
+/** Completed sets from the bitmask, and the one a team is working on. */
+function progress(mask) {
+  const done = [];
+  for (let i = 0; i < SETS; i += 1) if (mask & (1 << i)) done.push(i + 1);
+  const next = done.length >= SETS ? null : (() => {
+    for (let i = 0; i < SETS; i += 1) if (!(mask & (1 << i))) return i + 1;
+    return null;
+  })();
+  return { done, count: done.length, next };
+}
+
+function segments(mask) {
+  const { next } = progress(mask);
+  const wrap = el('div', 'segs');
+  for (let i = 1; i <= SETS; i += 1) {
+    let cls = 'seg';
+    if (mask & (1 << (i - 1))) cls += ' seg--done';
+    else if (i === next) cls += ' seg--now';
+    wrap.appendChild(el('span', cls));
+  }
+  return wrap;
+}
+
+function setLabel(mask) {
+  const { count, next } = progress(mask);
+  if (next === null) return 'All 7 in';
+  if (count === 0) return 'Set 1';
+  return `Set ${next}`;
+}
 
 function render() {
-  const ranked = [...board]
-    .sort((a, b) => Number(a.disqualified) - Number(b.disqualified)
+  const ranked = [...board].sort(
+    (a, b) => Number(a.disqualified) - Number(b.disqualified)
       || Number(b.score) - Number(a.score) || a.team - b.team);
-  const shown = ranked.filter((r) => !r.disqualified);
+  const live = ranked.filter((r) => !r.disqualified);
 
-  $('#subtitle').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
-  $('#teamCount').textContent = shown.length ? `${shown.length} teams` : '';
+  $('#contestName').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
+  $('#teamCount').textContent = live.length || '—';
+  $('#leadScore').textContent = live.length ? Number(live[0].score) : '—';
+  $('#leadCount').textContent = live.length ? `Top ${Math.min(10, live.length)}` : '';
+  $('#frozenFlag').hidden = !state?.guts_frozen;
 
-  // ---- top 10 -------------------------------------------------------
-  const top = $('#topList');
-  top.replaceChildren();
-  if (!shown.length) {
-    const e = document.createElement('div');
-    e.className = 'empty';
-    e.textContent = 'Waiting for the first scores…';
-    top.appendChild(e);
+  // ---- leaders: a card each, with their set progress ----------------
+  const lead = $('#leadList');
+  lead.replaceChildren();
+  if (!live.length) {
+    lead.appendChild(el('div', 'empty', 'Waiting for the first set to be scored.'));
   }
-  shown.slice(0, 10).forEach((row, i) => {
-    const node = document.createElement('div');
-    node.className = `row${i < 3 ? ` row--${i + 1}` : ''}`;
-    // Built rather than assigned as markup: nothing here should ever be
-    // able to become HTML, and team names come from people.
-    const span = (cls, text) => {
-      const n = document.createElement('span');
-      n.className = cls;
-      if (text != null) n.textContent = text;
-      return n;
-    };
-    const who = span('who');
-    who.append(span('name'), span('meta'));
-    node.append(span('rank', String(i + 1)), who, span('score'));
-    node.querySelector('.name').textContent = row.name || `Team ${row.team}`;
-    node.querySelector('.meta').textContent =
-      `#${row.team}${row.division ? ` · DIV ${row.division}` : ''} · ${row.solved} correct`;
-    node.querySelector('.score').textContent = Number(row.score);
-    top.appendChild(node);
+  live.slice(0, 10).forEach((row, i) => {
+    const card = el('div', `card${i < 3 ? ` card--${i + 1}` : ''}`);
+
+    const who = el('div', 'who');
+    who.appendChild(el('div', 'name', row.name || `Team ${row.team}`));
+    const sub = el('div', 'sub');
+    sub.append(el('span', 'num', `#${row.team}`));
+    if (row.division) sub.append(el('span', 'div', `Div ${row.division}`));
+    sub.append(el('span', 'num', `${row.solved} correct`));
+    who.appendChild(sub);
+
+    const sets = el('div', 'sets');
+    sets.append(segments(row.set_mask ?? 0), el('span', 'onset', setLabel(row.set_mask ?? 0)));
+
+    card.append(el('div', 'place', String(i + 1)), who, sets,
+      el('div', 'score', String(Number(row.score))));
+    lead.appendChild(card);
   });
 
-  // ---- everyone else ------------------------------------------------
+  // ---- everyone else: compact rows, set as a number -----------------
   const rest = ranked.slice(10);
   $('#restCount').textContent = rest.length ? `${rest.length} more` : '';
   const track = $('#restTrack');
   track.replaceChildren();
   if (!rest.length) {
-    const e = document.createElement('div');
-    e.className = 'empty';
-    e.textContent = 'Every team is in the top ten.';
-    track.appendChild(e);
+    track.appendChild(el('div', 'empty', 'Every team is in the top ten.'));
   }
   for (const row of rest) {
-    const node = document.createElement('div');
-    node.className = `restrow${row.disqualified ? ' restrow--dq' : ''}`;
-    const cell = (cls) => {
-      const n = document.createElement('span');
-      n.className = cls;
-      return n;
-    };
-    const holder = cell('who');
-    holder.append(cell('name'));
-    node.append(cell('rank'), holder, cell('score'));
-    const place = row.disqualified ? 'DQ' : String(shown.indexOf(row) + 1);
-    node.querySelector('.rank').textContent = place;
-    node.querySelector('.name').textContent = row.name || `Team ${row.team}`;
-    node.querySelector('.score').textContent = Number(row.score);
-    track.appendChild(node);
+    const place = row.disqualified ? 'DQ' : String(live.indexOf(row) + 1);
+    const line = el('div', `rrow${row.disqualified ? ' rrow--dq' : ''}`);
+    line.append(
+      el('div', 'place', place),
+      el('div', 'name', row.name || `Team ${row.team}`),
+      el('div', 'onset', row.disqualified ? '' : setLabel(row.set_mask ?? 0)),
+      el('div', 'score', String(Number(row.score))),
+    );
+    track.appendChild(line);
   }
   startScroll();
-
-  // ---- clock --------------------------------------------------------
-  const frozen = Boolean(state?.guts_frozen);
-  $('#frozenFlag').hidden = !frozen;
   renderClock();
 }
 
 /**
- * The overflow list creeps upward and wraps around, so a room can read
- * every team without anyone touching the machine. It only scrolls when
- * there is genuinely more than fits.
+ * The overflow column creeps upward and wraps, so a room can read every
+ * team without anyone touching the machine. It only moves when there is
+ * genuinely more than fits.
  */
 let scrollTimer = null;
 function startScroll() {
   clearInterval(scrollTimer);
   const view = $('.restview');
   const track = $('#restTrack');
-  const overflow = track.scrollHeight - view.clientHeight;
   track.style.transform = 'translateY(0)';
+  const overflow = track.scrollHeight - view.clientHeight;
   if (overflow <= 8) return;
-  let y = 0;
-  const step = 0.4;
+  let y = -10;
   scrollTimer = setInterval(() => {
-    y += step;
-    if (y > overflow + 40) y = -8;
+    y += 0.35;
+    if (y > overflow + 30) y = -10;
     track.style.transform = `translateY(${-Math.max(0, y)}px)`;
   }, 40);
 }
 
 function renderClock() {
+  const clock = $('#clock');
+  clock.className = 'stat clock';
+  if (!state) {
+    // Nothing loaded yet. Showing a red 00:00 before the first fetch
+    // reads as "time is up" to a room that can only see the screen.
+    $('#clockTime').textContent = '--:--';
+    clock.classList.add('clock--stopped');
+    return;
+  }
   const remaining = gutsRemaining(state);
   $('#clockTime').textContent = formatClock(remaining);
-  const clock = $('#clock');
-  clock.className = 'clock';
-  if (state?.guts_frozen) clock.classList.add('clock--frozen');
-  else if (remaining <= 0) clock.classList.add('clock--out');
-  else if (!state?.guts_running) clock.classList.add('clock--stopped');
+  if (remaining <= 0) clock.classList.add('clock--out');
+  else if (!state.guts_running) clock.classList.add('clock--stopped');
 }
 setInterval(renderClock, 1000);
 
 function setLive(ok) {
-  live = ok;
-  $('#liveDot').className = ok ? 'dot' : 'dot dot--down';
-  $('#liveLabel').textContent = ok ? (demo ? 'demo' : 'live') : 'reconnecting…';
+  $('#pulse').className = ok ? 'pulse' : 'pulse pulse--down';
+  $('#liveLabel').textContent = ok ? 'Live' : 'Reconnecting';
 }
 
+const stamp = () => {
+  $('#updated').textContent = `Updated ${new Date().toLocaleTimeString([], {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })}`;
+};
+
 // ---------------------------------------------------------------------
+const demo = new URLSearchParams(location.search).has('demo');
+
 if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
   // Mirrors what the portal writes locally, so the board can be checked
-  // on a projector before the contest without a database.
+  // on the projector before the contest without a database.
   const read = () => {
     try {
       const db = JSON.parse(localStorage.getItem('contest-demo-db') ?? '{}');
@@ -282,17 +359,25 @@ if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
       }
       board = (db.teams ?? []).map((t) => {
         let score = 0; let solved = 0;
+        const perSet = new Map();
         for (const a of byTeam.get(Number(t.team)) ?? []) {
           const k = key.get(Number(a.problem));
+          if (a.answer != null) {
+            const set = Math.ceil(Number(a.problem) / cfg.GUTS_PER_SET);
+            perSet.set(set, (perSet.get(set) ?? 0) + 1);
+          }
           if (k?.answer != null && a.answer === k.answer) { score += Number(k.points); solved += 1; }
         }
+        let mask = 0;
+        for (const [set, n] of perSet) if (n === cfg.GUTS_PER_SET) mask |= 1 << (set - 1);
         return {
           team: Number(t.team), name: t.name, division: t.division,
-          score, solved, disqualified: Boolean(t.disqualified),
+          score, solved, set_mask: mask, disqualified: Boolean(t.disqualified),
         };
       });
       state = db.state ?? null;
     } catch { board = []; }
+    stamp();
     render();
   };
   setLive(true);
@@ -308,6 +393,7 @@ if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
       board = next.board;
       state = next.state;
       setLive(true);
+      stamp();
       render();
     } catch {
       setLive(false);

@@ -205,15 +205,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .layout {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(390px, 460px) minmax(0, 1fr);
+  /* The entry column carries a 20-box grid, so it earns more room than it
+     had; the side panel stays the wider of the two. */
+  grid-template-columns: minmax(470px, 545px) minmax(0, 1fr);
   gap: 18px;
   padding: 18px;
   align-items: start;
 }
-@media (max-width: 1080px) { .layout { grid-template-columns: 1fr; } }
+@media (max-width: 1180px) { .layout { grid-template-columns: 1fr; } }
 
 .console { display: flex; flex-direction: column; gap: 16px; position: sticky; top: 76px; }
-@media (max-width: 1080px) { .console { position: static; } }
+@media (max-width: 1180px) { .console { position: static; } }
 
 .panel { padding: 18px; }
 .panel__head {
