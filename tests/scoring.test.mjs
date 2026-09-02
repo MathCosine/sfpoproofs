@@ -558,3 +558,56 @@ test('CSV still round-trips commas and quotes', () => {
   const rows = parseCsv(toCsv(['a', 'b'], [['x,1', 'y"2']]));
   assert.deepEqual(rows[1], ['x,1', 'y"2']);
 });
+
+// ---------------------------------------------------------------------
+// Reading a whole table, not the first page of it
+// ---------------------------------------------------------------------
+
+import { fetchAllPages } from '../assets/store.js';
+
+/** A stand-in that behaves like Supabase: it will not return more than cap rows. */
+function pagedTable(total, cap = 1000) {
+  const rows = Array.from({ length: total }, (_, i) => ({ id: i }));
+  let calls = 0;
+  const makeQuery = () => ({
+    range(from, to) {
+      calls += 1;
+      const size = Math.min(to - from + 1, cap);
+      return Promise.resolve({ data: rows.slice(from, from + size), error: null });
+    },
+  });
+  return { makeQuery, calls: () => calls };
+}
+
+test('a table larger than one page is read in full', () => {
+  // guts_answers is 2800 rows at a hundred teams; a plain select would
+  // have returned 1000 of them with no error and no way to notice.
+  const t = pagedTable(2800);
+  return fetchAllPages(t.makeQuery).then((rows) => {
+    assert.equal(rows.length, 2800);
+    assert.equal(t.calls(), 3, 'three pages of a thousand');
+    assert.deepEqual(rows.at(-1), { id: 2799 });
+  });
+});
+
+test('a short table is read in one request', async () => {
+  const t = pagedTable(68);
+  assert.equal((await fetchAllPages(t.makeQuery)).length, 68);
+  assert.equal(t.calls(), 1);
+});
+
+test('an exactly-full page still checks for a next one', async () => {
+  const t = pagedTable(1000);
+  assert.equal((await fetchAllPages(t.makeQuery)).length, 1000);
+  assert.equal(t.calls(), 2, 'a full page is indistinguishable from a truncated one');
+});
+
+test('an empty table is fine', async () => {
+  const t = pagedTable(0);
+  assert.deepEqual(await fetchAllPages(t.makeQuery), []);
+});
+
+test('a read error is raised, not silently returned short', async () => {
+  const failing = () => ({ range: () => Promise.resolve({ data: null, error: { message: 'boom' } }) });
+  await assert.rejects(() => fetchAllPages(failing), /boom/);
+});

@@ -65,6 +65,29 @@ export function applyPatch(cache, table, payload) {
 
 // ---------------------------------------------------------------------
 const RESYNC_MS = 5 * 60 * 1000;
+const PAGE_SIZE = 1000;
+
+/**
+ * Read a whole table, not the first page of it.
+ *
+ * Supabase caps a request at its project "Max rows" setting, 1000 by
+ * default, and returns the first page with no error and no indication
+ * that anything is missing. guts_answers reaches 2800 rows at a hundred
+ * teams, so a plain select would silently drop two thirds of the guts
+ * round and show teams as having entered nothing.
+ *
+ * `makeQuery` has to build a fresh query each call: a PostgREST builder
+ * cannot be reused once it has been awaited.
+ */
+export async function fetchAllPages(makeQuery, pageSize = PAGE_SIZE) {
+  const rows = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await makeQuery().range(from, from + pageSize - 1);
+    if (error) throw new Error(error.message);
+    if (data?.length) rows.push(...data);
+    if (!data || data.length < pageSize) return rows;
+  }
+}
 
 export function supabaseBackend(cfg, injectedClient = null) {
   let client = null;
@@ -102,29 +125,29 @@ export function supabaseBackend(cfg, injectedClient = null) {
 
     async load() {
       const c = await getClient();
+      const all = (table) => fetchAllPages(() => c.from(table).select('*'));
       const [settings, state, key, teams, contestants, gutsAnswers, claims, graders] =
         await Promise.all([
           c.from('app_settings').select('*').eq('id', 1).maybeSingle(),
           c.from('contest_state').select('*').eq('id', 1).maybeSingle(),
-          c.from('answer_key').select('*'),
-          c.from('teams').select('*'),
-          c.from('contestants').select('*'),
-          c.from('guts_answers').select('*'),
-          c.from('claims').select('*'),
-          c.from('graders').select('*'),
+          all('answer_key'),
+          all('teams'),
+          all('contestants'),
+          all('guts_answers'),
+          all('claims'),
+          all('graders'),
         ]);
-      const bad = [settings, state, key, teams, contestants, gutsAnswers, claims, graders]
-        .find((r) => r.error);
+      const bad = [settings, state].find((r) => r.error);
       if (bad) throw new Error(bad.error.message);
       cache = {
         settings: settings.data ?? null,
         state: state.data ?? null,
-        key: key.data ?? [],
-        teams: teams.data ?? [],
-        contestants: contestants.data ?? [],
-        gutsAnswers: gutsAnswers.data ?? [],
-        claims: claims.data ?? [],
-        graders: graders.data ?? [],
+        key,
+        teams,
+        contestants,
+        gutsAnswers,
+        claims,
+        graders,
       };
       return cache;
     },
@@ -486,11 +509,10 @@ export function createPublicStore(cfg) {
     async load() {
       const c = await getClient();
       const [board, state] = await Promise.all([
-        c.from('guts_public').select('*'),
+        fetchAllPages(() => c.from('guts_public').select('*')),
         c.from('contest_state').select('*').eq('id', 1).maybeSingle(),
       ]);
-      if (board.error) throw new Error(board.error.message);
-      return { board: board.data ?? [], state: state.data ?? null };
+      return { board, state: state.data ?? null };
     },
     /**
      * Realtime when it is available, polling when it is not. Realtime is

@@ -418,6 +418,77 @@ check('opening a sheet someone else holds warns you',
   (await page.textContent('#individualBanner')).trim().slice(0, 70));
 await page2.close();
 
+// ---- the purple "someone is on this" indicator ----------------------
+// What a scorer relies on to know what everyone else has open.
+{
+  const other = await ctx.newPage();
+  watch(other, 'purple');
+  await other.addInitScript(() => {
+    localStorage.setItem('contest-grader-id', 'grader-purple');
+    localStorage.setItem('contest-grader-name', 'Mei Sato');
+  });
+  await other.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await other.waitForSelector('#app:not(.hidden)');
+
+  // Mei opens an individual sheet.
+  await other.fill('#individualId', '12B');
+  await other.waitForTimeout(900);
+  await page.click('.tab[data-tab="progress"]');
+  await page.waitForTimeout(900);
+  const chip = page.locator('.person', { hasText: '12B' }).first();
+  check('another scorer opening a sheet turns that contestant purple',
+    (await chip.getAttribute('class')).includes('person--claimed'),
+    await chip.getAttribute('class'));
+  check('and the chip says who has it',
+    (await chip.getAttribute('title')).includes('Mei Sato'), await chip.getAttribute('title'));
+
+  // Mei moves to a guts set instead.
+  await other.click('.tab[data-entry="guts"]');
+  await other.fill('#gutsTeam', '12');
+  await other.selectOption('#gutsSet', '3');
+  await other.waitForTimeout(900);
+  await page.waitForTimeout(900);
+  const pip = page.locator('.rosterteam', { hasText: 'TEAM 12' }).locator('.setpip').nth(2);
+  check('and a guts set she opens goes purple too',
+    (await pip.getAttribute('class')).includes('setpip--claimed'),
+    await pip.getAttribute('class'));
+
+  check('the released sheet stops being purple once she moves on',
+    !(await page.locator('.person', { hasText: '12B' }).first()
+      .getAttribute('class')).includes('person--claimed'));
+
+  await page.click('.tab[data-tab="activity"]').catch(() => {});
+  await other.close();
+  await page.waitForTimeout(900);
+}
+
+// ---- pasting a key in from a spreadsheet ------------------------------
+await page.click('.tab[data-tab="key"]');
+await page.click('.tab[data-keydiv="A"]');
+await page.waitForTimeout(200);
+await page.evaluate(() => {
+  const first = document.querySelectorAll('#keyIndividualA .ans input')[0];
+  first.focus();
+  const data = new DataTransfer();
+  data.setData('text', '11\t12\t13\t14\t15');   // a row copied out of a spreadsheet
+  first.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true }));
+});
+await page.waitForTimeout(250);
+const pasted = await page.evaluate(() => [...document.querySelectorAll('#keyIndividualA .ans input')]
+  .slice(0, 5).map((i) => i.value));
+check('a tab-separated row pastes across the key boxes',
+  pasted.join(',') === '11,12,13,14,15', pasted.join(','));
+// Put the real key back.
+await page.evaluate(() => {
+  document.querySelectorAll('#keyIndividualA .ans input').forEach((input, i) => {
+    input.value = String(i + 1);
+    input.dispatchEvent(new Event('input'));
+  });
+});
+await page.click('#saveKey');
+await page.waitForTimeout(500);
+await page.click('.tab[data-entry="individual"]');
+
 // ---- ten scorers at once --------------------------------------------
 // The lock's mutual exclusion is unit-tested against the Postgres
 // contract; this is the other half — ten real tabs, ten identities, all
@@ -486,6 +557,58 @@ await page.waitForTimeout(600);
 check('the portal is still responsive with ten tabs open',
   (await page.locator('.person').count()) > 0);
 
+// Now the shape a real contest takes: some scorers on answer sheets and
+// some on guts sets, all saving in the same moment.
+await Promise.all(crew.map(async (tab, i) => {
+  if (i % 2 === 0) {
+    await tab.click('.tab[data-entry="individual"]');
+    await tab.fill('#individualId', `${60 + i}B`);
+    await tab.selectOption('#divisionPick', i % 4 === 0 ? 'A' : 'B');
+    await tab.evaluate(() => {
+      document.querySelectorAll('#answerGrid .ans input').forEach((input, k) => {
+        input.value = String(k + 1);
+        input.dispatchEvent(new Event('input'));
+      });
+    });
+  } else {
+    await tab.click('.tab[data-entry="guts"]');
+    await tab.fill('#gutsTeam', String(60 + i));
+    await tab.selectOption('#gutsSet', String((i % 7) + 1));
+    await tab.selectOption('#gutsDivision', i % 4 === 1 ? 'A' : 'B');
+    await tab.fill('#gutsTeamName', `Crew ${i}`);
+    await tab.evaluate((n) => {
+      const first = (n % 7) * 4 + 1;
+      document.querySelectorAll('#gutsGrid .ans input').forEach((input, k) => {
+        input.value = String((first + k) * 2);
+        input.dispatchEvent(new Event('input'));
+      });
+    }, i);
+  }
+}));
+await Promise.all(crew.map((tab, i) => tab.click(i % 2 === 0 ? '#saveSheet' : '#saveGuts')));
+await page.waitForTimeout(3000);
+
+const mixed = await page.evaluate(() => {
+  const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+  return {
+    sheets: (db.contestants || []).map((c) => c.individual_id),
+    gutsTeams: [...new Set((db.gutsAnswers || []).map((g) => Number(g.team)))],
+  };
+});
+const wantSheets = [0, 2, 4, 6, 8].map((i) => `${60 + i}B`);
+const wantGuts = [1, 3, 5, 7, 9].map((i) => 60 + i);
+check('five simultaneous answer sheets all land',
+  wantSheets.every((id) => mixed.sheets.includes(id)),
+  `missing ${wantSheets.filter((id) => !mixed.sheets.includes(id)).join(', ') || 'none'}`);
+check('five simultaneous guts sets all land',
+  wantGuts.every((t) => mixed.gutsTeams.includes(t)),
+  `missing ${wantGuts.filter((t) => !mixed.gutsTeams.includes(t)).join(', ') || 'none'}`);
+
+// And every one of those tabs is still usable afterwards.
+const alive = await Promise.all(crew.map((tab) => tab.isVisible('#app').catch(() => false)));
+check('every scorer\u2019s tab survives the burst', alive.every(Boolean),
+  `${alive.filter(Boolean).length}/10 alive`);
+
 await Promise.all(crew.map((tab) => tab.close()));
 
 // ---- a team with no division must not vanish silently ---------------
@@ -501,14 +624,30 @@ await page.evaluate(() => {
   });
 });
 await page.click('#saveGuts');
-await page.waitForTimeout(700);
+await page.waitForTimeout(400);
+check('guts refuses to save a team with no division',
+  (await page.locator('.toast').last().textContent()).includes('Pick a division'),
+  await page.locator('.toast').last().textContent());
+
+// Force one through without a division to prove the leaderboard warns.
+await page.evaluate(() => {
+  const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+  db.teams.push({ team: 91, name: 'No Division Yet', division: null, disqualified: false });
+  db.gutsAnswers.push({ team: 91, problem: 1, answer: 2 });
+  localStorage.setItem('contest-demo-db', JSON.stringify(db));
+  window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+});
 await page.click('.tab[data-tab="leaderboard"]');
 await page.click('.tab[data-board="guts"]');
-await page.waitForTimeout(400);
+await page.waitForTimeout(600);
 const orphanWarn = await page.textContent('#boards .banner--warn').catch(() => '');
+
 check('a team with no division is called out rather than dropped',
-  orphanWarn.includes('One team has no division') && orphanWarn.includes('91'),
+  orphanWarn.includes('no division') && orphanWarn.includes('91'),
   orphanWarn.trim().slice(0, 80));
+check('the warning pluralises correctly',
+  /One team has no division/.test(orphanWarn) || /\d+ teams have no division/.test(orphanWarn),
+  orphanWarn.trim().slice(0, 50));
 await page.click('.tab[data-entry="individual"]');
 
 // ---- disqualification ----------------------------------------------
@@ -549,6 +688,22 @@ const width = indLines[0].split(',').length;
 check('individual CSV columns line up',
   indLines.slice(1).every((l) => l.split(',').length === width),
   `header ${width} cols`);
+// The numbers in the file have to be the numbers on the screen.
+await page.click('.tab[data-tab="leaderboard"]');
+await page.click('.tab[data-board="individual"]');
+await page.waitForTimeout(400);
+const boardTop = await page.evaluate(() => {
+  const row = document.querySelector('#boards table tbody tr');
+  return row ? [...row.children].map((c) => c.textContent.trim()) : null;
+});
+check('the exported individual CSV agrees with the leaderboard',
+  boardTop === null || indLines.some((l) => {
+    const cells = l.split(',');
+    return cells[2] === boardTop[1] && cells[7] === boardTop[4];
+  }),
+  `board top row: ${boardTop?.slice(1, 5).join(' / ')}`);
+await page.click('.tab[data-tab="setup"]');
+
 check('the individual CSV ranks within each division, not across both',
   indLines[0].startsWith('rank_in_division'), indLines[0].split(',')[0]);
 const firstOfEachDivision = ['A', 'B'].map((d) =>

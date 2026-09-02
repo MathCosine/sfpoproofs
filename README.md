@@ -158,6 +158,11 @@ the room during the round without leaking anything a team could use.
 
 Two decisions keep this inside Supabase's free limits with a hall full of people:
 
+**Every table is read in full, not one page of it.** Supabase caps a request at the
+project's "Max rows" setting — 1000 by default — and returns the first page with no
+error. `guts_answers` reaches 2800 rows at a hundred teams, so a plain select would
+have silently dropped two thirds of the guts round. Reads page until they run out.
+
 **The portal patches, it does not refetch.** Realtime events are folded into the
 cached snapshot row by row, with a full reload only on reconnect and every five
 minutes as a safety net. Refetching every table on every change is the obvious
@@ -191,8 +196,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 44 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 84 browser checks, including ten scorers at once
+npm test               # 49 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 95 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

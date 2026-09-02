@@ -480,6 +480,13 @@ async function saveGutsSet() {
     $('#gutsTeamName').focus();
     return;
   }
+  // Without a division a team ranks in neither table, and a guts-only
+  // team would otherwise never be asked for one.
+  if (!team?.division && !$('#gutsDivision').value) {
+    toast('Pick a division — a team without one is left out of both leaderboards.', 'error');
+    $('#gutsDivision').focus();
+    return;
+  }
 
   const problems = problemsInSet(current.set, cfg);
   const button = $('#saveGuts');
