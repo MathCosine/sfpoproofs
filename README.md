@@ -81,6 +81,19 @@ carries the percentages and both maxima so a result can be rechecked by hand.
 
 ## Setup
 
+### Already set this up? Check it first
+
+Paste [`supabase/verify.sql`](supabase/verify.sql) into the SQL Editor and run it. It
+changes nothing and prints a row per check; every row should say OK. Any FAIL means
+re-run `schema.sql`, which migrates in place.
+
+This matters because the schema has changed since the first version: the answer key
+was split by division, the public board gained set progress, and the functions were
+closed to anonymous callers. It is also the fastest way to find out whether an
+earlier run actually applied — the SQL Editor runs a script as one transaction, so a
+single failing statement rolls the whole thing back and leaves the database exactly
+as it was.
+
 ### 1. A Supabase project
 
 Free tier. **SQL Editor → New query →** paste all of
