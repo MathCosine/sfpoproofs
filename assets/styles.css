@@ -540,3 +540,10 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 .setpip--done { background: var(--lime); }
 .setpip--partial { background: var(--amber); }
 .setpip--claimed { background: var(--violet); }
+
+/* ---------- leaderboard pager -------------------------------------- */
+.pager { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.pager .btn { min-width: 44px; padding: 7px 12px; font-size: 15px; }
+.pager__where {
+  font-family: var(--mono); font-size: 12px; font-weight: 700; color: var(--muted);
+}

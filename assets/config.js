@@ -12,12 +12,16 @@
 // Bumped on every deploy. index.html and guts.html carry the same string
 // in data-app-version; a mismatch means the browser has a half-updated
 // copy and the portal says so rather than misbehaving quietly.
-export const APP_VERSION = '2026.08.31.3';
+export const APP_VERSION = '2026.09.03.1';
 
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
   SUPABASE_ANON_KEY: 'sb_publishable_-H6aL_rA_pj5z1E87EVgOQ_RudzlFe8',
+  // Two shared accounts. Graders use the staff one; a director who needs
+  // to edit the answer key or open Admin uses the other. Which one the
+  // portal signs in as is decided by which password was typed.
   STAFF_EMAIL: 'staff@sfpo.local',
+  ADMIN_EMAIL: 'admin@sfpo.local',
 
   CONTEST_NAME: 'Cowconuts 2026 Annual Math Contest',
 
@@ -40,9 +44,13 @@ export const CONFIG = {
   // ---- Roster ------------------------------------------------------
   // Individual IDs are <team><member>, e.g. 12C. Division is chosen from
   // a dropdown and stored on the team.
+  // IDs read <division><team><member>: A011 is Division A, team 01,
+  // member 1. Each division numbers its own teams.
   TEAM_COUNT: 100,
-  MEMBERS: ['A', 'B', 'C', 'D'],
+  MEMBERS: ['1', '2', '3', '4'],
   DIVISIONS: ['A', 'B'],
+  // A team's individual score counts its best three members of four.
+  LEADERBOARD_PAGE: 10,
 
   // ---- Live coordination -------------------------------------------
   CLAIM_TTL_MS: 120000,

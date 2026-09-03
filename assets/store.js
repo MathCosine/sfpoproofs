@@ -8,6 +8,11 @@ const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/
 const TABLES = ['app_settings', 'contest_state', 'answer_key', 'teams',
   'contestants', 'guts_answers', 'claims', 'graders'];
 
+const divisionOfTeamKey = (team) => {
+  const d = String(team ?? '').charAt(0).toUpperCase();
+  return d === 'A' || d === 'B' ? d : null;
+};
+
 const EMPTY = () => ({
   settings: null, state: null, key: [], teams: [],
   contestants: [], gutsAnswers: [], claims: [], graders: [],
@@ -115,11 +120,23 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const { data } = await (await getClient()).auth.getSession();
       return Boolean(data.session);
     },
-    async signIn(password) {
+    /**
+     * Sign in as whichever account the password belongs to. An admin
+     * password authenticates as the admin user, which is what the
+     * database checks before allowing the answer key to change — the
+     * portal hiding a tab is a convenience, not the control.
+     */
+    async signIn(password, { admin = false } = {}) {
+      const email = admin ? cfg.ADMIN_EMAIL : cfg.STAFF_EMAIL;
       const { error } = await (await getClient()).auth
-        .signInWithPassword({ email: cfg.STAFF_EMAIL, password });
+        .signInWithPassword({ email, password });
       if (error) throw new Error(error.message);
-      return true;
+      return { admin };
+    },
+
+    async currentEmail() {
+      const { data } = await (await getClient()).auth.getSession();
+      return data.session?.user?.email ?? null;
     },
     async signOut() { await (await getClient()).auth.signOut(); },
 
@@ -377,16 +394,25 @@ function demoBackend(cfg) {
     if (e.key === KEY) listeners.forEach((fn) => fn(read()));
   });
 
+  // Team keys are text like 'A01'; Number() on one of those is NaN, which
+  // used to land in storage as null and detach every row from its team.
   const upsertTeam = (db, team, patch) => {
-    const i = db.teams.findIndex((t) => Number(t.team) === Number(team));
+    const key = String(team);
+    const i = db.teams.findIndex((t) => String(t.team) === key);
     if (i >= 0) Object.assign(db.teams[i], patch);
-    else db.teams.push({ team: Number(team), name: '', division: null, disqualified: false, dq_reason: '', ...patch });
+    else {
+      db.teams.push({
+        team: key, name: '', division: divisionOfTeamKey(key),
+        disqualified: false, dq_reason: '', ...patch,
+      });
+    }
   };
 
   return {
     mode: 'demo',
     async hasSession() { return true; },
-    async signIn() { return true; },
+    async signIn(password, { admin = false } = {}) { return { admin }; },
+    async currentEmail() { return null; },
     async signOut() {},
     async load() { return read(); },
     onChange(cb) { listeners.add(cb); return () => listeners.delete(cb); },
@@ -406,9 +432,9 @@ function demoBackend(cfg) {
         upsertTeam(db, team, teamName != null ? { name: teamName } : {});
         for (const p of problems) {
           const i = db.gutsAnswers.findIndex(
-            (g) => Number(g.team) === Number(team) && Number(g.problem) === p.problem);
+            (g) => String(g.team) === String(team) && Number(g.problem) === p.problem);
           const row = {
-            team: Number(team), problem: p.problem, answer: p.answer,
+            team: String(team), problem: p.problem, answer: p.answer,
             entered_by: graderId, entered_by_name: graderName,
             updated_at: new Date().toISOString(),
           };

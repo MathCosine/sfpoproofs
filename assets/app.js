@@ -6,8 +6,10 @@ import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from
 import { createStore } from './store.js';
 import { toCsv, downloadCsv } from './csv.js';
 import {
-  parseIndividualId, isMemberLetter, parseAnswer, problemsInSet, gutsProblemCount,
-  indexKey, keyGaps, individualKey, GUTS_DIVISION,
+  parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
+  parseAnswer, problemsInSet, gutsProblemCount,
+  indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
+  TEAM_COUNTING_MEMBERS,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
@@ -43,11 +45,13 @@ let derived = null;
 let entryMode = 'individual';
 let activeTab = 'progress';
 let activeBoard = 'combined';
+const boardPage = { A: 0, B: 0 };
 let held = null;           // { scope, ref }
 let blockedBy = null;
 let connected = false;
 let clockTimer = null;
 let freezing = false;
+let isAdmin = false;
 
 // ---------------------------------------------------------------------
 function toast(message, kind = 'ok') {
@@ -81,7 +85,7 @@ function recompute() {
     keyGapsIndividual: Object.fromEntries(cfg.DIVISIONS.map(
       (d) => [d, keyGaps(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, d)])),
     keyGapsGuts: keyGaps(key, 'guts', GUTS_N, GUTS_DIVISION),
-    teamsByNo: new Map(data.teams.map((t) => [Number(t.team), t])),
+    teamsByNo: new Map(data.teams.map((t) => [String(t.team), t])),
     queue: buildQueue(claims, dq, gutsByTeam),
   };
 }
@@ -94,8 +98,8 @@ function recompute() {
 function buildQueue(claims, dq, gutsByTeam) {
   const out = [];
   if (entryMode === 'individual') {
-    const seenTeams = new Set(data.contestants.map((c) => Number(c.team)));
-    for (const team of [...seenTeams].sort((a, b) => a - b)) {
+    const seenTeams = new Set(data.contestants.map((c) => String(c.team)));
+    for (const team of [...seenTeams].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))) {
       if (dq.has(team)) continue;
       for (const member of cfg.MEMBERS) {
         const id = `${team}${member}`;
@@ -105,17 +109,18 @@ function buildQueue(claims, dq, gutsByTeam) {
       }
     }
   } else {
-    for (const t of [...data.teams].sort((a, b) => a.team - b.team)) {
-      if (dq.has(Number(t.team))) continue;
-      const answers = gutsByTeam.get(Number(t.team));
+    for (const t of [...data.teams]
+      .sort((a, b) => String(a.team).localeCompare(String(b.team), undefined, { numeric: true }))) {
+      if (dq.has(String(t.team))) continue;
+      const answers = gutsByTeam.get(String(t.team));
       for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
         const problems = problemsInSet(set, cfg);
         const done = problems.every((p) => answers?.get(p) != null);
         if (done) continue;
         if (claims.has(`guts|${t.team}:${set}`)) continue;
         out.push({
-          kind: 'guts', team: Number(t.team), set,
-          label: `Team ${t.team} · set ${set}`,
+          kind: 'guts', team: String(t.team), set,
+          label: `${t.team} · set ${set}`,
           why: t.name || 'no team name yet',
         });
         break;                       // one open set per team keeps it fair
@@ -212,12 +217,18 @@ let gutsInputs = [];
 let gutsLoadedRef = null;
 
 function currentIndividualId() {
-  const team = Number($('#teamNo').value);
-  const member = $('#memberLetter').value.trim().toUpperCase();
-  // A digit typed into the member box used to build IDs like "121",
-  // which then read back as team 121 — a contestant nobody could find.
-  if (!Number.isInteger(team) || team < 1 || !isMemberLetter(member)) return null;
-  return { id: `${team}${member}`, team, member };
+  const division = $('#divisionPick').value;
+  const teamNo = Number($('#teamNo').value);
+  const member = $('#memberLetter').value.trim();
+  if (!division || !Number.isInteger(teamNo) || teamNo < 1 || !isMemberNumber(member)) return null;
+  const team = teamKey(division, teamNo);
+  return { id: `${team}${member}`, division, team, teamNo, member };
+}
+
+/** Keep the ID box and the three fields showing the same thing. */
+function syncIdFromFields() {
+  const current = currentIndividualId();
+  if (current) $('#individualId').value = current.id;
 }
 
 function onIdTyped() {
@@ -228,19 +239,22 @@ function onIdTyped() {
   echo.classList.remove('field__hint--error');
 
   if (parsed.ok) {
-    $('#teamNo').value = parsed.team;
+    $('#divisionPick').value = parsed.division;
+    $('#teamNo').value = parsed.teamNo;
     $('#memberLetter').value = parsed.member;
-    echo.textContent = `Team ${parsed.team}, member ${parsed.member}. Both boxes below stay editable.`;
+    echo.textContent = `Division ${parsed.division}, team ${String(parsed.teamNo).padStart(2, '0')}, `
+      + `member ${parsed.member}. All three stay editable.`;
     loadExistingSheet();
     claimCurrent();
   } else if (parsed.partial) {
-    $('#teamNo').value = parsed.team;
+    $('#divisionPick').value = parsed.division;
+    if (parsed.teamNo) $('#teamNo').value = parsed.teamNo;
     echo.textContent = parsed.error;
   } else if (input.value.trim()) {
     echo.textContent = parsed.error;
     echo.classList.add('field__hint--error');
   } else {
-    echo.textContent = 'Type 12C and the team and member fill themselves in.';
+    echo.textContent = 'Type A011 — division, team, member fill themselves in.';
   }
   refreshIndividualContext();
 }
@@ -253,8 +267,6 @@ function loadExistingSheet() {
   if (!existing) return;
   fillGrid(sheetInputs, existing.answers ?? []);
   $('#contestantName').value = existing.name ?? '';
-  const team = derived.teamsByNo.get(current.team);
-  $('#divisionPick').value = existing.division ?? team?.division ?? '';
 }
 
 function refreshIndividualContext() {
@@ -275,7 +287,6 @@ function refreshIndividualContext() {
   if (!current) return;
 
   const team = derived.teamsByNo.get(current.team);
-  if (team?.division && !$('#divisionPick').value) $('#divisionPick').value = team.division;
 
   const claim = derived.claims.get(`individual|${current.id}`) ?? blockedBy;
   if (claim && claim.grader_id !== grader.id) {
@@ -296,7 +307,7 @@ function refreshIndividualContext() {
     host.appendChild(b);
   }
 
-  if (current.team > cfg.TEAM_COUNT) {
+  if (current.teamNo > cfg.TEAM_COUNT) {
     const b = el('div', 'banner banner--warn');
     const d = el('div');
     d.append(el('b', null, `Team ${current.team} is above your team count of ${cfg.TEAM_COUNT}`),
@@ -343,14 +354,19 @@ async function saveSheet() {
   const current = currentIndividualId();
   if (!current) {
     const member = $('#memberLetter').value.trim();
-    toast(member && !isMemberLetter(member)
-      ? 'The member has to be a single letter, like C.'
-      : 'Enter an individual ID, like 12C.', 'error');
-    $(member && !isMemberLetter(member) ? '#memberLetter' : '#individualId').focus();
+    if (!$('#divisionPick').value) {
+      toast('Pick a division.', 'error');
+      $('#divisionPick').focus();
+    } else if (member && !isMemberNumber(member)) {
+      toast('Member is 1 to 4.', 'error');
+      $('#memberLetter').focus();
+    } else {
+      toast('Enter an individual ID, like A011.', 'error');
+      $('#individualId').focus();
+    }
     return;
   }
-  const division = $('#divisionPick').value;
-  if (!division) { toast('Pick a division.', 'error'); $('#divisionPick').focus(); return; }
+  const division = current.division;
   const { values, bad } = readGrid(sheetInputs);
   if (bad) { toast('One of the answers is not a whole number.', 'error'); return; }
 
@@ -400,15 +416,15 @@ function clearSheet({ keepTeam = false } = {}) {
 function resetGutsTeamFields() {
   $('#gutsTeamName').dataset.dirty = '';
   $('#gutsTeamName').value = '';
-  $('#gutsDivision').value = '';
   gutsLoadedRef = null;
 }
 
 function currentGuts() {
-  const team = Number($('#gutsTeam').value);
+  const division = $('#gutsDivision').value;
+  const teamNo = Number($('#gutsTeam').value);
   const set = Number($('#gutsSet').value);
-  if (!Number.isInteger(team) || team < 1 || !set) return null;
-  return { team, set };
+  if (!division || !Number.isInteger(teamNo) || teamNo < 1 || !set) return null;
+  return { team: teamKey(division, teamNo), division, teamNo, set };
 }
 
 function refreshGutsContext() {
@@ -431,8 +447,6 @@ function refreshGutsContext() {
   $('#gutsNameHint').textContent = team?.name
     ? 'Recorded already — edit only if it is wrong.'
     : 'First time this team is scored, so give it a name for the public board.';
-  if (team?.division && !$('#gutsDivision').value) $('#gutsDivision').value = team.division;
-
   // Load the stored answers only when the selection actually changes.
   // This used to run on every render, which meant another scorer saving
   // anything at all wiped whatever you were half way through typing.
@@ -469,7 +483,12 @@ function refreshGutsContext() {
 
 async function saveGutsSet() {
   const current = currentGuts();
-  if (!current) { toast('Enter a team number and pick a set.', 'error'); return; }
+  if (!current) {
+    toast($('#gutsDivision').value ? 'Enter a team number and pick a set.' : 'Pick a division.',
+      'error');
+    $($('#gutsDivision').value ? '#gutsTeam' : '#gutsDivision').focus();
+    return;
+  }
   const { values, bad } = readGrid(gutsInputs);
   if (bad) { toast('One of the answers is not a whole number.', 'error'); return; }
 
@@ -482,11 +501,7 @@ async function saveGutsSet() {
   }
   // Without a division a team ranks in neither table, and a guts-only
   // team would otherwise never be asked for one.
-  if (!team?.division && !$('#gutsDivision').value) {
-    toast('Pick a division — a team without one is left out of both leaderboards.', 'error');
-    $('#gutsDivision').focus();
-    return;
-  }
+
 
   const problems = problemsInSet(current.set, cfg);
   const button = $('#saveGuts');
@@ -498,8 +513,9 @@ async function saveGutsSet() {
       grader.id, grader.name,
       typedName || null,
     );
-    const division = $('#gutsDivision').value;
-    if (division && division !== team?.division) await store.setTeam(current.team, { division });
+    if (current.division !== team?.division) {
+      await store.setTeam(current.team, { division: current.division });
+    }
     toast(`Team ${current.team} set ${current.set} saved.`);
     await releaseHeld();
     $('#gutsTeamName').dataset.dirty = '';
@@ -585,7 +601,8 @@ function renderSuggestions() {
         onIdTyped();
         sheetInputs[0]?.focus();
       } else {
-        $('#gutsTeam').value = String(item.team);
+        $('#gutsDivision').value = divisionOfTeam(item.team) ?? '';
+        $('#gutsTeam').value = String(teamNumberOf(item.team) ?? '');
         $('#gutsSet').value = String(item.set);
         resetGutsTeamFields();
         refreshGutsContext();
@@ -612,9 +629,9 @@ const progressTeams = new Map();     // team         -> { card, head }
 
 function progressSignature() {
   const teams = [...new Set([
-    ...data.teams.map((t) => Number(t.team)),
-    ...data.contestants.map((c) => Number(c.team)),
-  ])].sort((a, b) => a - b);
+    ...data.teams.map((t) => String(t.team)),
+    ...data.contestants.map((c) => String(c.team)),
+  ])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   return teams.map((t) => `${t}${derived.teamsByNo.get(t)?.name ?? ''}`).join(',');
 }
 
@@ -727,9 +744,9 @@ function paintProgress(teams) {
 
 function renderProgress() {
   const teams = [...new Set([
-    ...data.teams.map((t) => Number(t.team)),
-    ...data.contestants.map((c) => Number(c.team)),
-  ])].sort((a, b) => a - b);
+    ...data.teams.map((t) => String(t.team)),
+    ...data.contestants.map((c) => String(c.team)),
+  ])].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   const shape = progressSignature();
   if (shape !== progressShape) {
     progressShape = shape;
@@ -765,6 +782,59 @@ function table(headers, rows) {
   return wrap;
 }
 const rankCls = (i) => `rank${i < 3 ? ` rank--${i + 1}` : ''}`;
+
+/**
+ * Ten at a time, with arrows. A hundred rows of a leaderboard is not
+ * something anyone reads; the top ten is, and the rest is there when
+ * somebody asks about a particular team.
+ */
+function pager(division, total) {
+  const size = cfg.LEADERBOARD_PAGE;
+  const pages = Math.max(1, Math.ceil(total / size));
+  const page = Math.min(boardPage[division], pages - 1);
+  boardPage[division] = page;
+
+  const bar = el('div', 'pager');
+  const back = el('button', 'btn btn--ghost', '←');
+  const next = el('button', 'btn btn--ghost', '→');
+  back.type = 'button';
+  next.type = 'button';
+  back.disabled = page === 0;
+  next.disabled = page >= pages - 1;
+  back.setAttribute('aria-label', `Previous ten in Division ${division}`);
+  next.setAttribute('aria-label', `Next ten in Division ${division}`);
+  back.addEventListener('click', () => { boardPage[division] -= 1; renderBoards(); });
+  next.addEventListener('click', () => { boardPage[division] += 1; renderBoards(); });
+
+  const from = total ? page * size + 1 : 0;
+  const to = Math.min(total, (page + 1) * size);
+  bar.append(back, el('span', 'pager__where', total ? `${from}–${to} of ${total}` : 'none'), next);
+  return { bar, page, size };
+}
+
+/** One award line per contestant, copied straight onto a slide. */
+function copyButton(rows) {
+  const btn = el('button', 'btn btn--ghost', 'Copy for slides');
+  btn.type = 'button';
+  btn.addEventListener('click', async () => {
+    const text = rows.map((r) => r.text).join('\n\n');
+    // Confirm with a toast, not by relabelling the button: a background
+    // render rebuilds this button and would wipe the confirmation.
+    const done = () => toast(`Copied ${rows.length} for slides.`);
+    try {
+      await navigator.clipboard.writeText(text);
+      done();
+    } catch {
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand('copy'); done(); } catch { toast('Could not copy.', 'error'); }
+      ta.remove();
+    }
+  });
+  return btn;
+}
 
 function renderBoards() {
   const host = $('#boards');
@@ -823,6 +893,10 @@ function renderBoards() {
 
     if (!ranked.length && !out.length) { host.appendChild(el('div', 'empty', 'Nothing here yet.')); continue; }
 
+    const { bar, page, size } = pager(division, ranked.length);
+    const shown = ranked.slice(page * size, (page + 1) * size);
+    const offset = page * size;
+
     if (activeBoard === 'combined') {
       const cell = (r) => {
         const n = el('span', 'mono', r.total.toFixed(2));
@@ -840,7 +914,8 @@ function renderBoards() {
       ];
       const header = ['#', 'Team', { label: 'Individual', num: true }, { label: 'Guts', num: true },
         { label: 'Combined', num: true }, 'Sheets'];
-      if (ranked.length) host.appendChild(table(header, ranked.map(row)));
+      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
+      host.appendChild(bar);
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
         w.classList.add('table-wrap--dq');
@@ -857,7 +932,15 @@ function renderBoards() {
       ];
       const header = ['#', 'ID', 'Name', { label: 'Correct', num: true },
         { label: 'Points', num: true }, 'Answered'];
-      if (ranked.length) host.appendChild(table(header, ranked.map(row)));
+      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
+      host.appendChild(bar);
+      if (page === 0 && shown.length) {
+        const copyRow = el('div', 'chip-row');
+        copyRow.style.marginTop = '8px';
+        copyRow.append(copyButton(awardLines(derived.individuals, division, cfg.LEADERBOARD_PAGE)),
+          el('span', 'muted', 'ID, name and score for the top ten, ready to paste'));
+        host.appendChild(copyRow);
+      }
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
         w.classList.add('table-wrap--dq');
@@ -873,7 +956,8 @@ function renderBoards() {
       ];
       const header = ['#', 'Team', { label: 'Correct', num: true },
         { label: 'Points', num: true }, 'Sets'];
-      if (ranked.length) host.appendChild(table(header, ranked.map(row)));
+      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
+      host.appendChild(bar);
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
         w.classList.add('table-wrap--dq');
@@ -1147,7 +1231,8 @@ function renderWeightPreview() {
 function renderDqList() {
   const host = $('#dqList');
   host.replaceChildren();
-  const out = data.teams.filter((t) => t.disqualified).sort((a, b) => a.team - b.team);
+  const out = data.teams.filter((t) => t.disqualified)
+    .sort((a, b) => String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
   if (!out.length) { host.appendChild(el('p', 'field__hint', 'No teams are disqualified.')); return; }
   for (const team of out) {
     const row = el('div', 'dq-row');
@@ -1210,6 +1295,54 @@ function exportGutsCsv() {
     rows));
 }
 
+/**
+ * Everything a problem-setting committee asks for afterwards: how each
+ * problem behaved, how the cohort scored, and the shape of the spread.
+ */
+function exportStatsCsv() {
+  const rows = [];
+  for (const division of cfg.DIVISIONS) {
+    const st = divisionStatistics(derived.individuals, derived.guts, division, cfg);
+    const round = (v) => Number(v).toFixed(3).replace(/\.?0+$/, '');
+    rows.push(['DIVISION', division, '', '', '', '']);
+    rows.push(['summary', 'contestants', st.contestants.n, '', '', '']);
+    for (const [label, v] of [['mean', st.contestants.mean], ['median', st.contestants.median],
+      ['stdev', st.contestants.stdev], ['min', st.contestants.min], ['max', st.contestants.max],
+      ['q1', st.contestants.q1], ['q3', st.contestants.q3]]) {
+      rows.push(['summary', `individual ${label}`, round(v), '', '', '']);
+    }
+    for (const [label, v] of [['n', st.guts.n], ['mean', st.guts.mean],
+      ['median', st.guts.median], ['stdev', st.guts.stdev],
+      ['min', st.guts.min], ['max', st.guts.max]]) {
+      rows.push(['summary', `guts ${label}`, round(v), '', '', '']);
+    }
+    if (st.mostSolved) {
+      rows.push(['extreme', 'most solved',
+        `problem ${st.mostSolved.problem}`, st.mostSolved.correct,
+        `${round(st.mostSolved.pctCorrect)}%`, '']);
+    }
+    if (st.fewestSolved) {
+      rows.push(['extreme', 'fewest solved',
+        `problem ${st.fewestSolved.problem}`, st.fewestSolved.correct,
+        `${round(st.fewestSolved.pctCorrect)}%`, '']);
+    }
+    rows.push(['', '', '', '', '', '']);
+    rows.push(['problem', 'number', 'correct', 'answered', 'blank', 'percent correct']);
+    for (const pr of st.problems) {
+      rows.push(['problem', pr.problem, pr.correct, pr.answered, pr.blank,
+        round(pr.pctCorrect)]);
+    }
+    rows.push(['', '', '', '', '', '']);
+    rows.push(['distribution', 'score', 'contestants', '', '', '']);
+    for (const bucket of st.distribution) {
+      rows.push(['distribution', bucket.score, bucket.count, '', '', '']);
+    }
+    rows.push(['', '', '', '', '', '']);
+  }
+  downloadCsv('cowconuts-2026-statistics.csv', toCsv(
+    ['section', 'label', 'value', 'a', 'b', 'c'], rows));
+}
+
 function exportCombinedCsv() {
   const rows = [];
   for (const division of ['A', 'B']) {
@@ -1234,6 +1367,20 @@ function exportCombinedCsv() {
 // Render / refresh
 // ---------------------------------------------------------------------
 
+/** Reflect who is signed in: graders read the key, admins edit it. */
+function applyRole() {
+  $('#adminLocked').classList.toggle('hidden', isAdmin);
+  $('#adminBody').classList.toggle('hidden', !isAdmin);
+  $('#keyActions').classList.toggle('hidden', !isAdmin);
+  $('#keyReadOnly').classList.toggle('hidden', isAdmin);
+  for (const input of $$('#tab-key input')) input.readOnly = !isAdmin;
+  const badge = $('#roleBadge');
+  if (badge) {
+    badge.textContent = isAdmin ? 'admin' : 'scorer';
+    badge.className = `tag ${isAdmin ? 'tag--flag' : 'tag--off'}`;
+  }
+}
+
 function render() {
   recompute();
   renderSuggestions();
@@ -1243,6 +1390,7 @@ function render() {
   renderClock();
   renderWeightPreview();
   renderDqList();
+  applyRole();
 
   if (entryMode === 'individual') { markSheetAgainstKey(); refreshIndividualContext(); }
   else refreshGutsContext();
@@ -1351,13 +1499,17 @@ function wire() {
   $('#individualId').addEventListener('input', onIdTyped);
   for (const id of ['#teamNo', '#memberLetter']) {
     $(id).addEventListener('input', () => {
-      const current = currentIndividualId();
-      if (current) { $('#individualId').value = current.id; loadExistingSheet(); claimCurrent(); }
+      syncIdFromFields();
+      if (currentIndividualId()) { loadExistingSheet(); claimCurrent(); }
       refreshIndividualContext();
     });
   }
-  // Switching division changes which paper the answers are marked against.
+  // Division is part of the ID and decides which paper the sheet is
+  // marked against, so changing it rebuilds both.
   $('#divisionPick').addEventListener('change', () => {
+    syncIdFromFields();
+    loadExistingSheet();
+    claimCurrent();
     markSheetAgainstKey();
     refreshIndividualContext();
   });
@@ -1479,9 +1631,12 @@ function wire() {
   });
 
   $('#dqAdd').addEventListener('click', async () => {
-    const team = Number($('#dqTeam').value);
+    const team = $('#dqTeam').value.trim().toUpperCase();
     const reason = $('#dqReason').value.trim();
-    if (!Number.isInteger(team) || team < 1) { toast('Enter the team number.', 'error'); return; }
+    if (!/^[AB]\d{1,3}$/.test(team)) {
+      toast('Enter a team key like A01.', 'error');
+      return;
+    }
     if (!reason) { toast('Record a reason — it goes on the exports.', 'error'); return; }
     await store.setTeam(team, {
       disqualified: true, dq_reason: reason, dq_by: grader.name, dq_at: new Date().toISOString(),
@@ -1495,6 +1650,7 @@ function wire() {
   $('#exportIndividual').addEventListener('click', exportIndividualCsv);
   $('#exportGuts').addEventListener('click', exportGutsCsv);
   $('#exportCombined').addEventListener('click', exportCombinedCsv);
+  $('#exportStats').addEventListener('click', exportStatsCsv);
 
   const confirmInput = $('#wipeConfirm');
   const wipeButton = $('#wipeAll');
@@ -1523,6 +1679,7 @@ function wire() {
     await releaseHeld();
     await store.signOut();
     localStorage.removeItem('contest-grader-name');
+    localStorage.removeItem('contest-role');
     location.reload();
   });
 
@@ -1569,26 +1726,29 @@ async function seedDemo() {
   }
   await store.saveKey(keyRows);
 
-  for (let team = 1; team <= 10; team += 1) {
-    const division = team % 2 ? 'A' : 'B';
-    for (const member of cfg.MEMBERS.slice(0, 2 + (team % 3))) {
-      const skill = 4 + ((team * 3 + member.charCodeAt(0)) % 9);
+  for (const division of cfg.DIVISIONS) {
+    for (let n = 1; n <= 6; n += 1) {
+      const team = teamKey(division, n);
       const mult = division === 'A' ? 7 : 9;
-      const answers = Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => (
-        (i * 7 + team) % 13 < skill ? ((i + 1) * mult) % 100 : ((i + 1) * mult + 1) % 100));
-      await store.saveContestant({
-        individual_id: `${team}${member}`,
-        team, member, division,
-        name: `${names[team % names.length]} ${member}`,
-        answers,
-        entered_by: 'demo', entered_by_name: 'Demo', entered_at: new Date().toISOString(),
-      });
-    }
-    const gutsSkill = 1 + ((team * 5) % 4);
-    for (let set = 1; set <= 5 + (team % 3); set += 1) {
-      await store.saveGutsSet(team, problemsInSet(set, cfg).map((p) => ({
-        problem: p, answer: (p * team) % 5 < gutsSkill ? (p * 13) % 50 : (p * 13 + 1) % 50,
-      })), 'demo', 'Demo', `${names[team % names.length]} ${team}`);
+      for (const member of cfg.MEMBERS.slice(0, 3 + (n % 2))) {
+        const skill = 4 + ((n * 3 + Number(member)) % 9);
+        const answers = Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => (
+          (i * 7 + n) % 13 < skill ? ((i + 1) * mult) % 100 : ((i + 1) * mult + 1) % 100));
+        await store.saveContestant({
+          individual_id: `${team}${member}`,
+          team, member, division,
+          name: `${names[n % names.length]} ${member}`,
+          answers,
+          entered_by: 'demo', entered_by_name: 'Demo', entered_at: new Date().toISOString(),
+        });
+      }
+      const gutsSkill = 1 + ((n * 5) % 4);
+      for (let set = 1; set <= 4 + (n % 4); set += 1) {
+        await store.saveGutsSet(team, problemsInSet(set, cfg).map((p) => ({
+          problem: p, answer: (p * n) % 5 < gutsSkill ? (p * 13) % 50 : (p * 13 + 1) % 50,
+        })), 'demo', 'Demo', `${names[n % names.length]} ${division}${n}`);
+      }
+      await store.setTeam(team, { division });
     }
   }
   await refresh();
@@ -1661,7 +1821,12 @@ async function boot() {
     $('#gateDemo').classList.remove('hidden');
     $('#passwordField').classList.add('hidden');
   }
-  if (grader.name && await store.hasSession().catch(() => false)) { await enterApp(); return; }
+  if (grader.name && await store.hasSession().catch(() => false)) {
+    const email = await store.currentEmail().catch(() => null);
+    isAdmin = email ? email === cfg.ADMIN_EMAIL : localStorage.getItem('contest-role') !== 'scorer';
+    await enterApp();
+    return;
+  }
 
   const submit = async () => {
     const name = nameInput.value.trim();
@@ -1672,10 +1837,14 @@ async function boot() {
     }
     grader.name = name;
     localStorage.setItem('contest-grader-name', name);
+    const adminPassword = $('#adminPassword').value;
     if (store.mode === 'supabase') {
       try {
         $('#gateEnter').disabled = true;
-        await store.signIn(passwordInput.value);
+        const result = await store.signIn(adminPassword || passwordInput.value,
+          { admin: Boolean(adminPassword) });
+        isAdmin = Boolean(result?.admin);
+        localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
       } catch (err) {
         $('#gateError').textContent = /Invalid/.test(err.message ?? '')
           ? 'That password was not accepted. Check with the contest director.'
@@ -1683,6 +1852,9 @@ async function boot() {
         $('#gateError').classList.add('field__hint--error');
         return;
       } finally { $('#gateEnter').disabled = false; }
+    } else {
+      isAdmin = Boolean(adminPassword) || localStorage.getItem('contest-role') !== 'scorer';
+      localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
     }
     await enterApp();
   };

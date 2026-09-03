@@ -58,6 +58,25 @@ select 5, 'Public board has set_mask',
     then 'OK' else 'FAIL' end,
   'Drives the seven-segment bars on the projector board'
 
+union all
+select 5.5, 'Team keys are text (A01 style)',
+  case when (select count(*) from information_schema.columns
+      where table_schema='public' and column_name='team' and data_type='text'
+        and table_name in ('teams','contestants','guts_answers','guts_public')) = 4
+    then 'OK' else 'FAIL' end,
+  'Each division numbers its own teams, so the key carries the letter'
+
+union all
+select 5.6, 'Only the admin can change the answer key',
+  case when exists (select 1 from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+      where n.nspname='public' and p.proname='is_admin')
+   and exists (select 1 from pg_policies
+      where schemaname='public' and tablename='answer_key' and policyname='admin_write')
+   and exists (select 1 from pg_policies
+      where schemaname='public' and tablename='answer_key' and policyname='staff_read')
+    then 'OK' else 'FAIL' end,
+  (select 'admin account: '||admin_email from app_settings where id=1)
+
 -- 4. security -----------------------------------------------------------
 union all
 select 6, 'Row level security on every table',

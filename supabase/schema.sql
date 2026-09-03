@@ -20,12 +20,15 @@ create extension if not exists "pgcrypto";
 create table if not exists app_settings (
   id                    int primary key default 1,
   team_count            int     not null default 100,
+  admin_email           text    not null default 'admin@sfpo.local',
   individual_weight     numeric not null default 80,
   guts_weight           numeric not null default 20,
   updated_at            timestamptz not null default now(),
   constraint app_settings_singleton check (id = 1)
 );
 insert into app_settings (id) values (1) on conflict (id) do nothing;
+alter table app_settings add column if not exists admin_email text not null
+  default 'admin@sfpo.local';
 
 -- ---------------------------------------------------------------------
 -- Guts timer and freeze, read by the public leaderboard.
@@ -90,8 +93,10 @@ end $$;
 -- Teams. Division and name live here; the name is captured the first
 -- time somebody enters that team's guts answers.
 -- ---------------------------------------------------------------------
+--   The team key carries its division, because each division numbers its
+--   own teams: A01 and B01 are different teams.
 create table if not exists teams (
-  team         int primary key,
+  team         text primary key,
   name         text not null default '',
   division     char(1) check (division in ('A','B')),
   disqualified boolean not null default false,
@@ -110,7 +115,7 @@ create table if not exists teams (
 -- ---------------------------------------------------------------------
 create table if not exists contestants (
   individual_id   text primary key,              -- '12C'
-  team            int  not null,
+  team            text not null,
   member          text not null default '',
   division        char(1) check (division in ('A','B')),
   name            text not null default '',
@@ -126,7 +131,7 @@ create index if not exists contestants_team_idx on contestants (team);
 -- Guts answers, one row per (team, problem).
 -- ---------------------------------------------------------------------
 create table if not exists guts_answers (
-  team            int not null,
+  team            text not null,
   problem         int not null check (problem >= 1),
   answer          int check (answer >= 0),
   entered_by      text not null default '',
@@ -162,7 +167,7 @@ create table if not exists graders (
 -- leaking anything a team could use.
 -- ---------------------------------------------------------------------
 create table if not exists guts_public (
-  team         int primary key,
+  team         text primary key,
   name         text not null default '',
   division     char(1),
   score        numeric not null default 0,
@@ -175,6 +180,22 @@ create table if not exists guts_public (
 
 -- Upgrading a database from before the board showed set progress.
 alter table guts_public add column if not exists set_mask int not null default 0;
+
+-- Upgrading from integer team numbers to division-scoped text keys.
+-- Old rows keep their number as text; new ones are written as A01/B01.
+do $$
+declare t text;
+begin
+  foreach t in array array['teams','contestants','guts_answers','guts_public'] loop
+    if exists (
+      select 1 from information_schema.columns
+      where table_schema='public' and table_name=t and column_name='team'
+        and data_type in ('integer','bigint','smallint')
+    ) then
+      execute format('alter table %I alter column team type text using team::text', t);
+    end if;
+  end loop;
+end $$;
 
 -- Recompute the public board from the private tables.
 -- Returns early while the board is frozen, which is what makes the
@@ -298,6 +319,42 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------
+-- Table privileges
+--
+-- Supabase grants these to its two roles by default; stating them here
+-- makes the file self-contained and means row level security is the only
+-- thing deciding who sees what, rather than a default we inherited.
+-- ---------------------------------------------------------------------
+grant usage on schema public to anon, authenticated;
+do $$
+declare t text;
+begin
+  foreach t in array array['app_settings','teams','contestants','guts_answers',
+                           'answer_key','claims','graders','contest_state','guts_public'] loop
+    execute format('revoke all on table %I from anon', t);
+    execute format('grant select, insert, update, delete on table %I to authenticated', t);
+  end loop;
+end $$;
+grant select on table guts_public, contest_state to anon;
+
+-- ---------------------------------------------------------------------
+-- Who is an admin
+--
+-- The portal has two shared accounts. Graders sign in as the staff one
+-- and can read the answer key but not change it; a director signs in as
+-- the admin one and can. Enforced here rather than only in the browser,
+-- so a grader with the developer console open still cannot rewrite the
+-- key mid-contest.
+-- ---------------------------------------------------------------------
+create or replace function is_admin() returns boolean
+language sql stable security definer as $$
+  select coalesce(
+    nullif(current_setting('request.jwt.claims', true), '')::json ->> 'email',
+    ''
+  ) = (select admin_email from app_settings where id = 1)
+$$;
+
+-- ---------------------------------------------------------------------
 -- Row level security
 --
 -- Staff tables: signed-in only. The portal signs in with one shared
@@ -313,9 +370,33 @@ begin
   foreach t in array array['app_settings','teams','contestants','guts_answers',
                            'answer_key','claims','graders','contest_state','guts_public'] loop
     execute format('alter table %I enable row level security', t);
+    -- Drop every policy this file creates, so re-running is safe.
     execute format('drop policy if exists staff_all on %I', t);
+    execute format('drop policy if exists staff_read on %I', t);
+    execute format('drop policy if exists admin_write on %I', t);
+  end loop;
+end $$;
+
+-- Everything a grader does day to day.
+do $$
+declare t text;
+begin
+  foreach t in array array['teams','contestants','guts_answers',
+                           'claims','graders','contest_state','guts_public'] loop
     execute format(
       'create policy staff_all on %I for all to authenticated using (true) with check (true)', t);
+  end loop;
+end $$;
+
+-- The answer key and the settings: everyone signed in may read them,
+-- only the admin account may change them.
+do $$
+declare t text;
+begin
+  foreach t in array array['answer_key','app_settings'] loop
+    execute format('create policy staff_read on %I for select to authenticated using (true)', t);
+    execute format('create policy admin_write on %I for all to authenticated
+                    using (is_admin()) with check (is_admin())', t);
   end loop;
 end $$;
 
@@ -414,7 +495,8 @@ begin
   foreach fn in array array[
     'refresh_guts_public()',
     'set_guts_frozen(boolean)',
-    'release_stale_claims(int)'
+    'release_stale_claims(int)',
+    'is_admin()'
   ] loop
     execute format('revoke all on function %s from public, anon', fn);
     execute format('grant execute on function %s to authenticated', fn);

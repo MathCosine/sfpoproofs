@@ -5,7 +5,9 @@ import assert from 'node:assert/strict';
 import {
   parseIndividualId, parseAnswer, problemsInSet, setOfProblem, gutsProblemCount,
   indexKey, keyGaps, keyMaxPoints, scoreSheet, individualStandings, indexGutsAnswers,
-  individualKey, GUTS_DIVISION,
+  individualKey, GUTS_DIVISION, teamKey, divisionOfTeam, teamNumberOf, isMemberNumber,
+  summarise, problemStats, scoreDistribution, divisionStatistics, awardLines,
+  TEAM_COUNTING_MEMBERS,
   scoreGutsTeam, gutsStandings, combinedStandings, splitByDivision, dqTeams,
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
@@ -20,7 +22,7 @@ const cfg = {
   GUTS_PER_SET: 4,
   INDIVIDUAL_WEIGHT: 80,
   GUTS_WEIGHT: 20,
-  MEMBERS: ['A', 'B', 'C', 'D'],
+  MEMBERS: ['1', '2', '3', '4'],
   DIVISIONS: ['A', 'B'],
   CLAIM_TTL_MS: 120000,
 };
@@ -44,25 +46,55 @@ const fullKey = () => {
 };
 
 // ---------------------------------------------------------------------
-test('individual IDs split into team and member', () => {
-  assert.deepEqual(
-    (({ id, team, member }) => ({ id, team, member }))(parseIndividualId(' 12c ')),
-    { id: '12C', team: 12, member: 'C' });
-  assert.equal(parseIndividualId('012B').id, '12B');
-  assert.equal(parseIndividualId('7A').team, 7);
+test('individual IDs split into division, team and member', () => {
+  const p = parseIndividualId('A011');
+  assert.equal(p.ok, true);
+  assert.equal(p.id, 'A011');
+  assert.equal(p.division, 'A');
+  assert.equal(p.team, 'A01');
+  assert.equal(p.teamNo, 1);
+  assert.equal(p.member, '1');
 });
 
-test('a bare team number is a partial ID, not an error', () => {
-  const partial = parseIndividualId('12');
-  assert.equal(partial.ok, false);
-  assert.equal(partial.partial, true);
-  assert.equal(partial.team, 12, 'so the team box can fill in while you are still typing');
+test('IDs are case- and whitespace-forgiving', () => {
+  assert.equal(parseIndividualId(' b124 ').id, 'B124');
+  assert.equal(parseIndividualId('b-12-4').team, 'B12');
 });
 
-test('nonsense IDs are rejected outright', () => {
-  assert.equal(parseIndividualId('ABC').ok, false);
-  assert.equal(parseIndividualId('ABC').partial, undefined);
-  assert.equal(parseIndividualId('0A').ok, false);
+test('each division numbers its own teams', () => {
+  assert.notEqual(parseIndividualId('A011').team, parseIndividualId('B011').team);
+  assert.equal(teamKey('A', 1), 'A01');
+  assert.equal(teamKey('B', 12), 'B12');
+  assert.equal(divisionOfTeam('B07'), 'B');
+  assert.equal(teamNumberOf('B07'), 7);
+});
+
+test('a three-digit team still parses', () => {
+  const p = parseIndividualId('A1004');
+  assert.equal(p.team, 'A100');
+  assert.equal(p.member, '4');
+});
+
+test('a partial ID fills what it can while you type', () => {
+  const p = parseIndividualId('A01');
+  assert.equal(p.ok, false);
+  assert.equal(p.partial, true);
+  assert.equal(p.division, 'A');
+  assert.equal(p.teamNo, 1);
+});
+
+test('nonsense IDs are rejected', () => {
+  assert.equal(parseIndividualId('C011').ok, false);
+  assert.equal(parseIndividualId('12C').ok, false);
+  assert.equal(parseIndividualId('A000').ok, false, 'team 0 does not exist');
+  assert.equal(parseIndividualId('A010').ok, false, 'member 0 does not exist');
+});
+
+test('member numbers are 1 to 9', () => {
+  assert.equal(isMemberNumber('1'), true);
+  assert.equal(isMemberNumber('4'), true);
+  assert.equal(isMemberNumber('0'), false);
+  assert.equal(isMemberNumber('A'), false);
 });
 
 test('answers are blank or non-negative integers', () => {
@@ -155,14 +187,14 @@ test('a guts set knows whether it is finished', () => {
 test('guts standings rank on points and keep the team name', () => {
   const key = fullKey();
   const rows = [
-    { team: 1, problem: 25, answer: 50 },   // set 7, 7 points
-    { team: 2, problem: 1, answer: 2 },     // set 1, 1 point
-    { team: 2, problem: 2, answer: 4 },
+    { team: 'A01', problem: 25, answer: 50 },   // set 7, 7 points
+    { team: 'A02', problem: 1, answer: 2 },     // set 1, 1 point
+    { team: 'A02', problem: 2, answer: 4 },
   ];
   const board = gutsStandings(
-    [{ team: 1, name: 'Cowbell', division: 'A' }, { team: 2, name: 'Moo Point', division: 'A' }],
+    [{ team: 'A01', name: 'Cowbell', division: 'A' }, { team: 'A02', name: 'Moo Point', division: 'A' }],
     indexGutsAnswers(rows), key, cfg);
-  assert.deepEqual(board.map((r) => r.team), [1, 2]);
+  assert.deepEqual(board.map((r) => r.team), ['A01', 'A02']);
   assert.equal(board[0].score, 7);
   assert.equal(board[0].name, 'Cowbell');
   assert.equal(board[1].score, 2);
@@ -171,18 +203,19 @@ test('guts standings rank on points and keep the team name', () => {
 // ---------------------------------------------------------------------
 test('combined blends the two rounds by share of maximum', () => {
   const key = fullKey();
-  assert.equal(individualMaxPoints(key, cfg, 'A'), 20 * 4, 'four members of twenty points');
+  assert.equal(individualMaxPoints(key, cfg, 'A'), 20 * TEAM_COUNTING_MEMBERS,
+    'the best three members of twenty points each');
   assert.equal(gutsMaxPoints(key, cfg), 4 * (1 + 2 + 3 + 4 + 5 + 6 + 7));
 
   const individuals = [
-    { individualId: '1A', team: 1, member: 'A', division: 'A', score: 20, disqualified: false },
-    { individualId: '1B', team: 1, member: 'B', division: 'A', score: 20, disqualified: false },
-    { individualId: '1C', team: 1, member: 'C', division: 'A', score: 20, disqualified: false },
-    { individualId: '1D', team: 1, member: 'D', division: 'A', score: 20, disqualified: false },
+    { individualId: '1A', team: 'A01', member: 'A', division: 'A', score: 20, disqualified: false },
+    { individualId: '1B', team: 'A01', member: 'B', division: 'A', score: 20, disqualified: false },
+    { individualId: '1C', team: 'A01', member: 'C', division: 'A', score: 20, disqualified: false },
+    { individualId: '1D', team: 'A01', member: 'D', division: 'A', score: 20, disqualified: false },
   ];
-  const guts = [{ team: 1, name: 'Cowbell', division: 'A', score: gutsMaxPoints(key, cfg), disqualified: false }];
+  const guts = [{ team: 'A01', name: 'Cowbell', division: 'A', score: gutsMaxPoints(key, cfg), disqualified: false }];
   const [row] = combinedStandings(individuals, guts, key, cfg,
-    [{ team: 1, division: 'A', name: 'Cowbell' }]);
+    [{ team: 'A01', division: 'A', name: 'Cowbell' }]);
   assert.equal(row.indPct, 100);
   assert.equal(row.gutsPct, 100);
   assert.equal(row.total, 100);
@@ -190,39 +223,39 @@ test('combined blends the two rounds by share of maximum', () => {
 
 test('80/20 is a true 80/20 across the two rounds', () => {
   const key = fullKey();
-  const perfectIndividual = ['A', 'B', 'C', 'D'].map((m) => ({
-    individualId: `1${m}`, team: 1, member: m, division: 'A', score: 20, disqualified: false,
+  const perfectIndividual = ['1', '2', '3', '4'].map((m) => ({
+    individualId: `1${m}`, team: 'A01', member: m, division: 'A', score: 20, disqualified: false,
   }));
-  const noGuts = combinedStandings(perfectIndividual, [{ team: 1, division: 'A', score: 0 }],
-    key, cfg, [{ team: 1, division: 'A' }]);
+  const noGuts = combinedStandings(perfectIndividual, [{ team: 'A01', division: 'A', score: 0 }],
+    key, cfg, [{ team: 'A01', division: 'A' }]);
   assert.equal(noGuts[0].total, 80, 'a perfect individual round alone is worth the weight');
 
-  const onlyGuts = combinedStandings([], [{ team: 1, division: 'A', score: gutsMaxPoints(key, cfg) }],
-    key, cfg, [{ team: 1, division: 'A' }]);
+  const onlyGuts = combinedStandings([], [{ team: 'A01', division: 'A', score: gutsMaxPoints(key, cfg) }],
+    key, cfg, [{ team: 'A01', division: 'A' }]);
   assert.equal(onlyGuts[0].total, 20);
 });
 
 test('a disqualified team keeps its points but sorts last', () => {
   const key = fullKey();
   const individuals = [
-    { individualId: '1A', team: 1, member: 'A', division: 'A', score: 20, disqualified: true },
-    { individualId: '2A', team: 2, member: 'A', division: 'A', score: 5, disqualified: false },
+    { individualId: '1A', team: 'A01', member: 'A', division: 'A', score: 20, disqualified: true },
+    { individualId: '2A', team: 'A02', member: 'A', division: 'A', score: 5, disqualified: false },
   ];
   const rows = combinedStandings(individuals, [], key, cfg,
-    [{ team: 1, division: 'A', disqualified: true }, { team: 2, division: 'A' }]);
-  assert.deepEqual(rows.map((r) => r.team), [2, 1]);
-  assert.equal(rows.find((r) => r.team === 1).individual, 20, 'nothing was erased');
+    [{ team: 'A01', division: 'A', disqualified: true }, { team: 'A02', division: 'A' }]);
+  assert.deepEqual(rows.map((r) => r.team), ['A02', 'A01']);
+  assert.equal(rows.find((r) => r.team === 'A01').individual, 20, 'nothing was erased');
 });
 
 test('individual standings inherit their team disqualification', () => {
   const key = fullKey();
   const people = individualStandings([
-    { individual_id: '1A', team: 1, member: 'A', division: 'A', answers: [1, 2], name: 'Ada' },
-    { individual_id: '2A', team: 2, member: 'A', division: 'A', answers: [1], name: 'Bo' },
-  ], key, cfg, dqTeams([{ team: 1, disqualified: true }]));
-  assert.deepEqual(people.map((p) => p.individualId), ['2A', '1A']);
-  assert.equal(people.find((p) => p.individualId === '1A').disqualified, true);
-  assert.equal(people.find((p) => p.individualId === '1A').score, 2, 'score is kept');
+    { individual_id: 'A011', team: 'A01', member: 'A', division: 'A', answers: [1, 2], name: 'Ada' },
+    { individual_id: 'A021', team: 'A02', member: 'A', division: 'A', answers: [1], name: 'Bo' },
+  ], key, cfg, dqTeams([{ team: 'A01', disqualified: true }]));
+  assert.deepEqual(people.map((p) => p.individualId), ['A021', 'A011']);
+  assert.equal(people.find((p) => p.individualId === 'A011').disqualified, true);
+  assert.equal(people.find((p) => p.individualId === 'A011').score, 2, 'score is kept');
 });
 
 test('splitByDivision keeps teams with no division out of both', () => {
@@ -300,15 +333,15 @@ const base = () => ({
 
 test('an inserted row lands in the cache', () => {
   const next = applyPatch(base(), 'contestants',
-    { eventType: 'INSERT', new: { individual_id: '1A', team: 1 } });
+    { eventType: 'INSERT', new: { individual_id: 'A011', team: 1 } });
   assert.equal(next.contestants.length, 1);
 });
 
 test('an updated row replaces the one already there, not appended', () => {
   let cache = applyPatch(base(), 'contestants',
-    { eventType: 'INSERT', new: { individual_id: '1A', team: 1, name: 'Ada' } });
+    { eventType: 'INSERT', new: { individual_id: 'A011', team: 'A01', name: 'Ada' } });
   cache = applyPatch(cache, 'contestants',
-    { eventType: 'UPDATE', new: { individual_id: '1A', team: 1, name: 'Ada L' } });
+    { eventType: 'UPDATE', new: { individual_id: 'A011', team: 'A01', name: 'Ada L' } });
   assert.equal(cache.contestants.length, 1);
   assert.equal(cache.contestants[0].name, 'Ada L');
 });
@@ -323,16 +356,16 @@ test('a deleted row leaves', () => {
 
 test('composite keys do not collide', () => {
   let cache = applyPatch(base(), 'guts_answers',
-    { eventType: 'INSERT', new: { team: 1, problem: 1, answer: 5 } });
+    { eventType: 'INSERT', new: { team: 'A01', problem: 1, answer: 5 } });
   cache = applyPatch(cache, 'guts_answers',
-    { eventType: 'INSERT', new: { team: 1, problem: 2, answer: 6 } });
+    { eventType: 'INSERT', new: { team: 'A01', problem: 2, answer: 6 } });
   cache = applyPatch(cache, 'guts_answers',
-    { eventType: 'INSERT', new: { team: 2, problem: 1, answer: 7 } });
+    { eventType: 'INSERT', new: { team: 'A02', problem: 1, answer: 7 } });
   assert.equal(cache.gutsAnswers.length, 3);
   cache = applyPatch(cache, 'guts_answers',
-    { eventType: 'UPDATE', new: { team: 1, problem: 2, answer: 99 } });
+    { eventType: 'UPDATE', new: { team: 'A01', problem: 2, answer: 99 } });
   assert.equal(cache.gutsAnswers.length, 3);
-  assert.equal(cache.gutsAnswers.find((g) => g.team === 1 && g.problem === 2).answer, 99);
+  assert.equal(cache.gutsAnswers.find((g) => g.team === 'A01' && g.problem === 2).answer, 99);
 });
 
 test('single-row tables are replaced rather than collected', () => {
@@ -510,11 +543,11 @@ test('standings score each contestant against their own paper', () => {
   const sheetA = Array.from({ length: 20 }, (_, i) => i + 1);
   const sheetB = Array.from({ length: 20 }, (_, i) => i + 101);
   const people = individualStandings([
-    { individual_id: '1A', team: 1, member: 'A', division: 'A', answers: sheetA },
-    { individual_id: '2A', team: 2, member: 'A', division: 'B', answers: sheetB },
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: sheetA },
+    { individual_id: 'B021', team: 'B02', member: '1', division: 'B', answers: sheetB },
   ], key, cfg);
-  assert.equal(people.find((p) => p.individualId === '1A').score, 20);
-  assert.equal(people.find((p) => p.individualId === '2A').score, 20,
+  assert.equal(people.find((p) => p.individualId === 'A011').score, 20);
+  assert.equal(people.find((p) => p.individualId === 'B021').score, 20,
     'Division B is perfect on its own paper too');
 });
 
@@ -526,13 +559,13 @@ test('a team is measured against the maximum of the paper it sat', () => {
     if (p <= 10) rows.push({ round: 'individual', division: 'B', problem: p, answer: p, points: 1 });
   }
   const key = indexKey(rows);
-  assert.equal(individualMaxPoints(key, cfg, 'A'), 80);
-  assert.equal(individualMaxPoints(key, cfg, 'B'), 40, 'four members of ten points');
+  assert.equal(individualMaxPoints(key, cfg, 'A'), 60);
+  assert.equal(individualMaxPoints(key, cfg, 'B'), 30, 'three counted members of ten points');
 
-  const perfectB = ['A', 'B', 'C', 'D'].map((m) => ({
-    individualId: `1${m}`, team: 1, member: m, division: 'B', score: 10, disqualified: false,
+  const perfectB = ['1', '2', '3', '4'].map((m) => ({
+    individualId: `1${m}`, team: 'A01', member: m, division: 'B', score: 10, disqualified: false,
   }));
-  const [row] = combinedStandings(perfectB, [], key, cfg, [{ team: 1, division: 'B' }]);
+  const [row] = combinedStandings(perfectB, [], key, cfg, [{ team: 'A01', division: 'B' }]);
   assert.equal(row.indPct, 100, 'a perfect B team is 100% of the B paper, not half of the A one');
   assert.equal(row.total, 80, 'and so banks the full individual weight');
 });
@@ -610,4 +643,149 @@ test('an empty table is fine', async () => {
 test('a read error is raised, not silently returned short', async () => {
   const failing = () => ({ range: () => Promise.resolve({ data: null, error: { message: 'boom' } }) });
   await assert.rejects(() => fetchAllPages(failing), /boom/);
+});
+
+// ---------------------------------------------------------------------
+// A team scores its best three of four
+// ---------------------------------------------------------------------
+
+const member = (team, m, score, division = 'A') => ({
+  individualId: `${team}${m}`, team, member: String(m), division, score, disqualified: false,
+});
+
+test('a team counts its best three members, not all four', () => {
+  const key = fullKey();
+  const people = [member('A01', 1, 20), member('A01', 2, 15),
+    member('A01', 3, 10), member('A01', 4, 1)];
+  const [row] = combinedStandings(people, [], key, cfg, [{ team: 'A01', division: 'A' }]);
+  assert.equal(row.individual, 45, '20 + 15 + 10, the weakest is dropped');
+  assert.equal(row.members.length, 4, 'but everyone is still listed');
+});
+
+test('the counted members are marked so the breakdown can show them', () => {
+  const key = fullKey();
+  const people = [member('A01', 1, 5), member('A01', 2, 20),
+    member('A01', 3, 12), member('A01', 4, 9)];
+  const [row] = combinedStandings(people, [], key, cfg, [{ team: 'A01', division: 'A' }]);
+  const counted = row.members.filter((m) => m.counted).map((m) => m.member).sort();
+  assert.deepEqual(counted, ['2', '3', '4'], 'the 5 is the one dropped');
+  assert.equal(row.individual, 41);
+});
+
+test('a team of three is not handicapped', () => {
+  const key = fullKey();
+  const three = [member('A01', 1, 20), member('A01', 2, 20), member('A01', 3, 20)];
+  const four = [...three, member('A01', 4, 0)];
+  const a = combinedStandings(three, [], key, cfg, [{ team: 'A01', division: 'A' }])[0];
+  const b = combinedStandings(four, [], key, cfg, [{ team: 'A01', division: 'A' }])[0];
+  assert.equal(a.individual, 60);
+  assert.equal(a.total, b.total, 'a fourth member who scores nothing changes nothing');
+  assert.equal(a.indPct, 100, 'three perfect members is a perfect team score');
+});
+
+test('a fourth member can only help', () => {
+  const key = fullKey();
+  const weak = [member('A01', 1, 10), member('A01', 2, 10), member('A01', 3, 10)];
+  const withStar = [...weak, member('A01', 4, 20)];
+  const before = combinedStandings(weak, [], key, cfg, [{ team: 'A01', division: 'A' }])[0];
+  const after = combinedStandings(withStar, [], key, cfg, [{ team: 'A01', division: 'A' }])[0];
+  assert.equal(before.individual, 30);
+  assert.equal(after.individual, 40, 'the new best score replaces the lowest counted one');
+});
+
+// ---------------------------------------------------------------------
+// Statistics
+// ---------------------------------------------------------------------
+
+test('summarise computes the usual figures', () => {
+  const s = summarise([2, 4, 4, 4, 5, 5, 7, 9]);
+  assert.equal(s.n, 8);
+  assert.equal(s.mean, 5);
+  assert.equal(s.median, 4.5);
+  assert.equal(s.stdev, 2, 'population standard deviation');
+  assert.equal(s.min, 2);
+  assert.equal(s.max, 9);
+});
+
+test('summarise handles one value and none at all', () => {
+  assert.deepEqual(summarise([7]).median, 7);
+  assert.equal(summarise([7]).stdev, 0);
+  assert.equal(summarise([]).n, 0);
+});
+
+test('per-problem stats count correct, wrong and blank apart', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 999, null] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 2, null] },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  const stats = problemStats(people, 'A', { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  assert.deepEqual(
+    stats.map((p) => [p.problem, p.correct, p.blank]),
+    [[1, 2, 0], [2, 1, 0], [3, 0, 2]]);
+  assert.equal(stats[0].pctCorrect, 100);
+});
+
+test('the distribution buckets contestants by score', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 99, 99] },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  const dist = scoreDistribution(people, 'A', { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  assert.equal(dist.find((d) => d.score === 3).count, 1);
+  assert.equal(dist.find((d) => d.score === 1).count, 1);
+  assert.equal(dist.reduce((a, d) => a + d.count, 0), 2);
+});
+
+test('division statistics name the easiest and hardest problem', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 99] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 99, 99] },
+  ], key, small);
+  const st = divisionStatistics(people, [], 'A', small);
+  assert.equal(st.mostSolved.problem, 1);
+  assert.equal(st.fewestSolved.problem, 3);
+  assert.equal(st.contestants.n, 2);
+});
+
+test('statistics ignore contestants who have not been entered', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [] },
+  ], key, small);
+  assert.equal(divisionStatistics(people, [], 'A', small).contestants.n, 1);
+});
+
+// ---------------------------------------------------------------------
+// Award lines
+// ---------------------------------------------------------------------
+
+test('award lines are shaped for a slide', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A',
+      name: 'Ada Lovelace', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A',
+      name: '', answers: [1, 2, 99] },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  const lines = awardLines(people, 'A', 10);
+  assert.equal(lines[0].text, 'A011 Ada Lovelace\nScore: 3');
+  assert.equal(lines[1].text, 'A012\nScore: 2', 'a missing name leaves no trailing space');
+  assert.equal(lines.length, 2);
+});
+
+test('award lines skip disqualified contestants and respect the count', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A021', team: 'A02', member: '1', division: 'A', answers: [1, 2, 3] },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 }, new Set(['A01']));
+  const lines = awardLines(people, 'A', 10);
+  assert.deepEqual(lines.map((l) => l.individualId), ['A021']);
+  assert.equal(awardLines(people, 'A', 0).length, 0);
 });

@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.08.31.3">
+<body data-app-version="2026.09.03.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -37,6 +37,15 @@
       <input class="input" id="staffPassword" type="password" autocomplete="current-password"
              placeholder="Shared with the scoring team">
       <p class="field__hint" id="gateError"></p>
+    </div>
+
+    <div class="field" id="adminField">
+      <label class="field__label" for="adminPassword">
+        Admin password <span class="muted">optional</span>
+      </label>
+      <input class="input" id="adminPassword" type="password" autocomplete="off"
+             placeholder="Only if you need Admin or to edit the key">
+      <p class="field__hint">Leave blank to sign in as a scorer.</p>
     </div>
 
     <button class="btn btn--primary btn--block" id="gateEnter">Start scoring</button>
@@ -80,6 +89,8 @@
       <span class="clockchip__time mono" id="clockTime">75:00</span>
     </div>
 
+    <span class="tag tag--off" id="roleBadge">scorer</span>
+
     <div class="whoami">
       <div>
         <div class="whoami__label">Scoring as</div>
@@ -111,27 +122,28 @@
 
         <div class="field">
           <label class="field__label" for="individualId">Individual ID</label>
-          <input class="input id-input" id="individualId" placeholder="12C"
-                 autocomplete="off" spellcheck="false" maxlength="5">
-          <p class="field__hint" id="idEcho">Type 12C and the team and member fill themselves in.</p>
+          <input class="input id-input" id="individualId" placeholder="A011"
+                 autocomplete="off" spellcheck="false" maxlength="6">
+          <p class="field__hint" id="idEcho">Type A011 — division, team, member fill themselves in.</p>
         </div>
 
         <div class="grid-3">
           <div class="field">
-            <label class="field__label" for="teamNo">Team</label>
-            <input class="input mono" id="teamNo" type="number" min="1" autocomplete="off">
-          </div>
-          <div class="field">
-            <label class="field__label" for="memberLetter">Member</label>
-            <input class="input mono" id="memberLetter" maxlength="1" autocomplete="off">
-          </div>
-          <div class="field">
             <label class="field__label" for="divisionPick">Division</label>
             <select class="select" id="divisionPick">
               <option value="">—</option>
-              <option value="A">Division A</option>
-              <option value="B">Division B</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
             </select>
+          </div>
+          <div class="field">
+            <label class="field__label" for="teamNo">Team</label>
+            <input class="input mono" id="teamNo" type="number" min="1" max="999" autocomplete="off">
+          </div>
+          <div class="field">
+            <label class="field__label" for="memberLetter">Member</label>
+            <input class="input mono" id="memberLetter" type="number" min="1" max="4"
+                   maxlength="1" autocomplete="off">
           </div>
         </div>
 
@@ -164,20 +176,21 @@
 
         <div class="grid-3">
           <div class="field">
+            <label class="field__label" for="gutsDivision">Division</label>
+            <select class="select" id="gutsDivision">
+              <option value="">—</option>
+              <option value="A">A</option>
+              <option value="B">B</option>
+            </select>
+          </div>
+          <div class="field">
             <label class="field__label" for="gutsTeam">Team</label>
-            <input class="input id-input" id="gutsTeam" type="number" min="1" placeholder="12" autocomplete="off">
+            <input class="input id-input" id="gutsTeam" type="number" min="1" max="999"
+                   placeholder="01" autocomplete="off">
           </div>
           <div class="field">
             <label class="field__label" for="gutsSet">Set</label>
             <select class="select" id="gutsSet"></select>
-          </div>
-          <div class="field">
-            <label class="field__label" for="gutsDivision">Division</label>
-            <select class="select" id="gutsDivision">
-              <option value="">—</option>
-              <option value="A">Division A</option>
-              <option value="B">Division B</option>
-            </select>
           </div>
         </div>
 
@@ -259,7 +272,14 @@
         <div class="answers hidden" id="keyIndividualB"></div>
         <h3 class="subhead" style="margin-top:22px">Guts — 7 sets of 4</h3>
         <div id="keyGuts"></div>
-        <div class="chip-row" style="margin-top:16px">
+        <div class="banner banner--info hidden" id="keyReadOnly">
+          <div>
+            <b>You are signed in as a scorer</b>
+            <span>The key is shown so you can check it. Editing needs the admin password —
+            sign out and enter it to make changes.</span>
+          </div>
+        </div>
+        <div class="chip-row" style="margin-top:16px" id="keyActions">
           <button class="btn btn--primary" id="saveKey">Save answer key</button>
           <button class="btn btn--danger" id="clearKey">Clear answer key</button>
           <span class="muted" id="clearKeyHint" style="font-size:12px"></span>
@@ -301,6 +321,13 @@
       </div>
 
       <div class="card panel hidden" id="tab-setup">
+        <div class="banner banner--warn hidden" id="adminLocked">
+          <div>
+            <b>Admin only</b>
+            <span>Sign out and sign back in with the admin password to open this.</span>
+          </div>
+        </div>
+        <div id="adminBody">
         <div class="panel__head"><h2>Contest settings</h2></div>
         <div class="grid-3">
           <div class="field">
@@ -323,7 +350,7 @@
         <div class="grid-2">
           <div class="field">
             <label class="field__label" for="dqTeam">Team number</label>
-            <input class="input" id="dqTeam" type="number" min="1" placeholder="37" autocomplete="off">
+            <input class="input mono" id="dqTeam" placeholder="A01" autocomplete="off" maxlength="4">
           </div>
           <div class="field">
             <label class="field__label" for="dqReason">Reason</label>
@@ -338,6 +365,7 @@
           <button class="btn" id="exportIndividual">Individual results</button>
           <button class="btn" id="exportGuts">Guts results</button>
           <button class="btn" id="exportCombined">Combined results</button>
+          <button class="btn" id="exportStats">Statistics</button>
         </div>
 
         <div class="panel__head" style="margin-top:28px"><h2>Clear test data</h2></div>
@@ -359,12 +387,13 @@
           <button class="btn btn--ghost" id="signOut">Sign out</button>
           <button class="btn btn--ghost hidden" id="seedDemo">Load demo data</button>
         </div>
+        </div>
       </div>
     </section>
   </main>
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.08.31.3"></script>
+<script type="module" src="assets/app.js?v=2026.09.03.1"></script>
 </body>
 </html>

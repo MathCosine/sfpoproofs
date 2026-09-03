@@ -12,6 +12,19 @@ No accounts, no per-scorer logins, no monthly bill.
 
 ## What it does
 
+**IDs read `A011`** — Division A, team 01, member 1. Type it and the division, team
+and member boxes fill themselves in; all three stay editable and rebuild the ID. Each
+division numbers its own teams, so `A01` and `B01` are different teams.
+
+**A team's individual score is its best three of four members.** A team of three is
+not handicapped, and a fourth member can only help. Every member is still listed; the
+counted ones are marked.
+
+**Two shared logins.** Graders use the staff password. A director who needs the Admin
+tab or to change the answer key enters the admin password instead, and the database —
+not just the browser — is what enforces it: a grader can read the key and cannot
+write it, proven by row level security rather than a hidden button.
+
 **The two divisions sit different papers.** Division A and Division B each have their
 own 20-problem individual key, edited on their own tab. Guts is one paper for
 everybody. A sheet is always marked against the division you picked for it, and
@@ -52,6 +65,14 @@ whatsoever from the staff portal.
 length — all mid-contest, all reflected on the public board within a second. The
 board freezes itself with 10 minutes left (configurable) so the finish is a reveal;
 unfreezing publishes everything that happened during the freeze.
+
+**Leaderboards page ten at a time** with arrows, and the individual board has a
+**Copy for slides** button that puts the top ten on the clipboard as `ID Name` then
+`Score: N`, ready to paste into award slides.
+
+**Statistics export** covers per-problem difficulty (most and fewest solved, percent
+correct), per-division mean, median, standard deviation, quartiles and range for both
+rounds, and a score distribution.
 
 **Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
 the guts point values, which are configuration rather than answers.
@@ -209,8 +230,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 49 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 95 browser checks, including ten scorers at once
+npm test               # 65 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 118 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
