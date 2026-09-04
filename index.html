@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.03.1">
+<body data-app-version="2026.09.04.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -45,7 +45,7 @@
       </label>
       <input class="input" id="adminPassword" type="password" autocomplete="off"
              placeholder="Only if you need Admin or to edit the key">
-      <p class="field__hint">Leave blank to sign in as a scorer.</p>
+      <p class="field__hint" id="adminHint">Leave blank to sign in as a scorer.</p>
     </div>
 
     <button class="btn btn--primary btn--block" id="gateEnter">Start scoring</button>
@@ -99,6 +99,7 @@
       <button class="whoami__edit" id="changeName">change</button>
     </div>
 
+    <button class="icon-btn" data-signout title="Sign out and pick a different password">Sign out</button>
     <button class="icon-btn" id="themeToggle" title="Toggle theme">◐</button>
   </header>
 
@@ -324,8 +325,9 @@
         <div class="banner banner--warn hidden" id="adminLocked">
           <div>
             <b>Admin only</b>
-            <span>Sign out and sign back in with the admin password to open this.</span>
+            <span>Sign back in with the admin password to open this.</span>
           </div>
+          <button class="btn btn--ghost" data-signout>Sign out</button>
         </div>
         <div id="adminBody">
         <div class="panel__head"><h2>Contest settings</h2></div>
@@ -384,7 +386,7 @@
 
         <div class="panel__head" style="margin-top:28px"><h2>Session</h2></div>
         <div class="chip-row">
-          <button class="btn btn--ghost" id="signOut">Sign out</button>
+          <button class="btn btn--ghost" data-signout>Sign out</button>
           <button class="btn btn--ghost hidden" id="seedDemo">Load demo data</button>
         </div>
         </div>
@@ -394,6 +396,6 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.09.03.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.04.1"></script>
 </body>
 </html>

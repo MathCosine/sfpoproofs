@@ -275,6 +275,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .banner--ok    { background: var(--lime);  color: #10131a; }
 .banner--error { background: var(--red);   color: #10131a; }
 .banner b { display: block; }
+/* A banner that offers an action keeps it on the right, centred on the text. */
+.banner .btn { margin-left: auto; align-self: center; flex-shrink: 0; }
 .banner span { font-weight: 600; }
 
 .kbd {

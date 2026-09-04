@@ -26,6 +26,15 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 // credentials, and these tests must never write into the live contest.
 const BASE = `http://127.0.0.1:${server.address().port}/?demo=1`;
 const out = [];
+// A crash mid-run used to throw away every result gathered so far, which
+// hides the check that actually went wrong. Print what we have, then rethrow.
+for (const signal of ['uncaughtException', 'unhandledRejection']) {
+  process.on(signal, (err) => {
+    console.log(out.join('\n'));
+    console.error(err);
+    process.exit(1);
+  });
+}
 const check = (name, ok, detail = '') => {
   out.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ' — ' + detail : ''}`);
   if (!ok) process.exitCode = 1;
@@ -72,6 +81,9 @@ await page.goto(BASE, { waitUntil: 'networkidle' });
 check('gate is shown', await page.isVisible('#gate'));
 check('?demo=1 forces the demo store', await page.isVisible('#gateDemo'));
 await page.fill('#graderName', 'Priya Raman');
+// In demo mode any admin password works. This tab drives the Admin tab and
+// the answer key, so it signs in as one; the scorer view is checked below.
+await page.fill('#adminPassword', 'demo');
 await page.click('#gateEnter');
 await page.waitForSelector('#app:not(.hidden)');
 check('entered the portal', await page.isVisible('#app'));
@@ -824,6 +836,65 @@ await shot.goto(BOARD_URL, { waitUntil: 'networkidle' });
 await shot.waitForTimeout(1500);
 if (wantShots) await shot.screenshot({ path: 'docs/screenshot-guts-board.png' });
 await shot.close();
+
+// ---- a scorer can get out again --------------------------------------
+// Sign out used to live at the bottom of the Admin tab, which scorers cannot
+// open — so the one action that lets a scorer become an admin was locked
+// behind already being an admin.
+{
+  const plain = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  await plain.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+  const scorer = await plain.newPage();
+  watch(scorer, 'scorer');
+  await scorer.goto(BASE, { waitUntil: 'networkidle' });
+  await scorer.fill('#graderName', 'Ana Ruiz');
+  await scorer.click('#gateEnter');
+  await scorer.waitForSelector('#app:not(.hidden)');
+
+  check('signing in with no admin password gives you a scorer',
+    (await scorer.textContent('#roleBadge')).trim() === 'scorer');
+
+  await scorer.click('.tab[data-tab="key"]');
+  await scorer.waitForTimeout(200);
+  check('a scorer can read the answer key',
+    await scorer.isVisible('#keyIndividualA'));
+  check('but cannot edit it',
+    await scorer.locator('#keyIndividualA .ans input').first().evaluate((el) => el.readOnly));
+  check('and the save and clear buttons are gone',
+    !(await scorer.isVisible('#keyActions')));
+
+  await scorer.click('.tab[data-tab="setup"]');
+  await scorer.waitForTimeout(200);
+  check('the admin tab is locked shut', await scorer.isVisible('#adminLocked'));
+  check('and its controls are not merely hidden behind a banner',
+    !(await scorer.isVisible('#teamCount')));
+
+  const outs = await scorer.locator('[data-signout]:visible').count();
+  check('a scorer can still reach sign out', outs >= 1, `${outs} visible`);
+
+  // Sign out reloads the page. Wait for that reload, or the name typed below
+  // lands in the old document and is wiped on the way in.
+  await Promise.all([
+    scorer.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    scorer.click('.topbar [data-signout]'),
+  ]);
+  await scorer.waitForSelector('#gate:not(.hidden)');
+  check('signing out lands you back on the gate', await scorer.isVisible('#gate'));
+  check('and forgets the name so the next person sets their own',
+    (await scorer.inputValue('#graderName')) === '');
+
+  await scorer.fill('#graderName', 'Ana Ruiz');
+  await scorer.fill('#adminPassword', 'demo');
+  await scorer.click('#gateEnter');
+  await scorer.waitForSelector('#app:not(.hidden)');
+  check('and signing back in with the admin password promotes you',
+    (await scorer.textContent('#roleBadge')).trim() === 'admin');
+  await scorer.click('.tab[data-tab="key"]');
+  await scorer.waitForTimeout(200);
+  check('the key is editable again',
+    !(await scorer.locator('#keyIndividualA .ans input').first().evaluate((el) => el.readOnly)));
+  await plain.close();
+}
 
 // ---- half-updated cache ----------------------------------------------
 // The bug this guards: a browser holding a new index.html and a stale

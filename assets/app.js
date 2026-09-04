@@ -1675,13 +1675,18 @@ function wire() {
     }
   });
 
-  $('#signOut').addEventListener('click', async () => {
-    await releaseHeld();
-    await store.signOut();
-    localStorage.removeItem('contest-grader-name');
-    localStorage.removeItem('contest-role');
-    location.reload();
-  });
+  // Sign out sits in three places — the top bar, the admin lock banner and the
+  // admin tab — because a grader who needs to become an admin cannot reach the
+  // admin tab. One handler covers all of them.
+  for (const btn of $$('[data-signout]')) {
+    btn.addEventListener('click', async () => {
+      await releaseHeld();
+      await store.signOut();
+      localStorage.removeItem('contest-grader-name');
+      localStorage.removeItem('contest-role');
+      location.reload();
+    });
+  }
 
   $('#changeName').addEventListener('click', () => {
     const next = prompt('Scoring as:', grader.name);
@@ -1820,6 +1825,8 @@ async function boot() {
   if (store.mode === 'demo') {
     $('#gateDemo').classList.remove('hidden');
     $('#passwordField').classList.add('hidden');
+    $('#adminHint').textContent =
+      'Demo mode: type anything for admin, or leave it blank for the scorer view.';
   }
   if (grader.name && await store.hasSession().catch(() => false)) {
     const email = await store.currentEmail().catch(() => null);
@@ -1853,7 +1860,10 @@ async function boot() {
         return;
       } finally { $('#gateEnter').disabled = false; }
     } else {
-      isAdmin = Boolean(adminPassword) || localStorage.getItem('contest-role') !== 'scorer';
+      // Demo has no real accounts, so any admin password will do. Leaving it
+      // blank signs you in as a scorer, which is how you preview what the
+      // scoring team actually sees.
+      isAdmin = Boolean(adminPassword);
       localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
     }
     await enterApp();

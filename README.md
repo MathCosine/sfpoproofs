@@ -23,7 +23,9 @@ counted ones are marked.
 **Two shared logins.** Graders use the staff password. A director who needs the Admin
 tab or to change the answer key enters the admin password instead, and the database —
 not just the browser — is what enforces it: a grader can read the key and cannot
-write it, proven by row level security rather than a hidden button.
+write it, proven by row level security rather than a hidden button. **Sign out** sits
+in the top bar, so a grader can hand the laptop over or sign back in as an admin
+without hunting for it.
 
 **The two divisions sit different papers.** Division A and Division B each have their
 own 20-problem individual key, edited on their own tab. Guts is one paper for
@@ -31,10 +33,9 @@ everybody. A sheet is always marked against the division you picked for it, and
 switching the dropdown re-marks it — so a sheet keyed against the wrong paper shows
 up as a wall of red rather than a plausible score.
 
-**Type a sheet, not a score.** Enter `12C` and the team and member boxes fill
-themselves in — both stay editable. Pick a division, optionally a name, then key the
-20 answers. Boxes turn green or red against the answer key as you type, so a
-mis-keyed digit is visible before you save.
+**Type a sheet, not a score.** Key the ID, optionally a name, then the 20 answers.
+Boxes turn green or red against the answer key as you type, so a mis-keyed digit is
+visible before you save.
 
 **The answer boxes behave like a keypad.** Enter moves on, arrows move around,
 backspace on an empty box steps back, and pasting a row of numbers spreads it across
@@ -231,7 +232,7 @@ data. The bar reads **demo mode** in amber throughout.
 
 ```bash
 npm test               # 65 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 118 browser checks, including ten scorers at once
+npm run test:e2e       # 129 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
