@@ -446,18 +446,21 @@ export function problemStats(individuals, division, cfg) {
 }
 
 /** How many contestants scored 0, 1, 2 … out of the paper. */
-export function scoreDistribution(individuals, division, cfg) {
+export function scoreDistribution(individuals, division, cfg, key = null) {
   const cohort = individuals.filter((p) => p.division === division && p.answered > 0);
-  const counts = new Array(cfg.INDIVIDUAL_PROBLEMS + 1).fill(0);
+  const top = key
+    ? keyMaxPoints(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, division)
+    : cfg.INDIVIDUAL_PROBLEMS;
+  const counts = new Array(Math.max(1, top) + 1).fill(0);
   for (const person of cohort) {
-    const bucket = Math.max(0, Math.min(cfg.INDIVIDUAL_PROBLEMS, Math.round(person.score)));
+    const bucket = Math.max(0, Math.min(counts.length - 1, Math.round(person.score)));
     counts[bucket] += 1;
   }
   return counts.map((count, score) => ({ score, count }));
 }
 
 /** Everything above, for one division, in one object. */
-export function divisionStatistics(individuals, guts, division, cfg) {
+export function divisionStatistics(individuals, guts, division, cfg, key = null) {
   const cohort = individuals.filter((p) => p.division === division && p.answered > 0);
   const problems = problemStats(individuals, division, cfg);
   const ranked = [...problems].sort((a, b) => b.correct - a.correct);
@@ -469,14 +472,14 @@ export function divisionStatistics(individuals, guts, division, cfg) {
     problems,
     mostSolved: ranked[0] ?? null,
     fewestSolved: ranked[ranked.length - 1] ?? null,
-    distribution: scoreDistribution(individuals, division, cfg),
+    distribution: scoreDistribution(individuals, division, cfg, key),
   };
 }
 
 /** One line per awarded contestant, ready to paste onto a slide. */
 export function awardLines(individuals, division, count = 10) {
   return individuals
-    .filter((p) => p.division === division && !p.disqualified)
+    .filter((p) => p.division === division && !p.disqualified && p.answered > 0)
     .slice(0, count)
     .map((p, i) => ({
       place: i + 1,

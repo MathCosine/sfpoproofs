@@ -145,7 +145,7 @@ footer .spacer{margin-left:auto}
 @media (prefers-reduced-motion:reduce){.resttrack{transition:none!important}}
 </style>
 </head>
-<body data-app-version="2026.09.04.1">
+<body data-app-version="2026.09.05.1">
 <div class="wrap">
   <header>
     <div class="brand">
@@ -184,9 +184,9 @@ footer .spacer{margin-left:auto}
 </div>
 
 <script type="module">
-import { resolvedConfig } from './assets/config.js?v=2026.09.04.1';
-import { createPublicStore } from './assets/store.js?v=2026.09.04.1';
-import { gutsRemaining, formatClock } from './assets/scoring.js?v=2026.09.04.1';
+import { resolvedConfig } from './assets/config.js?v=2026.09.05.1';
+import { createPublicStore } from './assets/store.js?v=2026.09.05.1';
+import { gutsRemaining, formatClock } from './assets/scoring.js?v=2026.09.05.1';
 
 const cfg = resolvedConfig(location.search);
 const $ = (s) => document.querySelector(s);
@@ -235,7 +235,8 @@ function setLabel(mask) {
 function render() {
   const ranked = [...board].sort(
     (a, b) => Number(a.disqualified) - Number(b.disqualified)
-      || Number(b.score) - Number(a.score) || a.team - b.team);
+      || Number(b.score) - Number(a.score)
+      || String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
   const live = ranked.filter((r) => !r.disqualified);
 
   $('#contestName').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
@@ -354,13 +355,14 @@ if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
         .map((k) => [Number(k.problem), k]));
       const byTeam = new Map();
       for (const a of db.gutsAnswers ?? []) {
-        if (!byTeam.has(Number(a.team))) byTeam.set(Number(a.team), []);
-        byTeam.get(Number(a.team)).push(a);
+        const team = String(a.team);
+        if (!byTeam.has(team)) byTeam.set(team, []);
+        byTeam.get(team).push(a);
       }
       board = (db.teams ?? []).map((t) => {
         let score = 0; let solved = 0;
         const perSet = new Map();
-        for (const a of byTeam.get(Number(t.team)) ?? []) {
+        for (const a of byTeam.get(String(t.team)) ?? []) {
           const k = key.get(Number(a.problem));
           if (a.answer != null) {
             const set = Math.ceil(Number(a.problem) / cfg.GUTS_PER_SET);
@@ -371,7 +373,7 @@ if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
         let mask = 0;
         for (const [set, n] of perSet) if (n === cfg.GUTS_PER_SET) mask |= 1 << (set - 1);
         return {
-          team: Number(t.team), name: t.name, division: t.division,
+          team: String(t.team), name: t.name, division: t.division,
           score, solved, set_mask: mask, disqualified: Boolean(t.disqualified),
         };
       });

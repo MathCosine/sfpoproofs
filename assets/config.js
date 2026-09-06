@@ -12,7 +12,7 @@
 // Bumped on every deploy. index.html and guts.html carry the same string
 // in data-app-version; a mismatch means the browser has a half-updated
 // copy and the portal says so rather than misbehaving quietly.
-export const APP_VERSION = '2026.09.04.1';
+export const APP_VERSION = '2026.09.05.1';
 
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
@@ -42,8 +42,6 @@ export const CONFIG = {
   GUTS_WEIGHT: 20,
 
   // ---- Roster ------------------------------------------------------
-  // Individual IDs are <team><member>, e.g. 12C. Division is chosen from
-  // a dropdown and stored on the team.
   // IDs read <division><team><member>: A011 is Division A, team 01,
   // member 1. Each division numbers its own teams.
   TEAM_COUNT: 100,

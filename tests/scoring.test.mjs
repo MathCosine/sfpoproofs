@@ -779,6 +779,37 @@ test('award lines are shaped for a slide', () => {
   assert.equal(lines.length, 2);
 });
 
+test('award lines skip contestants who sat nothing', () => {
+  // A roster row can exist before anyone keys the paper. Placing an
+  // unentered contestant tenth would put a blank award on the slide.
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [] },
+    { individual_id: 'A013', team: 'A01', member: '3', division: 'A', answers: null },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  assert.deepEqual(awardLines(people, 'A', 10).map((l) => l.individualId), ['A011']);
+});
+
+test('the distribution spans the points the key actually awards', () => {
+  // Two points a problem puts a perfect paper at 6, not 3. Clamping to
+  // the problem count piled everyone above it into the last bucket.
+  const key = indexKey([
+    { round: 'individual', division: 'A', problem: 1, answer: 1, points: 2 },
+    { round: 'individual', division: 'A', problem: 2, answer: 2, points: 2 },
+    { round: 'individual', division: 'A', problem: 3, answer: 3, points: 2 },
+  ]);
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 9, 9] },
+  ], key, small);
+  const dist = scoreDistribution(people, 'A', small, key);
+  assert.equal(dist.length, 7, 'scores 0 through 6');
+  assert.equal(dist[6].count, 1, 'the perfect paper sits at 6');
+  assert.equal(dist[2].count, 1);
+});
+
 test('award lines skip disqualified contestants and respect the count', () => {
   const key = fullKey();
   const people = individualStandings([

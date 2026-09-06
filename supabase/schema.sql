@@ -202,7 +202,8 @@ end $$;
 -- freeze correct even for someone who loads the page mid-freeze: the
 -- stored rows simply stop moving.
 create or replace function refresh_guts_public() returns void
-language plpgsql security definer as $$
+language plpgsql security definer
+set search_path = public, pg_temp as $$
 begin
   if (select guts_frozen from contest_state where id = 1) then
     return;
@@ -270,7 +271,8 @@ begin
 end $$;
 
 create or replace function guts_public_trigger() returns trigger
-language plpgsql security definer as $$
+language plpgsql security definer
+set search_path = public, pg_temp as $$
 begin
   perform refresh_guts_public();
   return null;
@@ -346,12 +348,24 @@ grant select on table guts_public, contest_state to anon;
 -- so a grader with the developer console open still cannot rewrite the
 -- key mid-contest.
 -- ---------------------------------------------------------------------
+-- search_path is pinned: a SECURITY DEFINER function that resolves its
+-- tables through whatever search_path the caller happens to have set is
+-- the standard way these get subverted.
+--
+-- Written as an EXISTS so every missing case fails closed. Comparing the
+-- claim to the column directly would make a blank admin_email match a
+-- token with no email — that is, everyone.
 create or replace function is_admin() returns boolean
-language sql stable security definer as $$
-  select coalesce(
-    nullif(current_setting('request.jwt.claims', true), '')::json ->> 'email',
-    ''
-  ) = (select admin_email from app_settings where id = 1)
+language sql stable security definer
+set search_path = public, pg_temp as $$
+  select exists (
+    select 1
+      from app_settings s
+     where s.id = 1
+       and nullif(s.admin_email, '') is not null
+       and s.admin_email = nullif(
+             current_setting('request.jwt.claims', true), '')::json ->> 'email'
+  )
 $$;
 
 -- ---------------------------------------------------------------------

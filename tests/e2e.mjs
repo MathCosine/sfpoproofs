@@ -270,6 +270,35 @@ check('the sheet saves with its score', savedToast.includes('A121') && savedToas
 check('a non-negative integer is required',
   (await page.locator('#answerGrid .ans--bad').count()) === 0);
 
+// ---- one sheet must never carry into the next ----------------------
+// Moving from an entered contestant to an empty one used to leave the
+// previous twenty answers and the previous name sitting in the boxes,
+// so Save filed one person's paper under another person's ID.
+await page.fill('#individualId', 'A121');
+await page.waitForTimeout(300);
+check('an entered sheet is pulled back for correction',
+  (await page.locator('#answerGrid .ans input').first().inputValue()) === '1',
+  await page.locator('#answerGrid .ans input').first().inputValue());
+check('and its name comes back with it',
+  (await page.inputValue('#contestantName')) === 'Ada Lovelace');
+
+await page.fill('#individualId', 'A122');
+await page.waitForTimeout(300);
+const carried = await page.locator('#answerGrid .ans input').evaluateAll(
+  (els) => els.filter((e) => e.value !== '').length);
+check('moving to a contestant with nothing saved blanks the boxes', carried === 0,
+  `${carried} boxes still filled`);
+check('and blanks the name too', (await page.inputValue('#contestantName')) === '',
+  await page.inputValue('#contestantName'));
+
+// Coming back must still find the original sheet untouched.
+await page.fill('#individualId', 'A121');
+await page.waitForTimeout(300);
+check('and the sheet it came from is still there',
+  (await page.locator('#answerGrid .ans input').nth(2).inputValue()) === '999');
+await page.click('#clearSheet');
+await page.waitForTimeout(200);
+
 // ---- progress is per contestant, not per problem -------------------
 await page.click('.tab[data-tab="progress"]');
 await page.waitForTimeout(300);
@@ -324,6 +353,32 @@ await page.evaluate(() => {
 });
 await page.click('#saveGuts');
 await page.waitForTimeout(600);
+
+// ---- the guts division picks a different team ----------------------
+// Division is half of the team key, so switching it selects another team
+// entirely. It had no listener at all, so A12's answers stayed on screen
+// and Save filed them under B12.
+await page.selectOption('#gutsSet', '1');
+await page.waitForTimeout(300);
+check('set 1 comes back with what was entered for A12',
+  (await page.locator('#gutsGrid .ans input').first().inputValue()) === '2',
+  await page.locator('#gutsGrid .ans input').first().inputValue());
+await page.selectOption('#gutsDivision', 'B');
+await page.waitForTimeout(400);
+check('switching to Division B keeps the set in hand, to re-file it',
+  (await page.locator('#gutsGrid .ans input').first().inputValue()) === '2',
+  await page.locator('#gutsGrid .ans input').first().inputValue());
+check('but stops showing the other team’s name',
+  (await page.inputValue('#gutsTeamName')) === '', await page.inputValue('#gutsTeamName'));
+check('and asks for a name, because B12 is new',
+  (await page.textContent('#gutsNameHint')).includes('give it a name'));
+check('and the points hint follows the new selection',
+  (await page.textContent('#gutsPointsHint')).includes('1 point(s) each'));
+await page.selectOption('#gutsDivision', 'A');
+await page.waitForTimeout(400);
+check('switching back brings A12 straight back',
+  (await page.locator('#gutsGrid .ans input').first().inputValue()) === '2',
+  await page.locator('#gutsGrid .ans input').first().inputValue());
 
 await page.click('.tab[data-tab="leaderboard"]');
 await page.click('.tab[data-board="guts"]');
@@ -460,6 +515,17 @@ await page.click('#freezeToggle');
 await page.waitForTimeout(400);
 
 // ---- the public board ----------------------------------------------
+// Read what the portal says first, so the board is checked against the
+// real numbers rather than a constant that drifts with the fixtures.
+await page.click('.tab[data-tab="leaderboard"]');
+await page.click('.tab[data-board="guts"]');
+await page.waitForTimeout(400);
+const portalTop = await page.locator('#boards table tbody tr').first().evaluate((tr) => ({
+  team: tr.children[1].textContent.trim(),
+  points: tr.children[3].textContent.trim(),
+  sets: tr.children[4].textContent.trim(),
+}));
+
 const board = await ctx.newPage();
 watch(board, 'board');
 const BOARD_URL = BASE.replace('/?demo=1', '/guts.html?demo=1');
@@ -481,6 +547,27 @@ check('the public board leaks nothing from the portal', leak.length === 0,
   `matched: ${leak.join(', ')} | body: ${boardText.replace(/\s+/g, ' ').slice(0, 150)}`);
 check('the public board has no answer boxes',
   (await board.locator('input').count()) === 0);
+// Team keys read A01. Coercing them with Number() made every team NaN,
+// which collapsed them into one bucket and gave each card the sum of the
+// whole contest — so check the identity and the arithmetic, not just
+// that a card rendered.
+check('the board names teams by their key, not NaN',
+  /#[AB]\d{2}/.test(boardText) && !/NaN/.test(boardText),
+  boardText.replace(/\s+/g, ' ').slice(0, 120));
+const publicTop = {
+  score: (await board.locator('.card').first().locator('.score').textContent()).trim(),
+  done: await board.locator('.card').first().locator('.seg--done').count(),
+  text: await board.locator('.card').first().innerText(),
+};
+check('and its score is the one the portal computed',
+  publicTop.score === portalTop.points,
+  `board ${publicTop.score} vs portal ${portalTop.points}`);
+check('and it is the same team',
+  publicTop.text.includes(portalTop.team.split('·')[0].trim().replace('Team ', '')),
+  `${publicTop.text.replace(/\n/g, ' | ')} vs ${portalTop.team}`);
+check('and its set bar matches the sets the portal counts',
+  `${publicTop.done}/7` === portalTop.sets,
+  `board ${publicTop.done}/7 vs portal ${portalTop.sets}`);
 await board.close();
 
 // ---- two graders never key the same sheet ---------------------------
@@ -503,6 +590,27 @@ await page.waitForTimeout(900);
 check('opening a sheet someone else holds warns you',
   (await page.textContent('#individualBanner')).includes('entering this sheet right now'),
   (await page.textContent('#individualBanner')).trim().slice(0, 70));
+
+// Moving to the next ID has to let go of the last one. Claiming without
+// releasing left a scorer holding every sheet they had glanced at for
+// the full two-minute window, and told everyone else those sheets were
+// being entered when nobody was on them.
+await page2.fill('#individualId', 'A202');
+await page2.waitForTimeout(900);
+await page.fill('#individualId', 'A131');
+await page.waitForTimeout(400);
+await page.fill('#individualId', 'A201');
+await page.waitForTimeout(900);
+check('a sheet the other scorer moved off is free again',
+  !(await page.textContent('#individualBanner')).includes('entering this sheet right now'),
+  (await page.textContent('#individualBanner')).trim().slice(0, 70));
+await page2.fill('#individualId', 'A201');
+await page2.waitForTimeout(900);
+check('while the sheet just picked up is held against the other scorer',
+  (await page2.textContent('#individualBanner')).includes('entering this sheet right now'),
+  (await page2.textContent('#individualBanner')).trim().slice(0, 70));
+await page.click('#clearSheet');
+await page.waitForTimeout(300);
 await page2.close();
 
 // ---- the purple "someone is on this" indicator ----------------------
@@ -741,6 +849,18 @@ await page.click('.tab[data-entry="individual"]');
 
 // ---- disqualification ----------------------------------------------
 await page.click('.tab[data-tab="setup"]');
+// Team keys are two digits everywhere else. 'A1' used to be stored as
+// typed, so the disqualification matched no team and quietly did nothing.
+await page.fill('#dqTeam', 'A1');
+await page.fill('#dqReason', 'Padding check');
+await page.click('#dqAdd');
+await page.waitForTimeout(600);
+check('a team typed as A1 is disqualified as A01',
+  (await page.textContent('#dqList')).includes('A01'),
+  (await page.textContent('#dqList')).trim().slice(0, 60));
+await page.click('#dqList button');
+await page.waitForTimeout(500);
+
 await page.fill('#dqTeam', 'A12');
 await page.fill('#dqReason', 'Outside help');
 await page.click('#dqAdd');

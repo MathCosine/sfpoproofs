@@ -128,10 +128,30 @@ Free tier. **SQL Editor → New query →** paste all of
 > Reusing the old SFPO project? Run the DROP block at the bottom of that file first —
 > the proof-grading tables are gone. A fresh project is cleaner.
 
-### 2. One shared staff account
+### 2. Two shared accounts
 
-**Authentication → Users → Add user.** Email `staff@sfpo.local`, a password you share
-with your scorers, and tick **Auto Confirm User**.
+**Authentication → Users → Add user**, twice, ticking **Auto Confirm User** both times:
+
+| Email | Who gets the password | What it opens |
+| --- | --- | --- |
+| `staff@sfpo.local` | every scorer | entry, leaderboards, exports; the answer key read-only |
+| `admin@sfpo.local` | you | all of that, plus Admin and editing the answer key |
+
+Both are typed on the sign-in screen — the staff password in the first box, the admin
+password in the second. Neither is in this repo.
+
+### 2b. Close sign-up — do not skip this
+
+**Authentication → Sign In / Providers → Email → turn off "Allow new users to sign
+up".**
+
+The anon key is published with the site, which is fine on its own: every table is
+behind row level security that needs a signed-in account. But if self-service sign-up
+is left on — it is on by default — anyone who reads the key can create their own
+account, land in the `authenticated` role, and get everything a scorer has, including
+rewriting scores. The two accounts above are the only ones that should ever exist.
+[`supabase/verify.sql`](supabase/verify.sql) lists them back to you, so you can see at
+a glance whether a third has appeared.
 
 ### 3. Credentials
 
@@ -231,8 +251,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 65 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 129 browser checks, including ten scorers at once
+npm test               # 67 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 147 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

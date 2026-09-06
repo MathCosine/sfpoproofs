@@ -259,14 +259,35 @@ function onIdTyped() {
   refreshIndividualContext();
 }
 
-/** Pull back a sheet that has already been entered, so it can be fixed. */
-function loadExistingSheet() {
+/**
+ * Pull back a sheet that has already been entered, so it can be fixed —
+ * and blank the boxes when the new ID has nothing saved. Returning early
+ * instead left the last contestant's twenty answers sitting in the grid,
+ * so moving from an entered sheet to an empty one and pressing Save
+ * filed one person's paper under another person's ID.
+ *
+ * Only when the ID actually changes: a repeat call must not wipe what
+ * somebody is part way through typing.
+ *
+ * `keepUnsaved` is for the division dropdown. Division is part of the ID,
+ * but changing it means "this paper belongs to the other division", not
+ * "show me a different contestant" — the sheet in hand stays in the boxes
+ * and is re-marked against the other paper, which is how a sheet keyed
+ * against the wrong one shows up as a wall of red. A contestant who does
+ * have a saved sheet still wins: their answers are never overwritten
+ * on screen by someone else's typing.
+ */
+let sheetLoadedFor = null;
+
+function loadExistingSheet({ keepUnsaved = false } = {}) {
   const current = currentIndividualId();
-  if (!current) return;
+  if (!current) { sheetLoadedFor = null; return; }
+  if (current.id === sheetLoadedFor) return;
+  sheetLoadedFor = current.id;
   const existing = data.contestants.find((c) => c.individual_id === current.id);
-  if (!existing) return;
-  fillGrid(sheetInputs, existing.answers ?? []);
-  $('#contestantName').value = existing.name ?? '';
+  if (!existing && keepUnsaved) return;
+  fillGrid(sheetInputs, existing?.answers ?? []);
+  $('#contestantName').value = existing?.name ?? '';
 }
 
 function refreshIndividualContext() {
@@ -398,12 +419,13 @@ async function saveSheet() {
 
 function clearSheet({ keepTeam = false } = {}) {
   releaseHeld();
+  sheetLoadedFor = null;
   $('#individualId').value = '';
   if (!keepTeam) { $('#teamNo').value = ''; $('#divisionPick').value = ''; }
   $('#memberLetter').value = '';
   $('#contestantName').value = '';
   fillGrid(sheetInputs, []);
-  $('#idEcho').textContent = 'Type 12C and the team and member fill themselves in.';
+  $('#idEcho').textContent = 'Type A011 — division, team, member fill themselves in.';
   refreshIndividualContext();
   $('#individualId').focus();
 }
@@ -427,7 +449,7 @@ function currentGuts() {
   return { team: teamKey(division, teamNo), division, teamNo, set };
 }
 
-function refreshGutsContext() {
+function refreshGutsContext({ keepUnsaved = false, picked = false } = {}) {
   const host = $('#gutsBanner');
   host.replaceChildren();
   const current = currentGuts();
@@ -452,10 +474,14 @@ function refreshGutsContext() {
   // anything at all wiped whatever you were half way through typing.
   const answers = derived.gutsByTeam.get(current.team);
   const ref = `${current.team}:${current.set}`;
+  // The focus guard is there to stop a background render overwriting what
+  // somebody is typing. It must not stop the scorer's own change of team
+  // or set — `picked` says the selection was just changed on purpose.
   const typing = document.activeElement?.closest('#gutsGrid');
-  if (ref !== gutsLoadedRef && !typing) {
+  if (ref !== gutsLoadedRef && (picked || !typing)) {
     gutsLoadedRef = ref;
-    fillGrid(gutsInputs, problems.map((p) => answers?.get(p) ?? null));
+    const stored = problems.map((p) => answers?.get(p) ?? null);
+    if (stored.some((v) => v != null) || !keepUnsaved) fillGrid(gutsInputs, stored);
   }
 
   const result = scoreGutsTeam(answers, derived.key, cfg);
@@ -553,6 +579,11 @@ async function claimCurrent() {
   if (held && held.scope === want.scope && held.ref === want.ref) return;
   claiming = true;
   try {
+    // Let go of the sheet we were on before taking the next. Without
+    // this a scorer flicking through IDs leaves every one of them locked
+    // for the full two minutes, and everybody else is told those sheets
+    // are being entered right now when nobody is on them.
+    await releaseHeld();
     const result = await store.claim(want.scope, want.ref, grader, cfg.CLAIM_TTL_MS);
     if (result?.ok === false) {
       blockedBy = result.heldBy ?? null;
@@ -605,7 +636,7 @@ function renderSuggestions() {
         $('#gutsTeam').value = String(teamNumberOf(item.team) ?? '');
         $('#gutsSet').value = String(item.set);
         resetGutsTeamFields();
-        refreshGutsContext();
+        refreshGutsContext({ picked: true });
         claimCurrent();
         gutsInputs[0]?.focus();
       }
@@ -1302,7 +1333,7 @@ function exportGutsCsv() {
 function exportStatsCsv() {
   const rows = [];
   for (const division of cfg.DIVISIONS) {
-    const st = divisionStatistics(derived.individuals, derived.guts, division, cfg);
+    const st = divisionStatistics(derived.individuals, derived.guts, division, cfg, derived.key);
     const round = (v) => Number(v).toFixed(3).replace(/\.?0+$/, '');
     rows.push(['DIVISION', division, '', '', '', '']);
     rows.push(['summary', 'contestants', st.contestants.n, '', '', '']);
@@ -1481,6 +1512,8 @@ function wire() {
   for (const btn of $$('.tab[data-board]')) {
     btn.addEventListener('click', () => {
       activeBoard = btn.dataset.board;
+      boardPage.A = 0;
+      boardPage.B = 0;
       for (const b of $$('.tab[data-board]')) b.setAttribute('aria-selected', String(b === btn));
       renderBoards();
     });
@@ -1508,7 +1541,7 @@ function wire() {
   // marked against, so changing it rebuilds both.
   $('#divisionPick').addEventListener('change', () => {
     syncIdFromFields();
-    loadExistingSheet();
+    loadExistingSheet({ keepUnsaved: true });
     claimCurrent();
     markSheetAgainstKey();
     refreshIndividualContext();
@@ -1518,10 +1551,19 @@ function wire() {
 
   $('#gutsTeam').addEventListener('input', () => {
     resetGutsTeamFields();
-    refreshGutsContext();
+    refreshGutsContext({ picked: true });
     claimCurrent();
   });
-  $('#gutsSet').addEventListener('change', () => { refreshGutsContext(); claimCurrent(); });
+  // Division is half of the team key, so changing it selects a different
+  // team entirely. Without this the previous team's answers stayed in the
+  // boxes and Save filed them under the other division's team.
+  $('#gutsDivision').addEventListener('change', () => {
+    resetGutsTeamFields();
+    refreshGutsContext({ keepUnsaved: true, picked: true });
+    claimCurrent();
+  });
+  $('#gutsSet').addEventListener('change',
+    () => { refreshGutsContext({ picked: true }); claimCurrent(); });
   $('#gutsTeamName').addEventListener('input', () => { $('#gutsTeamName').dataset.dirty = '1'; });
   $('#saveGuts').addEventListener('click', saveGutsSet);
   $('#clearGuts').addEventListener('click', () => {
@@ -1631,12 +1673,16 @@ function wire() {
   });
 
   $('#dqAdd').addEventListener('click', async () => {
-    const team = $('#dqTeam').value.trim().toUpperCase();
+    const typed = $('#dqTeam').value.trim().toUpperCase();
     const reason = $('#dqReason').value.trim();
-    if (!/^[AB]\d{1,3}$/.test(team)) {
+    const parts = /^([AB])(\d{1,3})$/.exec(typed);
+    if (!parts || Number(parts[2]) < 1) {
       toast('Enter a team key like A01.', 'error');
       return;
     }
+    // 'A1' and 'A01' are the same team; store the padded form the rest of
+    // the portal uses, or the disqualification matches nothing.
+    const team = teamKey(parts[1], Number(parts[2]));
     if (!reason) { toast('Record a reason — it goes on the exports.', 'error'); return; }
     await store.setTeam(team, {
       disqualified: true, dq_reason: reason, dq_by: grader.name, dq_at: new Date().toISOString(),
@@ -1779,7 +1825,17 @@ async function enterApp() {
 
   setInterval(() => {
     store.heartbeat(grader).catch(() => {});
-    if (held) store.claim(held.scope, held.ref, grader, cfg.CLAIM_TTL_MS).catch(() => {});
+    // Renew the lock we hold, and re-take the one on screen if we never
+    // got it — a claim skipped because another was in flight would
+    // otherwise leave the sheet looking free while somebody types into
+    // it. Retrying also picks a sheet up the moment its holder moves on.
+    const want = wantedClaim();
+    if (!want) return;
+    if (held && held.scope === want.scope && held.ref === want.ref) {
+      store.claim(want.scope, want.ref, grader, cfg.CLAIM_TTL_MS).catch(() => {});
+    } else {
+      claimCurrent();
+    }
   }, cfg.HEARTBEAT_MS);
 
   addEventListener('pagehide', () => { releaseHeld(); });

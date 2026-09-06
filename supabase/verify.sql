@@ -78,6 +78,33 @@ select 5.6, 'Only the admin can change the answer key',
   (select 'admin account: '||admin_email from app_settings where id=1)
 
 -- 4. security -----------------------------------------------------------
+-- The anon key is published with the site, so anyone can reach the sign-up
+-- endpoint. If self-service sign-up is left on, a stranger can mint their
+-- own account, land in the `authenticated` role and get everything a
+-- scorer has. Turn it off in Authentication -> Sign In / Providers ->
+-- Email -> "Allow new users to sign up". This counts the accounts that
+-- exist as the visible symptom: more than the two shared logins means
+-- somebody signed themselves up.
+-- auth.users is named through query_to_xml so this file still runs on a
+-- plain Postgres that has no auth schema; a direct reference would fail
+-- to plan even inside a branch that never runs.
+union all
+select 5.7, 'Only the shared staff accounts exist',
+  case
+    when to_regclass('auth.users') is null then 'INFO'
+    when (xpath('/table/row/c/text()', query_to_xml(
+            'select count(*) as c from auth.users', false, false, '')))[1]
+          ::text::int <= 2 then 'OK'
+    else 'CHECK' end,
+  case
+    when to_regclass('auth.users') is null
+      then 'Not a Supabase database — run this in the SQL Editor to see the accounts'
+    else coalesce((xpath('/table/row/e/text()', query_to_xml(
+           'select string_agg(email, '', '' order by email) as e from auth.users',
+           false, false, '')))[1]::text, 'none')
+      || ' — more than the staff and admin logins means sign-up is open'
+  end
+
 union all
 select 6, 'Row level security on every table',
   case when (select count(*) from pg_class c
