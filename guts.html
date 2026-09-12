@@ -130,8 +130,6 @@ header{display:flex;align-items:flex-end;gap:24px;flex:none;
 .rrow .name{font-size:1em;font-weight:500}
 .rrow .onset{font-size:.85em;color:var(--ink-faint);min-width:0}
 .rrow .score{font-size:1.05em;font-weight:500;min-width:0}
-.rrow--dq{color:var(--ink-faint)}
-.rrow--dq .name{text-decoration:line-through}
 
 .empty{display:grid;place-items:center;height:100%;color:var(--ink-faint);
   font-size:14px;padding:30px;text-align:center}
@@ -142,10 +140,15 @@ footer{flex:none;display:flex;align-items:center;gap:9px;padding-top:12px;
 .pulse{width:6px;height:6px;border-radius:50%;background:var(--live)}
 .pulse--down{background:var(--stop)}
 footer .spacer{margin-left:auto}
+/* Says outright that this page is showing someone else's project, so a
+   doctored link cannot pass its numbers off as the contest's. */
+.offsite{margin-left:14px;padding:2px 9px;border-radius:999px;
+  background:#fdf3e3;color:#8a5a12;border:1px solid #e8d5ae;
+  font-size:11px;font-weight:600;letter-spacing:.04em}
 @media (prefers-reduced-motion:reduce){.resttrack{transition:none!important}}
 </style>
 </head>
-<body data-app-version="2026.09.05.1">
+<body data-app-version="2026.09.12.1">
 <div class="wrap">
   <header>
     <div class="brand">
@@ -178,17 +181,23 @@ footer .spacer{margin-left:auto}
 
   <footer>
     <span class="pulse" id="pulse"></span><span id="liveLabel">Live</span>
+    <span class="offsite" id="offsite" hidden>Pointed at another project by this link</span>
     <span class="spacer"></span>
     <span id="updated"></span>
   </footer>
 </div>
 
 <script type="module">
-import { resolvedConfig } from './assets/config.js?v=2026.09.05.1';
-import { createPublicStore } from './assets/store.js?v=2026.09.05.1';
-import { gutsRemaining, formatClock } from './assets/scoring.js?v=2026.09.05.1';
+import { resolvedConfig } from './assets/config.js?v=2026.09.12.1';
+import { createPublicStore } from './assets/store.js?v=2026.09.12.1';
+import { gutsRemaining, formatClock } from './assets/scoring.js?v=2026.09.12.1';
 
-const cfg = resolvedConfig(location.search);
+// The board has no password to give away, so it may still be pointed at a
+// project from the address bar — that is how a projector machine is set
+// up without touching its storage. It says so on screen when that
+// happens, so a doctored link cannot pass itself off as the contest.
+const cfg = resolvedConfig(location.search, { allowUrlParams: true });
+if (cfg.FROM_ADDRESS_BAR) document.querySelector('#offsite').hidden = false;
 const $ = (s) => document.querySelector(s);
 const SETS = cfg.GUTS_SETS;
 
@@ -233,11 +242,13 @@ function setLabel(mask) {
 }
 
 function render() {
-  const ranked = [...board].sort(
-    (a, b) => Number(a.disqualified) - Number(b.disqualified)
-      || Number(b.score) - Number(a.score)
+  // A disqualified team comes off the board completely — that is what the
+  // portal tells whoever disqualifies it, and a projector in front of an
+  // audience is no place to publish the accusation.
+  const ranked = [...board].filter((r) => !r.disqualified).sort(
+    (a, b) => Number(b.score) - Number(a.score)
       || String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
-  const live = ranked.filter((r) => !r.disqualified);
+  const live = ranked;
 
   $('#contestName').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
   $('#teamCount').textContent = live.length || '—';
@@ -278,17 +289,16 @@ function render() {
   if (!rest.length) {
     track.appendChild(el('div', 'empty', 'Every team is in the top ten.'));
   }
-  for (const row of rest) {
-    const place = row.disqualified ? 'DQ' : String(live.indexOf(row) + 1);
-    const line = el('div', `rrow${row.disqualified ? ' rrow--dq' : ''}`);
+  rest.forEach((row, i) => {
+    const line = el('div', 'rrow');
     line.append(
-      el('div', 'place', place),
+      el('div', 'place', String(i + 11)),
       el('div', 'name', row.name || `Team ${row.team}`),
-      el('div', 'onset', row.disqualified ? '' : setLabel(row.set_mask ?? 0)),
+      el('div', 'onset', setLabel(row.set_mask ?? 0)),
       el('div', 'score', String(Number(row.score))),
     );
     track.appendChild(line);
-  }
+  });
   startScroll();
   renderClock();
 }
@@ -346,37 +356,13 @@ const stamp = () => {
 const demo = new URLSearchParams(location.search).has('demo');
 
 if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
-  // Mirrors what the portal writes locally, so the board can be checked
-  // on the projector before the contest without a database.
+  // Reads the same published board the portal writes, so demo mode and
+  // contest day take the identical path — including the freeze, which
+  // stops the portal republishing and therefore stops this moving.
   const read = () => {
     try {
       const db = JSON.parse(localStorage.getItem('contest-demo-db') ?? '{}');
-      const key = new Map((db.key ?? []).filter((k) => k.round === 'guts')
-        .map((k) => [Number(k.problem), k]));
-      const byTeam = new Map();
-      for (const a of db.gutsAnswers ?? []) {
-        const team = String(a.team);
-        if (!byTeam.has(team)) byTeam.set(team, []);
-        byTeam.get(team).push(a);
-      }
-      board = (db.teams ?? []).map((t) => {
-        let score = 0; let solved = 0;
-        const perSet = new Map();
-        for (const a of byTeam.get(String(t.team)) ?? []) {
-          const k = key.get(Number(a.problem));
-          if (a.answer != null) {
-            const set = Math.ceil(Number(a.problem) / cfg.GUTS_PER_SET);
-            perSet.set(set, (perSet.get(set) ?? 0) + 1);
-          }
-          if (k?.answer != null && a.answer === k.answer) { score += Number(k.points); solved += 1; }
-        }
-        let mask = 0;
-        for (const [set, n] of perSet) if (n === cfg.GUTS_PER_SET) mask |= 1 << (set - 1);
-        return {
-          team: String(t.team), name: t.name, division: t.division,
-          score, solved, set_mask: mask, disqualified: Boolean(t.disqualified),
-        };
-      });
+      board = Array.isArray(db.gutsPublic) ? db.gutsPublic : [];
       state = db.state ?? null;
     } catch { board = []; }
     stamp();

@@ -4,6 +4,8 @@
 //    demo     — localStorage + BroadcastChannel, for ?demo=1 and tests
 // =====================================================================
 
+import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js';
+
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 const TABLES = ['app_settings', 'contest_state', 'answer_key', 'teams',
   'contestants', 'guts_answers', 'claims', 'graders'];
@@ -15,7 +17,7 @@ const divisionOfTeamKey = (team) => {
 
 const EMPTY = () => ({
   settings: null, state: null, key: [], teams: [],
-  contestants: [], gutsAnswers: [], claims: [], graders: [],
+  contestants: [], gutsAnswers: [], claims: [], graders: [], gutsPublic: [],
 });
 
 // Which cache field each table feeds, and how to tell two rows apart.
@@ -99,6 +101,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
   let channel = null;
   let cache = EMPTY();
   let resync = null;
+  let onVisible = null;
   const listeners = new Set();
   let timer = null;
 
@@ -191,9 +194,18 @@ export function supabaseBackend(cfg, injectedClient = null) {
             api.load().then((fresh) => listeners.forEach((fn) => fn(fresh))).catch(() => {});
           });
         });
+        // The safety net only has to run while somebody is looking. A tab
+        // left open on a side monitor overnight used to pull the whole
+        // contest twelve times an hour for nobody; now it waits, and
+        // catches up the moment it is brought back to the front.
+        const pull = () => api.load()
+          .then((fresh) => listeners.forEach((fn) => fn(fresh)))
+          .catch(() => {});
         resync = setInterval(() => {
-          api.load().then((fresh) => listeners.forEach((fn) => fn(fresh))).catch(() => {});
+          if (document.visibilityState !== 'hidden') pull();
         }, RESYNC_MS);
+        onVisible = () => { if (document.visibilityState === 'visible') pull(); };
+        document.addEventListener('visibilitychange', onVisible);
       }
       return () => listeners.delete(cb);
     },
@@ -314,7 +326,10 @@ export function supabaseBackend(cfg, injectedClient = null) {
       return counts;
     },
 
-    dispose() { clearInterval(resync); },
+    dispose() {
+      clearInterval(resync);
+      if (onVisible) document.removeEventListener('visibilitychange', onVisible);
+    },
   };
   return api;
 }
@@ -382,8 +397,45 @@ function demoBackend(cfg) {
    * independent upsert keyed by its own primary key, with no snapshot
    * read in the client at all.
    */
+  /**
+   * The demo mirror of refresh_guts_public(). The public board reads this
+   * published copy rather than recomputing from the answers, for two
+   * reasons: there is then one scoring path instead of two, and the
+   * freeze works — while the board is frozen this returns early and the
+   * stored rows simply stop moving, which is exactly what the Postgres
+   * trigger does on contest day.
+   */
+  const publish = (db) => {
+    if (db.state?.guts_frozen) return;
+    const key = indexKey(db.key ?? []);
+    const byTeam = indexGutsAnswers(db.gutsAnswers ?? []);
+    db.gutsPublic = (db.teams ?? []).map((t) => {
+      const team = String(t.team);
+      const r = scoreGutsTeam(byTeam.get(team), key, cfg);
+      let mask = 0;
+      r.perSet.forEach((set, i) => { if (set.complete) mask |= 1 << i; });
+      return {
+        team,
+        name: t.name ?? '',
+        division: t.division ?? divisionOfTeamKey(team),
+        score: r.score,
+        solved: r.correct,
+        answered: r.answered,
+        set_mask: mask,
+        disqualified: Boolean(t.disqualified),
+        updated_at: new Date().toISOString(),
+      };
+    });
+  };
+
   const mutate = (fn) => {
-    const run = () => { const db = read(); const out = fn(db); write(db); return out; };
+    const run = () => {
+      const db = read();
+      const out = fn(db);
+      publish(db);
+      write(db);
+      return out;
+    };
     return globalThis.navigator?.locks
       ? navigator.locks.request(KEY, run)
       : Promise.resolve().then(run);

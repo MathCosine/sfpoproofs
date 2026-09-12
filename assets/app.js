@@ -25,7 +25,10 @@ const el = (tag, cls, text) => {
 };
 
 const forceDemo = new URLSearchParams(location.search).has('demo');
-const cfg = resolvedConfig(location.search);
+// Deliberately not location.search: the portal asks for a password, so a
+// link carrying someone else's Supabase project would show the ordinary
+// sign-in screen and post that password to whoever sent the link.
+const cfg = resolvedConfig();
 const store = createStore(cfg, { forceDemo });
 
 const grader = {
@@ -333,6 +336,19 @@ function refreshIndividualContext() {
     const d = el('div');
     d.append(el('b', null, `Team ${current.team} is above your team count of ${cfg.TEAM_COUNT}`),
       el('span', null, 'Usually a mistyped number. It will still save if that is really the team.'));
+    b.append(el('div', null, '⚠'), d);
+    host.appendChild(b);
+  }
+
+  // A team fields four. A mistyped fifth member would be saved, scored,
+  // and would then compete for one of the three counting places — a
+  // wrong team total with nothing on screen to explain it.
+  if (!cfg.MEMBERS.includes(current.member)) {
+    const b = el('div', 'banner banner--warn');
+    const d = el('div');
+    d.append(el('b', null, `Member ${current.member} is outside the team of ${cfg.MEMBERS.length}`),
+      el('span', null, 'Usually a mistyped ID. Saving it would let a fifth score count '
+        + 'towards the team total.'));
     b.append(el('div', null, '⚠'), d);
     host.appendChild(b);
   }
@@ -1647,7 +1663,7 @@ function wire() {
     await store.setFrozen(!data.state?.guts_frozen);
     await refresh();
   });
-  $('#publicLink').href = `guts.html${location.search}`;
+  $('#publicLink').href = forceDemo ? 'guts.html?demo=1' : 'guts.html';
 
   for (const id of ['#teamCount', '#individualWeight', '#gutsWeight',
     '#durationMinutes', '#freezeMinutes']) {

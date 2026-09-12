@@ -25,6 +25,7 @@ await new Promise((r) => server.listen(0, '127.0.0.1', r));
 // ?demo=1 is mandatory here: assets/config.js carries real Supabase
 // credentials, and these tests must never write into the live contest.
 const BASE = `http://127.0.0.1:${server.address().port}/?demo=1`;
+const BOARD_URL = BASE.replace('/?demo=1', '/guts.html?demo=1');
 const out = [];
 // A crash mid-run used to throw away every result gathered so far, which
 // hides the check that actually went wrong. Print what we have, then rethrow.
@@ -511,8 +512,52 @@ await page.click('#freezeToggle');
 await page.waitForTimeout(400);
 check('freezing is reflected in the portal',
   (await page.textContent('#freezeState')).includes('is frozen'));
-await page.click('#freezeToggle');
-await page.waitForTimeout(400);
+
+// The freeze is what the room watches in the last ten minutes, so prove
+// it on the board and not just in the portal: scores keyed during a
+// freeze must not appear until it lifts.
+{
+  const frozen = await ctx.newPage();
+  watch(frozen, 'frozen');
+  await frozen.goto(BOARD_URL, { waitUntil: 'domcontentloaded' });
+  await frozen.waitForTimeout(900);
+  check('the board says it is frozen', await frozen.locator('#frozenFlag').isVisible());
+  // The standings themselves, not the top score — the set keyed below
+  // moves one team without necessarily changing who is leading.
+  const standings = () => frozen.evaluate(
+    () => `${document.querySelector('#leadList').innerText}
+${document.querySelector('#restTrack').innerText}`);
+  const before = await standings();
+
+  // Key a whole extra set while the board is frozen.
+  await page.click('.tab[data-entry="guts"]');
+  await page.selectOption('#gutsDivision', 'A');
+  await page.fill('#gutsTeam', '12');
+  await page.selectOption('#gutsSet', '2');
+  await page.waitForTimeout(300);
+  await page.evaluate(() => {
+    document.querySelectorAll('#gutsGrid .ans input').forEach((input, i) => {
+      input.value = String((5 + i) * 2);
+      input.dispatchEvent(new Event('input'));
+    });
+  });
+  await page.click('#saveGuts');
+  await page.waitForTimeout(900);
+  await frozen.waitForTimeout(3400);
+  check('and scores keyed during the freeze do not reach it',
+    (await standings()) === before,
+    (await standings()).replace(/\s+/g, ' ').slice(0, 90));
+
+  await page.click('.tab[data-tab="run"]');
+  await page.click('#freezeToggle');
+  await page.waitForTimeout(900);
+  await frozen.waitForTimeout(3400);
+  check('unfreezing publishes everything that happened meanwhile',
+    (await standings()) !== before,
+    (await standings()).replace(/\s+/g, ' ').slice(0, 90));
+  check('and the frozen flag clears', await frozen.locator('#frozenFlag').isHidden());
+  await frozen.close();
+}
 
 // ---- the public board ----------------------------------------------
 // Read what the portal says first, so the board is checked against the
@@ -528,7 +573,6 @@ const portalTop = await page.locator('#boards table tbody tr').first().evaluate(
 
 const board = await ctx.newPage();
 watch(board, 'board');
-const BOARD_URL = BASE.replace('/?demo=1', '/guts.html?demo=1');
 await board.goto(BOARD_URL, { waitUntil: 'networkidle' });
 await board.waitForTimeout(1200);
 const boardText = await board.innerText('body');
@@ -568,7 +612,43 @@ check('and it is the same team',
 check('and its set bar matches the sets the portal counts',
   `${publicTop.done}/7` === portalTop.sets,
   `board ${publicTop.done}/7 vs portal ${portalTop.sets}`);
+check('a link pointed elsewhere says so, so it cannot pass as the contest',
+  await board.locator('#offsite').isHidden());
 await board.close();
+
+// The board is handed to an audience, so a doctored link must announce
+// itself rather than present a stranger's numbers as the contest's.
+{
+  const spoof = await ctx.newPage();
+  await spoof.goto(`${BOARD_URL}&url=https://attacker.example.co&key=attacker-key`,
+    { waitUntil: 'domcontentloaded' });
+  await spoof.waitForTimeout(600);
+  check('a board pointed at another project says so on screen',
+    await spoof.locator('#offsite').isVisible());
+  await spoof.close();
+}
+
+// The portal asks for a password, so it must never take a project from
+// the address bar — and must not hand those parameters on either.
+{
+  const bait = await ctx.newPage();
+  const seen = [];
+  // Match the host, not the URL: the page's own address carries the
+  // parameters we are checking are ignored.
+  bait.on('request', (r) => {
+    try { if (new URL(r.url()).host.endsWith('attacker.example.co')) seen.push(r.url()); }
+    catch { /* not a URL we care about */ }
+  });
+  await bait.goto(`${BASE}&url=https://attacker.example.co&key=attacker-key`,
+    { waitUntil: 'domcontentloaded' });
+  await bait.waitForTimeout(900);
+  check('the portal ignores a Supabase project passed in the URL', seen.length === 0,
+    seen.slice(0, 2).join(' | '));
+  check('and does not forward them to the public board either',
+    !/attacker/.test(await bait.getAttribute('#publicLink', 'href') ?? ''),
+    await bait.getAttribute('#publicLink', 'href'));
+  await bait.close();
+}
 
 // ---- two graders never key the same sheet ---------------------------
 const page2 = await ctx.newPage();
@@ -871,6 +951,22 @@ await page.click('.tab[data-tab="leaderboard"]');
 await page.waitForTimeout(300);
 check('a disqualified team drops out of the ranking',
   (await page.locator('#boards .table-wrap--dq').count()) >= 1);
+
+// The portal promises a disqualified team comes off the public board.
+// It used to stay on it, struck through and labelled DQ — an accusation
+// on a projector in front of the room.
+{
+  const after = await ctx.newPage();
+  watch(after, 'board-dq');
+  await after.goto(BOARD_URL, { waitUntil: 'domcontentloaded' });
+  await after.waitForTimeout(1200);
+  const shown = await after.innerText('body');
+  check('and comes off the public board altogether',
+    !/A12\b/.test(shown) && !/\bDQ\b/.test(shown),
+    shown.replace(/\s+/g, ' ').slice(0, 140));
+  await after.close();
+}
+
 await page.click('.tab[data-tab="setup"]');
 await page.click('#dqList button');
 await page.waitForTimeout(500);
@@ -1048,6 +1144,111 @@ await shot.close();
     `${await stale.locator('#keyGuts .ans input').count()} guts boxes still built`);
   check('and it does not throw', staleErrors.length === 0, staleErrors[0] ?? '');
   await stale.close();
+}
+
+// ---- the whole contest at once ---------------------------------------
+// 100 teams, 400 answer sheets, every guts answer in. The demo fixtures
+// are a dozen teams, so nothing else in this file exercises the sizes
+// that actually turn up on the day.
+{
+  const scale = await browser.newContext({ viewport: { width: 1500, height: 980 } });
+  await scale.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+  const big = await scale.newPage();
+  watch(big, 'scale');
+  await big.addInitScript(() => {
+    const teams = [];
+    const contestants = [];
+    const gutsAnswers = [];
+    const gutsPublic = [];
+    const key = [];
+    for (const d of ['A', 'B']) {
+      for (let p = 1; p <= 20; p += 1) {
+        key.push({ round: 'individual', division: d, problem: p, answer: p, points: 1 });
+      }
+    }
+    for (let p = 1; p <= 28; p += 1) {
+      key.push({ round: 'guts', division: '*', problem: p, answer: p * 2,
+        points: Math.ceil(p / 4) });
+    }
+    for (let n = 1; n <= 100; n += 1) {
+      const division = n <= 50 ? 'A' : 'B';
+      const team = division + String(((n - 1) % 50) + 1).padStart(2, '0');
+      teams.push({ team, name: `Team Name ${n}`, division, disqualified: false });
+      let score = 0;
+      for (let p = 1; p <= 28; p += 1) {
+        const right = (p * 3 + n) % 5 !== 0;
+        gutsAnswers.push({ team, problem: p, answer: right ? p * 2 : 1 });
+        if (right) score += Math.ceil(p / 4);
+      }
+      gutsPublic.push({ team, name: `Team Name ${n}`, division, score,
+        solved: 20, answered: 28, set_mask: 127, disqualified: false });
+      for (let m = 1; m <= 4; m += 1) {
+        contestants.push({
+          individual_id: `${team}${m}`, team, member: String(m), division,
+          name: `Contestant ${team}${m}`,
+          answers: Array.from({ length: 20 }, (_, i) => ((i * 7 + m + n) % 11 < 7 ? i + 1 : 99)),
+          entered_by: 'grader-seed', entered_by_name: 'Seed',
+        });
+      }
+    }
+    localStorage.setItem('contest-grader-name', 'Priya Raman');
+    localStorage.setItem('contest-role', 'admin');
+    localStorage.setItem('contest-demo-db', JSON.stringify({
+      settings: { id: 1, team_count: 100, individual_weight: 80, guts_weight: 20 },
+      state: { id: 1, contest_name: 'Cowconuts 2026 Annual Math Contest',
+        guts_duration: 4500, guts_remaining: 4500, guts_ends_at: null,
+        guts_running: false, freeze_minutes: 10, guts_frozen: false },
+      key, teams, contestants, gutsAnswers, claims: [], graders: [], gutsPublic,
+    }));
+  });
+
+  const openedAt = Date.now();
+  await big.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await big.waitForSelector('#app:not(.hidden)');
+  const ready = Date.now() - openedAt;
+  check('a full contest opens without hanging', ready < 12000, `${ready} ms to interactive`);
+
+  await big.click('.tab[data-tab="progress"]');
+  await big.waitForTimeout(800);
+  const chips = await big.locator('.person').count();
+  check('every contestant has a progress chip', chips === 400, String(chips));
+  check('the header counts the whole field',
+    (await big.textContent('#progressPanel .rosterbar, #progressPanel')).includes('100'));
+
+  // A repaint is what happens on every realtime event, so it is the
+  // number that decides whether ten scorers stay smooth.
+  const repaint = await big.evaluate(async () => {
+    const t = performance.now();
+    for (let i = 0; i < 5; i += 1) {
+      window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+    }
+    await new Promise((r) => setTimeout(r, 1200));
+    return performance.now() - t;
+  });
+  check('and repaints stay quick at that size', repaint < 4000, `${Math.round(repaint)} ms for 5`);
+
+  await big.click('.tab[data-tab="leaderboard"]');
+  await big.click('.tab[data-board="combined"]');
+  await big.waitForTimeout(700);
+  const pageWhere = await big.locator('.pager__where').first().textContent();
+  check('the combined board pages through fifty a division',
+    /of 50$/.test(pageWhere.trim()), pageWhere.trim());
+  const firstRow = await big.locator('#boards tbody tr').first().innerText();
+  check('and a team total is the best three of four, not all four',
+    !/\bNaN\b/.test(firstRow) && /\d/.test(firstRow), firstRow.replace(/\s+/g, ' '));
+
+  const bigBoard = await scale.newPage();
+  watch(bigBoard, 'scale-board');
+  await bigBoard.goto(BOARD_URL, { waitUntil: 'domcontentloaded' });
+  await bigBoard.waitForTimeout(1400);
+  check('the public board takes a hundred teams',
+    (await bigBoard.locator('.card').count()) === 10
+    && (await bigBoard.locator('.rrow').count()) === 90,
+    `${await bigBoard.locator('.card').count()} cards, `
+    + `${await bigBoard.locator('.rrow').count()} rows`);
+  check('and does not scroll the page itself',
+    await bigBoard.evaluate(() => document.body.scrollHeight <= window.innerHeight + 2));
+  await scale.close();
 }
 
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));

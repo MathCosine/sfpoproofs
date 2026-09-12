@@ -78,8 +78,9 @@ rounds, and a score distribution.
 **Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
 the guts point values, which are configuration rather than answers.
 
-**Disqualification** keeps every answer and simply stops a team ranking, and
-**Clear test data** wipes a dry run while keeping your key and settings.
+**Disqualification** keeps every answer, stops a team ranking, and takes it off the
+public board entirely — a projector in front of the room is no place to publish the
+accusation. **Clear test data** wipes a dry run while keeping your key and settings.
 
 ---
 
@@ -158,8 +159,14 @@ a glance whether a third has appeared.
 Either put them in [`assets/config.js`](assets/config.js), or — with nothing to
 redeploy — paste them into **Connection settings** on the sign-in screen. Those are
 stored in the browser and win over the file, which is the quick path when you rotate
-a key mid-contest. `guts.html` also accepts `?url=…&key=…` so a projector machine can
-be pointed at a project without touching storage.
+a key mid-contest.
+
+`guts.html` also accepts `?url=…&key=…` so a projector machine can be pointed at a
+project without touching storage, and says so on screen when it is, so a doctored
+link cannot pass a stranger's numbers off as the contest. **The portal deliberately
+ignores those parameters.** It asks for a password, so a link carrying someone else's
+project would show the ordinary sign-in screen and post that password straight to
+whoever sent the link.
 
 ### 4. Publish
 
@@ -207,6 +214,29 @@ Two tables are readable without logging in, because the public board has no logi
 Neither holds an answer or any part of the key, so the board can be on a screen in
 the room during the round without leaking anything a team could use.
 
+The portal never takes Supabase credentials from the address bar. It asks for a
+password, so a link carrying someone else's project would render the ordinary
+sign-in screen and post that password to whoever sent the link. Credentials come
+from the file or from the Connection panel, which is an action taken by somebody
+already inside.
+
+### What the board's audience can actually reach
+
+The public board is served from the same site as the portal, so anyone who has the
+board link can also open the portal — they land on the sign-in screen and go no
+further without a password. Handing out the board URL gives away exactly this much,
+and it is the full list, verified against the database rather than assumed:
+
+| As the anonymous role | Result |
+| --- | --- |
+| read `guts_public`, `contest_state` | allowed — the board and the clock |
+| read `teams`, `contestants`, `guts_answers`, `answer_key`, `claims`, `graders`, `app_settings` | permission denied |
+| write anything at all, including `guts_public` | permission denied |
+| call `refresh_guts_public`, `set_guts_frozen`, `release_stale_claims`, `is_admin` | permission denied |
+
+The one thing that would undo all of it is leaving self-service sign-up on, which is
+why [closing it](#2b-close-sign-up--do-not-skip-this) is a setup step of its own.
+
 ---
 
 ## Running on the free tier
@@ -251,8 +281,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 67 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 147 browser checks, including ten scorers at once
+npm test               # 72 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 164 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

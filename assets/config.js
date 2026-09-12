@@ -12,7 +12,7 @@
 // Bumped on every deploy. index.html and guts.html carry the same string
 // in data-app-version; a mismatch means the browser has a half-updated
 // copy and the portal says so rather than misbehaving quietly.
-export const APP_VERSION = '2026.09.05.1';
+export const APP_VERSION = '2026.09.12.1';
 
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
@@ -62,8 +62,13 @@ export const CONFIG = {
 //  above. That is the quick path when you rotate a Supabase key mid
 //  contest, or point the same site at a different project.
 //
-//  guts.html also accepts ?url=...&key=... so a projector machine can be
-//  pointed at a project without touching storage.
+//  The public board also accepts ?url=...&key=... so a projector machine
+//  can be pointed at a project without touching storage. The PORTAL must
+//  never honour those: a link with someone else's project in it would
+//  render the ordinary sign-in screen and post the staff password
+//  straight to whoever sent the link. The portal takes credentials from
+//  the file or from its own Connection panel, never from the address
+//  bar, which is what `allowUrlParams` gates.
 // ---------------------------------------------------------------------
 const OVERRIDE_KEY = 'contest-supabase-override';
 
@@ -82,15 +87,22 @@ export function writeOverride(url, key) {
   } catch { return false; }
 }
 
-/** CONFIG with any runtime credential override folded in. */
-export function resolvedConfig(search = '') {
+/**
+ * CONFIG with any runtime credential override folded in.
+ *
+ * `allowUrlParams` is for the public board only — see above. It also
+ * reports whether the address bar won, so the board can say so rather
+ * than present a stranger's numbers as the contest's own.
+ */
+export function resolvedConfig(search = '', { allowUrlParams = false } = {}) {
   const params = new URLSearchParams(search);
-  const fromUrl = params.get('url');
-  const fromKey = params.get('key');
+  const fromUrl = allowUrlParams ? params.get('url') : null;
+  const fromKey = allowUrlParams ? params.get('key') : null;
   const stored = readOverride();
   return {
     ...CONFIG,
     SUPABASE_URL: fromUrl || stored?.url || CONFIG.SUPABASE_URL,
     SUPABASE_ANON_KEY: fromKey || stored?.key || CONFIG.SUPABASE_ANON_KEY,
+    FROM_ADDRESS_BAR: Boolean(fromUrl || fromKey),
   };
 }

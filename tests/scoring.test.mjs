@@ -820,3 +820,94 @@ test('award lines skip disqualified contestants and respect the count', () => {
   assert.deepEqual(lines.map((l) => l.individualId), ['A021']);
   assert.equal(awardLines(people, 'A', 0).length, 0);
 });
+
+// ---------------------------------------------------------------------
+// Team shapes that turn up on the day
+// ---------------------------------------------------------------------
+
+test('a short team is not handicapped by the best-three rule', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const make = (n) => Array.from({ length: n }, (_, i) => ({
+    individual_id: `A01${i + 1}`, team: 'A01', member: String(i + 1),
+    division: 'A', answers: [1, 2, 3],
+  }));
+  const total = (n) => {
+    const people = individualStandings(make(n), key, small);
+    return combinedStandings(people, [], key, small, [{ team: 'A01', division: 'A' }])[0];
+  };
+  assert.equal(total(1).individual, 3, 'one member scores their own paper');
+  assert.equal(total(2).individual, 6);
+  assert.equal(total(3).individual, 9);
+  assert.equal(total(4).individual, 9, 'the fourth paper cannot add to a perfect three');
+  // The ceiling is three perfect papers either way, so a short team is
+  // measured against the same bar and is not quietly punished.
+  assert.equal(total(2).indMax, total(4).indMax);
+});
+
+test('the weakest of four is the one dropped, and it is marked', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 2, 9] },
+    { individual_id: 'A013', team: 'A01', member: '3', division: 'A', answers: [1, 9, 9] },
+    { individual_id: 'A014', team: 'A01', member: '4', division: 'A', answers: [9, 9, 9] },
+  ], key, small);
+  const row = combinedStandings(people, [], key, small, [{ team: 'A01', division: 'A' }])[0];
+  assert.equal(row.individual, 3 + 2 + 1);
+  assert.deepEqual(row.members.map((m) => m.counted), [true, true, true, false]);
+  assert.deepEqual(row.members.map((m) => m.member), ['1', '2', '3', '4'],
+    'members stay listed in team order, not score order');
+});
+
+test('a tie for the third place keeps exactly three counting', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A013', team: 'A01', member: '3', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A014', team: 'A01', member: '4', division: 'A', answers: [1, 2, 3] },
+  ], key, small);
+  const row = combinedStandings(people, [], key, small, [{ team: 'A01', division: 'A' }])[0];
+  assert.equal(row.individual, 9);
+  assert.equal(row.members.filter((m) => m.counted).length, 3);
+});
+
+test('statistics survive a division nobody has entered', () => {
+  const key = fullKey();
+  const st = divisionStatistics([], [], 'B', cfg, key);
+  assert.equal(st.contestants.n, 0);
+  assert.equal(st.contestants.mean, 0);
+  assert.equal(st.contestants.stdev, 0);
+  assert.equal(st.problems.length, cfg.INDIVIDUAL_PROBLEMS);
+  assert.equal(st.mostSolved.correct, 0);
+  assert.ok(st.distribution.every((d) => d.count === 0));
+});
+
+// ---------------------------------------------------------------------
+// Credentials from the address bar
+// ---------------------------------------------------------------------
+
+test('the portal refuses Supabase credentials from the URL', async () => {
+  const { resolvedConfig, CONFIG } = await import('../assets/config.js');
+  const hostile = '?url=https://attacker.example.co&key=attacker-key';
+
+  // The portal asks for a password. A link carrying someone else's
+  // project would render the ordinary sign-in screen and post that
+  // password to whoever sent the link, so the address bar is ignored.
+  const portal = resolvedConfig(hostile);
+  assert.equal(portal.SUPABASE_URL, CONFIG.SUPABASE_URL);
+  assert.equal(portal.SUPABASE_ANON_KEY, CONFIG.SUPABASE_ANON_KEY);
+  assert.equal(portal.FROM_ADDRESS_BAR, false);
+
+  // The public board has no password to give away, so a projector may
+  // still be pointed at a project by link — and it says so on screen.
+  const board = resolvedConfig(hostile, { allowUrlParams: true });
+  assert.equal(board.SUPABASE_URL, 'https://attacker.example.co');
+  assert.equal(board.SUPABASE_ANON_KEY, 'attacker-key');
+  assert.equal(board.FROM_ADDRESS_BAR, true);
+
+  assert.equal(resolvedConfig('', { allowUrlParams: true }).FROM_ADDRESS_BAR, false);
+});
