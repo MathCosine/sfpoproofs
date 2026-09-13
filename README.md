@@ -282,7 +282,7 @@ data. The bar reads **demo mode** in amber throughout.
 
 ```bash
 npm test               # 72 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 164 browser checks, including ten scorers at once
+npm run test:e2e       # 166 browser checks, including ten scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

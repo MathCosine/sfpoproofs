@@ -142,7 +142,7 @@ function buildQueue(claims, dq, gutsByTeam) {
  * on, arrows and backspace move you back, and paste spreads a whole row
  * of numbers across the grid.
  */
-function buildAnswerGrid(host, count, { offset = 0, onChange, columns = 5 } = {}) {
+function buildAnswerGrid(host, count, { offset = 0, onChange, columns = 5, onLast } = {}) {
   // A null host means the markup and this script disagree — usually a
   // half-updated cache. Returning empty keeps the rest of the tab alive
   // instead of throwing and leaving a panel with no controls at all.
@@ -166,7 +166,13 @@ function buildAnswerGrid(host, count, { offset = 0, onChange, columns = 5 } = {}
       onChange?.();
     });
     input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) { e.preventDefault(); inputs[i + 1]?.focus(); }
+      if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey) {
+        e.preventDefault();
+        // Enter off the last box lands on Save rather than going nowhere,
+        // so a whole sheet is keyed and filed without touching the mouse.
+        if (inputs[i + 1]) inputs[i + 1].focus();
+        else onLast?.();
+      }
       if (e.key === 'ArrowRight' && input.selectionStart === input.value.length) inputs[i + 1]?.focus();
       if (e.key === 'ArrowLeft' && input.selectionStart === 0) inputs[i - 1]?.focus();
       if (e.key === 'ArrowDown') { e.preventDefault(); inputs[i + columns]?.focus(); }
@@ -684,6 +690,10 @@ function progressSignature() {
 
 function buildProgress(teams) {
   const host = $('#progressPanel');
+  // This rebuilds whenever a team first appears, which during a contest is
+  // every few minutes. Without keeping the scroll, the roster someone is
+  // reading jumps back to the top each time a colleague saves a sheet.
+  const keepScroll = host.querySelector('.roster')?.scrollTop ?? 0;
   host.replaceChildren();
   progressChips.clear();
   progressPips.clear();
@@ -731,6 +741,7 @@ function buildProgress(teams) {
     roster.appendChild(card);
   }
   host.appendChild(roster);
+  roster.scrollTop = keepScroll;
 }
 
 function paintProgress(teams) {
@@ -840,6 +851,10 @@ function pager(division, total) {
   const pages = Math.max(1, Math.ceil(total / size));
   const page = Math.min(boardPage[division], pages - 1);
   boardPage[division] = page;
+
+  // Nothing to page through: a row of dead arrows under a six-row table
+  // is just furniture.
+  if (pages < 2) return { bar: null, page: 0, size };
 
   const bar = el('div', 'pager');
   const back = el('button', 'btn btn--ghost', '←');
@@ -962,7 +977,7 @@ function renderBoards() {
       const header = ['#', 'Team', { label: 'Individual', num: true }, { label: 'Guts', num: true },
         { label: 'Combined', num: true }, 'Sheets'];
       if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
-      host.appendChild(bar);
+      if (bar) host.appendChild(bar);
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
         w.classList.add('table-wrap--dq');
@@ -980,7 +995,7 @@ function renderBoards() {
       const header = ['#', 'ID', 'Name', { label: 'Correct', num: true },
         { label: 'Points', num: true }, 'Answered'];
       if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
-      host.appendChild(bar);
+      if (bar) host.appendChild(bar);
       if (page === 0 && shown.length) {
         const copyRow = el('div', 'chip-row');
         copyRow.style.marginTop = '8px';
@@ -1004,7 +1019,7 @@ function renderBoards() {
       const header = ['#', 'Team', { label: 'Correct', num: true },
         { label: 'Points', num: true }, 'Sets'];
       if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
-      host.appendChild(bar);
+      if (bar) host.appendChild(bar);
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
         w.classList.add('table-wrap--dq');
@@ -1185,6 +1200,12 @@ function renderClock() {
   const text = formatClock(remaining);
   $('#clockTime').textContent = text;
   $('#clockBig').textContent = text;
+
+  // Only one of Start and Pause ever applies. Greying the other out means
+  // there is nothing to fumble over while a room is watching.
+  const running = Boolean(state?.guts_running);
+  $('#clockStart').disabled = running;
+  $('#clockPause').disabled = !running;
 
   const chip = $('#clockChip');
   chip.className = 'clockchip';
@@ -1536,14 +1557,14 @@ function wire() {
   }
 
   sheetInputs = buildAnswerGrid($('#answerGrid'), cfg.INDIVIDUAL_PROBLEMS,
-    { onChange: () => markSheetAgainstKey() });
+    { onChange: () => markSheetAgainstKey(), onLast: () => $('#saveSheet').focus() });
 
   const setSelect = $('#gutsSet');
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
     setSelect.appendChild(new Option(`Set ${set}`, String(set)));
   }
   gutsInputs = buildAnswerGrid($('#gutsGrid'), cfg.GUTS_PER_SET,
-    { columns: cfg.GUTS_PER_SET });
+    { columns: cfg.GUTS_PER_SET, onLast: () => $('#saveGuts').focus() });
 
   $('#individualId').addEventListener('input', onIdTyped);
   for (const id of ['#teamNo', '#memberLetter']) {

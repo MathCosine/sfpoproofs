@@ -1215,6 +1215,24 @@ await shot.close();
   check('the header counts the whole field',
     (await big.textContent('#progressPanel .rosterbar, #progressPanel')).includes('100'));
 
+  // The panel rebuilds whenever a team first appears, which during a
+  // contest is every few minutes. Without keeping the scroll, the roster
+  // someone is reading jumps to the top each time a colleague saves.
+  await big.evaluate(() => { document.querySelector('.roster').scrollTop = 400; });
+  await big.waitForTimeout(150);
+  const scrolledTo = await big.evaluate(() => document.querySelector('.roster').scrollTop);
+  check('the roster is long enough to scroll at this size', scrolledTo > 0, String(scrolledTo));
+  await big.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    db.teams.push({ team: 'B49', name: 'Late Arrivals', division: 'B', disqualified: false });
+    localStorage.setItem('contest-demo-db', JSON.stringify(db));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+  });
+  await big.waitForTimeout(800);
+  const after = await big.evaluate(() => document.querySelector('.roster').scrollTop);
+  check('and a team appearing does not jump it back to the top',
+    after === scrolledTo, `${scrolledTo} -> ${after}`);
+
   // A repaint is what happens on every realtime event, so it is the
   // number that decides whether ten scorers stay smooth.
   const repaint = await big.evaluate(async () => {

@@ -17,6 +17,15 @@
   --red:        #ff6b6b;
   --violet:     #b98cff;
   --slate:      #e8eaef;
+  /* Second place. --slate is the table's own header and border colour, so
+     using it left the podium reading first, nothing, third. */
+  --silver:     #c3cbd8;
+
+  /* Text on a bright accent fill. The accents are the same in both themes,
+     so their foreground has to be too: inheriting --ink put near-white
+     text on yellow, lime, cyan and violet the moment the theme flipped,
+     which measured between 1.3 and 2.4 to 1 — buttons you could not read. */
+  --on-accent:  #10131a;
 
   --shadow:     6px 6px 0 var(--line);
   --shadow-sm:  4px 4px 0 var(--line);
@@ -37,6 +46,7 @@
   --muted:  #9aa4b5;
   --line:   #000000;
   --slate:  #2a2e3a;
+  --silver: #8d97ab;
   --dot:    rgba(255, 255, 255, .10);
   --shadow:    6px 6px 0 #000;
   --shadow-sm: 4px 4px 0 #000;
@@ -93,10 +103,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .btn:disabled          { opacity: .45; cursor: not-allowed; box-shadow: var(--shadow-xs); }
 .btn:focus-visible     { outline: 3px solid var(--violet); outline-offset: 3px; }
 
-.btn--primary { --btn-bg: var(--cyan); }
-.btn--go      { --btn-bg: var(--lime); }
-.btn--warn    { --btn-bg: var(--amber); }
-.btn--danger  { --btn-bg: var(--red); }
+.btn--primary { --btn-bg: var(--cyan);   color: var(--on-accent); }
+.btn--go      { --btn-bg: var(--lime);   color: var(--on-accent); }
+.btn--warn    { --btn-bg: var(--amber);  color: var(--on-accent); }
+.btn--danger  { --btn-bg: var(--red);    color: var(--on-accent); }
 .btn--ghost   { box-shadow: var(--shadow-xs); padding: 7px 12px; font-size: 13px; }
 .btn--block   { width: 100%; }
 
@@ -132,10 +142,10 @@ button, input, select, textarea { font: inherit; color: inherit; }
   background: var(--card);
   white-space: nowrap;
 }
-.tag--a { background: var(--cyan); }
-.tag--b { background: var(--lime); }
-.tag--flag { background: var(--amber); }
-.tag--live { background: var(--lime); }
+.tag--a { background: var(--cyan);  color: var(--on-accent); }
+.tag--b { background: var(--lime);  color: var(--on-accent); }
+.tag--flag { background: var(--amber); color: var(--on-accent); }
+.tag--live { background: var(--lime); color: var(--on-accent); }
 
 .muted { color: var(--muted); font-weight: 600; }
 
@@ -229,7 +239,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .step {
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px; flex: none;
-  background: var(--amber); border: 2px solid var(--line); border-radius: 8px;
+  background: var(--amber); color: var(--on-accent);
+  border: 2px solid var(--line); border-radius: 8px;
   font-size: 13px; font-weight: 800;
 }
 
@@ -279,10 +290,14 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .banner .btn { margin-left: auto; align-self: center; flex-shrink: 0; }
 .banner span { font-weight: 600; }
 
+/* Tinted from whatever it sits on rather than a fixed grey: inside a lime
+   Save button on a dark theme, a --slate chip was dark ink on dark. */
 .kbd {
   display: inline-block; padding: 1px 6px; margin: 0 1px;
   border: 2px solid var(--line); border-radius: 6px;
-  background: var(--slate); font-family: var(--mono); font-size: 11px; font-weight: 700;
+  background: color-mix(in srgb, currentColor 14%, transparent);
+  color: inherit;
+  font-family: var(--mono); font-size: 11px; font-weight: 700;
 }
 
 /* ---------- suggestions ------------------------------------------ */
@@ -319,6 +334,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .tab:active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--line); }
 .tab[aria-selected="true"] {
   background: var(--violet);
+  color: var(--on-accent);
   transform: translate(2px, 2px);
   box-shadow: 0 0 0 var(--line);
 }
@@ -356,8 +372,9 @@ tbody td { padding: 9px 12px; border-bottom: 2px solid var(--slate); font-weight
 tbody tr:last-child td { border-bottom: none; }
 tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 .rank { font-family: var(--mono); font-weight: 800; width: 44px; }
+.rank--1, .rank--2, .rank--3 { color: var(--on-accent); }
 .rank--1 { background: var(--amber); }
-.rank--2 { background: var(--slate); }
+.rank--2 { background: var(--silver); }
 .rank--3 { background: color-mix(in srgb, var(--amber) 45%, var(--red)); }
 .num { text-align: right; font-family: var(--mono); font-weight: 800; }
 
@@ -496,7 +513,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
   padding: 5px 12px; border: 2px solid var(--paper); border-radius: 999px;
   background: var(--lime); color: #10131a; font-weight: 800;
 }
-.clockchip--frozen { background: var(--violet); }
+.clockchip--frozen { background: var(--violet); color: var(--on-accent); }
 .clockchip--stopped { background: var(--slate); color: var(--muted); }
 .clockchip__label { font-size: 10px; letter-spacing: .1em; opacity: .7; }
 .clockchip__time { font-size: 15px; font-variant-numeric: tabular-nums; }
@@ -507,7 +524,14 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 }
 
 /* ---------- per-contestant progress -------------------------------- */
-.roster { max-height: 470px; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+/* Fills the screen it is given. A fixed height left a third of a big
+   monitor empty while still needing a scroll on a laptop. */
+.roster {
+  max-height: max(260px, calc(100vh - 300px));
+  overflow: auto;
+  display: flex; flex-direction: column; gap: 6px;
+  overscroll-behavior: contain;
+}
 .rosterteam {
   border: 2px solid var(--line); border-radius: var(--radius-sm);
   padding: 8px 10px; background: var(--card);
@@ -528,6 +552,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 }
 .person:hover { transform: translate(-1px, -1px); }
 .person:active { transform: translate(1px, 1px); }
+.person--done, .person--partial, .person--claimed { color: var(--on-accent); }
 .person--done { background: var(--lime); }
 .person--partial { background: var(--amber); }
 .person--claimed { background: var(--violet); }
@@ -539,6 +564,7 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
   background: var(--slate); font-size: 9px; display: grid; place-items: center;
   font-family: var(--mono); font-weight: 800;
 }
+.setpip--done, .setpip--partial, .setpip--claimed { color: var(--on-accent); }
 .setpip--done { background: var(--lime); }
 .setpip--partial { background: var(--amber); }
 .setpip--claimed { background: var(--violet); }
