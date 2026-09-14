@@ -29,6 +29,27 @@ create table if not exists app_settings (
 insert into app_settings (id) values (1) on conflict (id) do nothing;
 alter table app_settings add column if not exists admin_email text not null
   default 'admin@sfpo.local';
+-- Combined = individual total x this + guts score. The old percentage
+-- weights stay as columns so an existing database still loads; nothing
+-- reads them any more.
+alter table app_settings add column if not exists individual_multiplier numeric
+  not null default 3;
+-- Who may sign in under each password, one name per line. Empty means
+-- anyone with the password, so a half-filled roster never locks the
+-- contest out of its own portal.
+alter table app_settings add column if not exists admin_names  text not null default '';
+alter table app_settings add column if not exists grader_names text not null default '';
+
+-- Seed the directors once, and never again: an edit made in the portal
+-- survives every later run of this file. The scorer list is deliberately
+-- left empty — a partial list would lock out the people missing from it,
+-- and empty means anyone holding the staff password.
+--
+-- Locked out of Admin by a typo? Clear the list and sign in again:
+--   update app_settings set admin_names = '' where id = 1;
+update app_settings
+   set admin_names = 'Thomas Ni' || chr(10) || 'Ryan Wang' || chr(10) || 'Lusen Yao'
+ where id = 1 and admin_names = '';
 
 -- ---------------------------------------------------------------------
 -- Guts timer and freeze, read by the public leaderboard.
@@ -126,6 +147,29 @@ create table if not exists contestants (
   updated_at      timestamptz not null default now()
 );
 create index if not exists contestants_team_idx on contestants (team);
+-- One contestant can be out without their team being out. Their paper is
+-- kept; it stops ranking and stops counting towards the team's best three.
+alter table contestants add column if not exists disqualified boolean not null default false;
+alter table contestants add column if not exists dq_reason text not null default '';
+alter table contestants add column if not exists dq_by     text not null default '';
+alter table contestants add column if not exists dq_at     timestamptz;
+
+-- ---------------------------------------------------------------------
+-- The participant roster.
+--
+-- Names arrive before the contest and are reference data, not results:
+-- typing an ID fills the name in, and a contestant who is not on the
+-- list simply leaves it blank. Kept separate from `contestants` so an
+-- imported name never looks like an entered paper.
+-- ---------------------------------------------------------------------
+create table if not exists roster (
+  individual_id text primary key,
+  name          text not null default '',
+  division      char(1) check (division in ('A','B')),
+  team          text,
+  updated_at    timestamptz not null default now()
+);
+create index if not exists roster_team_idx on roster (team);
 
 -- ---------------------------------------------------------------------
 -- Guts answers, one row per (team, problem).
@@ -332,7 +376,8 @@ do $$
 declare t text;
 begin
   foreach t in array array['app_settings','teams','contestants','guts_answers',
-                           'answer_key','claims','graders','contest_state','guts_public'] loop
+                           'answer_key','claims','graders','contest_state','guts_public',
+                           'roster'] loop
     execute format('revoke all on table %I from anon', t);
     execute format('grant select, insert, update, delete on table %I to authenticated', t);
   end loop;
@@ -382,7 +427,8 @@ do $$
 declare t text;
 begin
   foreach t in array array['app_settings','teams','contestants','guts_answers',
-                           'answer_key','claims','graders','contest_state','guts_public'] loop
+                           'answer_key','claims','graders','contest_state','guts_public',
+                           'roster'] loop
     execute format('alter table %I enable row level security', t);
     -- Drop every policy this file creates, so re-running is safe.
     execute format('drop policy if exists staff_all on %I', t);
@@ -402,12 +448,12 @@ begin
   end loop;
 end $$;
 
--- The answer key and the settings: everyone signed in may read them,
--- only the admin account may change them.
+-- The answer key, the settings and the participant roster: everyone
+-- signed in may read them, only the admin account may change them.
 do $$
 declare t text;
 begin
-  foreach t in array array['answer_key','app_settings'] loop
+  foreach t in array array['answer_key','app_settings','roster'] loop
     execute format('create policy staff_read on %I for select to authenticated using (true)', t);
     execute format('create policy admin_write on %I for all to authenticated
                     using (is_admin()) with check (is_admin())', t);
@@ -434,7 +480,8 @@ do $$
 declare t text;
 begin
   foreach t in array array['app_settings','teams','contestants','guts_answers',
-                           'answer_key','claims','graders','contest_state','guts_public'] loop
+                           'answer_key','claims','graders','contest_state','guts_public',
+                           'roster'] loop
     if not exists (
       select 1 from pg_publication_tables
       where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = t

@@ -12,7 +12,7 @@
 // Bumped on every deploy. index.html and guts.html carry the same string
 // in data-app-version; a mismatch means the browser has a half-updated
 // copy and the portal says so rather than misbehaving quietly.
-export const APP_VERSION = '2026.09.13.1';
+export const APP_VERSION = '2026.09.14.1';
 
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
@@ -36,10 +36,9 @@ export const CONFIG = {
   FREEZE_MINUTES: 10,          // board stops updating with this long left
 
   // ---- Combined ----------------------------------------------------
-  // Weights apply to each round's share of its own maximum, never to
-  // raw points — the two rounds are on different scales.
-  INDIVIDUAL_WEIGHT: 80,
-  GUTS_WEIGHT: 20,
+  // Combined = the team's individual total (best three of four) counted
+  // this many times, plus its guts score. Raw points, nothing scaled.
+  INDIVIDUAL_MULTIPLIER: 3,
 
   // ---- Roster ------------------------------------------------------
   // IDs read <division><team><member>: A011 is Division A, team 01,

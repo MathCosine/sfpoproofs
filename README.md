@@ -78,27 +78,47 @@ rounds, and a score distribution.
 **Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
 the guts point values, which are configuration rather than answers.
 
-**Disqualification** keeps every answer, stops a team ranking, and takes it off the
-public board entirely — a projector in front of the room is no place to publish the
-accusation. **Clear test data** wipes a dry run while keeping your key and settings.
+**Disqualification** works on a whole team or on **one contestant**. Either way every
+answer is kept and the reason goes on the exports. A disqualified team stops ranking
+and comes off the public board entirely — a projector in front of the room is no place
+to publish the accusation. A disqualified contestant stops ranking, drops off the award
+lines and the statistics, and stops counting towards their team's best three; the rest
+of their team is untouched. Both are reversible from Admin.
+
+**A participant list** pasted into Admin fills the name in as an ID is typed —
+`A011, Ada Lovelace` per line, straight out of a spreadsheet. Anyone not on the list
+simply leaves the name blank, and a sheet that has already been saved keeps whatever
+name it was saved with.
+
+**Sign-in lists** say who may use each password. One name per line in Admin; a name
+must match what they type at the door, give or take case, spacing and punctuation. An
+admin name also works at the scorer door. **Leave a list empty and anyone with that
+password gets in**, which is the state to keep it in until you have everybody's name.
+This is a roster check, not a lock — whoever holds the password could type a listed
+name — so it keeps the wrong person out and keeps the name on every sheet one you
+recognise. Locked out by a typo? In the SQL Editor:
+`update app_settings set admin_names = '' where id = 1;`
+
+**Clear test data** wipes a dry run while keeping your key and settings.
 
 ---
 
 ## The combined score
 
-Individual and guts are on different scales — a full team can bank 80 individual
-points against 112 from guts — so the weights apply to each round's **share of its
-own maximum**, never to raw points:
+Raw points, nothing scaled:
 
 ```
-individualPct = team individual total / (4 members × that division's paper)
-gutsPct       = team guts total       / (sum of every guts problem's points)
-combined      = 100 × (80 × individualPct + 20 × gutsPct) / 100
+team individual = sum of its best three members out of four
+combined        = team individual × 3  +  team guts score
 ```
 
-Weighting the raw numbers instead would have quietly given guts a much larger share
-than the 20 you asked for. Hover any combined score to see both halves; the export
-carries the percentages and both maxima so a result can be rechecked by hand.
+A perfect team scores **292**: 60 from three perfect papers, tripled to 180, plus 112
+from a perfect guts round. The multiplier is a setting — Admin → Contest settings —
+so it can be changed on the day and every standing recomputes at once. Hover any
+combined score to see the arithmetic; the export carries both halves, the multiplier
+and both maxima so a result can be rechecked by hand.
+
+A disqualified contestant's paper is not one of the three.
 
 ---
 
@@ -140,6 +160,12 @@ Free tier. **SQL Editor → New query →** paste all of
 
 Both are typed on the sign-in screen — the staff password in the first box, the admin
 password in the second. Neither is in this repo.
+
+To **change a password**: Authentication → Users → the row → ⋯ → **Reset password**,
+or edit the user and set a new one. Nothing needs redeploying; everyone signs in again
+with the new one. Use something long — four or five unrelated words beats a short
+scramble, and it has to be read out to twenty people. The password is never in this
+repo, and changing it does not touch any data.
 
 ### 2b. Close sign-up — do not skip this
 
@@ -264,6 +290,26 @@ The public board prefers realtime and falls back to polling only if the socket f
 allows 200 concurrent realtime connections; that is plenty for a projector and the
 scoring team, but it is not a link to post to every competitor at once.
 
+### Twenty scorers, costed
+
+A six-hour contest at full size — 100 teams, 400 answer sheets, 2,800 guts answers —
+with twenty scorers signed in and three board screens running:
+
+| | |
+| --- | --- |
+| Twenty tabs loading the portal | ~1 MB |
+| The five-minute resync, twenty tabs, six hours | ~60 MB |
+| Realtime rows for ~1,100 saves, fanned out to twenty | ~7 MB |
+| Three board screens following every change | ~60 MB |
+| **Total against a 5 GB monthly allowance** | **~130 MB, about 3%** |
+
+Realtime messages land near 25,000 against a two-million monthly allowance, and
+concurrent connections near 25 against 200. **Nothing here needs a paid plan** — the
+free tier has roughly thirty times the headroom required, and the resync pauses
+entirely in a tab nobody is looking at. The browser tests run twenty real tabs
+signing in, colliding on one sheet and saving at the same instant, so the figure is
+measured behaviour rather than an estimate.
+
 ---
 
 ## Locally
@@ -281,8 +327,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 72 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 166 browser checks, including ten scorers at once
+npm test               # 79 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 180 browser checks, including twenty scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

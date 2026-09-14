@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.13.1">
+<body data-app-version="2026.09.14.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -331,22 +331,58 @@
         </div>
         <div id="adminBody">
         <div class="panel__head"><h2>Contest settings</h2></div>
-        <div class="grid-3">
+        <div class="grid-2">
           <div class="field">
             <label class="field__label" for="teamCount">Teams (1 – N)</label>
             <input class="input" id="teamCount" type="number" min="1" max="500">
           </div>
           <div class="field">
-            <label class="field__label" for="individualWeight">Individual weight</label>
-            <input class="input" id="individualWeight" type="number" min="0" max="100">
-          </div>
-          <div class="field">
-            <label class="field__label" for="gutsWeight">Guts weight</label>
-            <input class="input" id="gutsWeight" type="number" min="0" max="100">
+            <label class="field__label" for="individualMultiplier">Individual multiplier</label>
+            <input class="input" id="individualMultiplier" type="number" min="0" max="20" step="1">
+            <p class="field__hint">Combined = individual total × this + guts score.</p>
           </div>
         </div>
         <div class="banner banner--info" id="weightPreview"></div>
         <button class="btn btn--primary" id="saveSettings">Save settings for everyone</button>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Who may sign in</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          One name per line. A name must be on the matching list to get in, and it is checked
+          against what they type at the door. Leave a list empty to let anyone with that
+          password through.
+        </p>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="adminNames">Admins</label>
+            <textarea class="input mono" id="adminNames" rows="6" spellcheck="false"
+                      placeholder="Thomas Ni&#10;Ryan Wang&#10;Lusen Yao"></textarea>
+            <p class="field__hint" id="adminNamesCount">Anyone with the admin password.</p>
+          </div>
+          <div class="field">
+            <label class="field__label" for="graderNames">Scorers</label>
+            <textarea class="input mono" id="graderNames" rows="6" spellcheck="false"
+                      placeholder="Xu Shao&#10;CCMathClub"></textarea>
+            <p class="field__hint" id="graderNamesCount">Anyone with the staff password.</p>
+          </div>
+        </div>
+        <div class="chip-row">
+          <button class="btn btn--primary" id="saveStaff">Save the sign-in lists</button>
+          <span class="muted">An admin name also works at the scorer door.</span>
+        </div>
+
+        <div class="panel__head" style="margin-top:28px"><h2>Participants</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          One per line, ID first, then the name — <span class="mono">A011, Ada Lovelace</span>.
+          Commas, tabs and columns pasted straight out of a spreadsheet all work. Names fill
+          themselves in as an ID is typed; anyone not on the list just leaves it blank.
+        </p>
+        <textarea class="input mono" id="rosterPaste" rows="5" spellcheck="false"
+                  placeholder="A011, Ada Lovelace&#10;A012, Grace Hopper"></textarea>
+        <div class="chip-row" style="margin-top:10px">
+          <button class="btn btn--primary" id="rosterImport">Import participants</button>
+          <button class="btn btn--ghost" id="rosterClear">Clear the list</button>
+          <span class="muted" id="rosterState">No participants loaded.</span>
+        </div>
 
         <div class="panel__head" style="margin-top:28px"><h2>Disqualifications</h2></div>
         <div class="grid-2">
@@ -360,6 +396,24 @@
           </div>
         </div>
         <button class="btn btn--warn" id="dqAdd">Disqualify team</button>
+
+        <div class="grid-2" style="margin-top:18px">
+          <div class="field">
+            <label class="field__label" for="dqPerson">One contestant</label>
+            <input class="input mono" id="dqPerson" placeholder="A011" autocomplete="off"
+                   maxlength="6">
+          </div>
+          <div class="field">
+            <label class="field__label" for="dqPersonReason">Reason</label>
+            <input class="input" id="dqPersonReason" placeholder="Phone on the desk"
+                   autocomplete="off">
+          </div>
+        </div>
+        <button class="btn btn--warn" id="dqPersonAdd">Disqualify contestant</button>
+        <p class="field__hint" style="margin-top:8px">
+          Their paper is kept but stops ranking, and stops counting towards their team's best
+          three. The rest of the team is unaffected.
+        </p>
         <div id="dqList" style="margin-top:16px"></div>
 
         <div class="panel__head" style="margin-top:28px"><h2>Export</h2></div>
@@ -396,6 +450,6 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.09.13.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.14.1"></script>
 </body>
 </html>

@@ -765,12 +765,14 @@ await page.click('#saveKey');
 await page.waitForTimeout(500);
 await page.click('.tab[data-entry="individual"]');
 
-// ---- ten scorers at once --------------------------------------------
+// ---- twenty scorers at once ------------------------------------------
 // The lock's mutual exclusion is unit-tested against the Postgres
-// contract; this is the other half — ten real tabs, ten identities, all
-// live at the same time, and the UI holding up.
+// contract; this is the other half — twenty real tabs, twenty
+// identities, all live at the same time, and the UI holding up. Twenty
+// is what the contest actually plans to staff.
+const CREW = 20;
 const crew = [];
-for (let i = 0; i < 10; i += 1) {
+for (let i = 0; i < CREW; i += 1) {
   const tab = await ctx.newPage();
   watch(tab, `crew${i}`);
   await tab.addInitScript((n) => {
@@ -780,8 +782,8 @@ for (let i = 0; i < 10; i += 1) {
   await tab.goto(BASE, { waitUntil: 'domcontentloaded' });
   crew.push(tab);
 }
-await Promise.all(crew.map((tab) => tab.waitForSelector('#app:not(.hidden)', { timeout: 20000 })));
-check('ten scorers can all be signed in at once', crew.length === 10);
+await Promise.all(crew.map((tab) => tab.waitForSelector('#app:not(.hidden)', { timeout: 40000 })));
+check('twenty scorers can all be signed in at once', crew.length === CREW);
 
 // Each opens a different sheet, all at the same moment.
 await Promise.all(crew.map(async (tab, i) => {
@@ -792,19 +794,19 @@ await page.waitForTimeout(1500);
 
 const identities = await Promise.all(crew.map((t) => t.textContent('#whoamiName')));
 check('each tab keeps its own scorer identity',
-  new Set(identities).size === 10, identities.slice(0, 3).join(', '));
+  new Set(identities).size === CREW, identities.slice(0, 3).join(', '));
 
 const banners = await Promise.all(crew.map((t) => t.textContent('#individualBanner')));
-check('ten different sheets means nobody is blocked',
+check('twenty different sheets means nobody is blocked',
   banners.every((b) => !b.includes('entering this sheet right now')));
 
-// Now all ten pile onto the SAME sheet.
+// Now all twenty pile onto the SAME sheet.
 await Promise.all(crew.map((tab) => tab.fill('#individualId', 'A771')));
 await page.waitForTimeout(2000);
 const contested = await Promise.all(crew.map((t) => t.textContent('#individualBanner')));
 const warned = contested.filter((b) => b.includes('entering this sheet right now')).length;
 check('piling onto one sheet warns all but the holder',
-  warned >= 8, `${warned} of 10 warned off`);
+  warned >= CREW - 2, `${warned} of ${CREW} warned off`);
 
 // Everyone enters and saves their own sheet simultaneously.
 await Promise.all(crew.map(async (tab, i) => {
@@ -825,14 +827,14 @@ const savedIds = await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
   return (db.contestants || []).map((c) => c.individual_id);
 });
-const expected = Array.from({ length: 10 }, (_, i) => `${i % 2 ? 'A' : 'B'}${String(40 + i).padStart(2, '0')}1`);
+const expected = Array.from({ length: CREW }, (_, i) => `${i % 2 ? 'A' : 'B'}${String(40 + i).padStart(2, '0')}1`);
 const landed = expected.filter((id) => savedIds.includes(id));
-check('ten simultaneous saves all land', landed.length === 10,
-  `${landed.length}/10 — missing ${expected.filter((id) => !savedIds.includes(id)).join(', ')}`);
+check('twenty simultaneous saves all land', landed.length === CREW,
+  `${landed.length}/${CREW} — missing ${expected.filter((id) => !savedIds.includes(id)).join(', ')}`);
 
 await page.click('.tab[data-tab="progress"]');
 await page.waitForTimeout(600);
-check('the portal is still responsive with ten tabs open',
+check('the portal is still responsive with twenty tabs open',
   (await page.locator('.person').count()) > 0);
 
 // Now the shape a real contest takes: some scorers on answer sheets and
@@ -864,7 +866,20 @@ await Promise.all(crew.map(async (tab, i) => {
   }
 }));
 await Promise.all(crew.map((tab, i) => tab.click(i % 2 === 0 ? '#saveSheet' : '#saveGuts')));
-await page.waitForTimeout(3000);
+// Twenty saves serialise through one lock in demo mode, so wait for the
+// exact rows rather than a guessed number of milliseconds. (On Supabase
+// each save is an independent upsert with no shared snapshot, so they do
+// not queue behind each other at all.)
+const wantIds = [...crew.keys()].filter((i) => i % 2 === 0)
+  .map((i) => `A${String(60 + i).padStart(2, '0')}2`);
+const wantTeams = [...crew.keys()].filter((i) => i % 2 === 1)
+  .map((i) => `B${String(60 + i).padStart(2, '0')}`);
+await page.waitForFunction(({ ids, teams }) => {
+  const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+  const have = new Set((db.contestants || []).map((c) => c.individual_id));
+  const gutsTeams = new Set((db.gutsAnswers || []).map((g) => String(g.team)));
+  return ids.every((id) => have.has(id)) && teams.every((t) => gutsTeams.has(t));
+}, { ids: wantIds, teams: wantTeams }, { timeout: 45000 }).catch(() => {});
 
 const mixed = await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
@@ -873,12 +888,12 @@ const mixed = await page.evaluate(() => {
     gutsTeams: [...new Set((db.gutsAnswers || []).map((g) => String(g.team)))],
   };
 });
-const wantSheets = [0, 2, 4, 6, 8].map((i) => `A${String(60 + i).padStart(2, '0')}2`);
-const wantGuts = [1, 3, 5, 7, 9].map((i) => `B${String(60 + i).padStart(2, '0')}`);
-check('five simultaneous answer sheets all land',
+const wantSheets = wantIds;
+const wantGuts = wantTeams;
+check('ten simultaneous answer sheets all land, alongside ten guts sets',
   wantSheets.every((id) => mixed.sheets.includes(id)),
   `missing ${wantSheets.filter((id) => !mixed.sheets.includes(id)).join(', ') || 'none'}`);
-check('five simultaneous guts sets all land',
+check('and all ten guts sets land with them',
   wantGuts.every((t) => mixed.gutsTeams.includes(t)),
   `missing ${wantGuts.filter((t) => !mixed.gutsTeams.includes(t)).join(', ') || 'none'}`);
 
@@ -1144,6 +1159,129 @@ await shot.close();
     `${await stale.locator('#keyGuts .ans input').count()} guts boxes still built`);
   check('and it does not throw', staleErrors.length === 0, staleErrors[0] ?? '');
   await stale.close();
+}
+
+// ---- participants, sign-in lists, and one contestant out -------------
+{
+  await page.click('.tab[data-tab="setup"]');
+  await page.waitForTimeout(300);
+
+  // Participants arrive before the contest and fill the name in as an ID
+  // is typed. Anyone not on the list just leaves it blank.
+  await page.fill('#rosterPaste', 'A901, Ada Lovelace\nA902\tGrace Hopper\nnonsense');
+  await page.click('#rosterImport');
+  await page.waitForTimeout(700);
+  check('a pasted participant list imports and reports what it skipped',
+    (await page.textContent('#rosterState')).includes('2 participants'),
+    await page.textContent('#rosterState'));
+
+  await page.click('.tab[data-entry="individual"]');
+  await page.click('#clearSheet');
+  await page.fill('#individualId', 'A903');
+  await page.waitForTimeout(400);
+  check('a contestant who is not on the list leaves the name blank',
+    (await page.inputValue('#contestantName')) === '',
+    await page.inputValue('#contestantName'));
+  await page.fill('#individualId', 'A902');
+  await page.waitForTimeout(400);
+  check('and one who is has their name filled in',
+    (await page.inputValue('#contestantName')) === 'Grace Hopper',
+    await page.inputValue('#contestantName'));
+  await page.click('#clearSheet');
+
+  // Disqualify one contestant. Their team keeps its other three.
+  await page.click('.tab[data-tab="leaderboard"]');
+  await page.click('.tab[data-board="combined"]');
+  await page.waitForTimeout(500);
+  const teamBefore = await page.locator('#boards tbody tr').first().innerText();
+  const victim = (await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    const rows = (db.contestants || []).filter((c) => c.division === 'A' && !c.disqualified);
+    return rows.length ? rows[0].individual_id : null;
+  }));
+  await page.click('.tab[data-tab="setup"]');
+  await page.fill('#dqPerson', victim);
+  await page.fill('#dqPersonReason', 'Phone on the desk');
+  await page.click('#dqPersonAdd');
+  await page.waitForTimeout(700);
+  check('one contestant can be disqualified without their team',
+    (await page.textContent('#dqList')).includes('contestant only'),
+    (await page.textContent('#dqList')).trim().slice(0, 70));
+  await page.click('.tab[data-tab="leaderboard"]');
+  await page.click('.tab[data-board="individual"]');
+  await page.waitForTimeout(500);
+  const ranked = await page.locator('#boards .table-wrap:not(.table-wrap--dq) tbody').first()
+    .innerText();
+  check('and drops out of the ranking', !ranked.includes(victim), victim);
+  check('while their paper is kept, marked DQ',
+    (await page.locator('#boards .table-wrap--dq').first().innerText()).includes(victim));
+
+  // Per-contestant copy, for reading the awards out one at a time.
+  const firstCopy = page.locator('#boards tbody .rowcopy').first();
+  check('every leaderboard row has its own copy button',
+    (await page.locator('#boards tbody .rowcopy').count()) > 0);
+  await firstCopy.click();
+  await page.waitForTimeout(400);
+  const oneLine = await page.evaluate(() => navigator.clipboard.readText());
+  check('which copies just that contestant, in slide shape',
+    /^[AB]\d{3}( .+)?\nScore: \d+$/.test(oneLine.trim()), JSON.stringify(oneLine));
+
+  // Put the contestant back so later checks see the usual field.
+  await page.click('.tab[data-tab="setup"]');
+  await page.click('#dqList button');
+  await page.waitForTimeout(600);
+
+  // Sign-in lists. Saved here, checked at the door.
+  await page.fill('#adminNames', 'Thomas Ni\nRyan Wang');
+  await page.fill('#graderNames', 'Xu Shao\nCCMathClub');
+  await page.click('#saveStaff');
+  await page.waitForTimeout(600);
+  check('the sign-in lists count what you typed',
+    (await page.textContent('#graderNamesCount')).includes('2 names'),
+    await page.textContent('#graderNamesCount'));
+}
+
+{
+  // Same browser profile as the tab that saved the lists: the demo
+  // database is per profile, so a fresh context would have no lists and
+  // let everybody in.
+  const visitor = await ctx.newPage();
+  watch(visitor, 'door');
+  await visitor.addInitScript(() => localStorage.removeItem('contest-grader-name'));
+  await visitor.goto(BASE, { waitUntil: 'domcontentloaded' });
+
+  await visitor.fill('#graderName', 'Someone Random');
+  await visitor.click('#gateEnter');
+  await visitor.waitForTimeout(600);
+  check('a name that is not on the scorer list is turned away',
+    (await visitor.textContent('#gateError')).includes('not on the scorer list'),
+    await visitor.textContent('#gateError'));
+  check('and stays at the door', await visitor.isVisible('#gate'));
+
+  await visitor.fill('#graderName', 'xu  shao');
+  await visitor.click('#gateEnter');
+  await visitor.waitForSelector('#app:not(.hidden)');
+  check('a listed scorer gets in, spelling forgiven',
+    (await visitor.textContent('#whoamiName')) === 'xu  shao');
+
+  await Promise.all([
+    visitor.waitForNavigation({ waitUntil: 'domcontentloaded' }),
+    visitor.click('.topbar [data-signout]'),
+  ]);
+  await visitor.fill('#graderName', 'Xu Shao');
+  await visitor.fill('#adminPassword', 'demo');
+  await visitor.click('#gateEnter');
+  await visitor.waitForTimeout(600);
+  check('a scorer cannot walk in through the admin door',
+    (await visitor.textContent('#gateError')).includes('not on the admin list'),
+    await visitor.textContent('#gateError'));
+
+  await visitor.fill('#graderName', 'Ryan Wang');
+  await visitor.fill('#adminPassword', 'demo');
+  await visitor.click('#gateEnter');
+  await visitor.waitForSelector('#app:not(.hidden)');
+  check('and a listed admin does', (await visitor.textContent('#roleBadge')).trim() === 'admin');
+  await visitor.close();
 }
 
 // ---- the whole contest at once ---------------------------------------

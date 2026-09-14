@@ -10,7 +10,8 @@
 
 with expected_tables(t) as (
   values ('app_settings'),('contest_state'),('answer_key'),('teams'),
-         ('contestants'),('guts_answers'),('claims'),('graders'),('guts_public')
+         ('contestants'),('guts_answers'),('claims'),('graders'),('guts_public'),
+         ('roster')
 ),
 results as (
 
@@ -18,12 +19,12 @@ results as (
 select 1 as ord, 'Tables present' as item,
   case when (select count(*) from expected_tables e
              where exists (select 1 from information_schema.tables i
-               where i.table_schema='public' and i.table_name=e.t)) = 9
+               where i.table_schema='public' and i.table_name=e.t)) = 10
        then 'OK' else 'FAIL' end as status,
   coalesce(nullif((select string_agg(e.t, ', ' order by e.t) from expected_tables e
      where not exists (select 1 from information_schema.tables i
        where i.table_schema='public' and i.table_name=e.t)), ''),
-    'all nine') as detail
+    'all ten') as detail
 
 -- 2. the answer key is split by division -------------------------------
 union all
@@ -77,6 +78,18 @@ select 5.6, 'Only the admin can change the answer key',
     then 'OK' else 'FAIL' end,
   (select 'admin account: '||admin_email from app_settings where id=1)
 
+union all
+select 5.8, 'Individual disqualification and the roster are in place',
+  case when exists (select 1 from information_schema.columns
+      where table_schema='public' and table_name='contestants' and column_name='disqualified')
+   and exists (select 1 from information_schema.columns
+      where table_schema='public' and table_name='app_settings'
+        and column_name='individual_multiplier')
+   and to_regclass('public.roster') is not null
+    then 'OK' else 'FAIL' end,
+  (select 'combined = individual x '||individual_multiplier||' + guts'
+     from app_settings where id=1)
+
 -- 4. security -----------------------------------------------------------
 -- The anon key is published with the site, so anyone can reach the sign-up
 -- endpoint. If self-service sign-up is left on, a stranger can mint their
@@ -110,12 +123,12 @@ select 6, 'Row level security on every table',
   case when (select count(*) from pg_class c
      join pg_namespace n on n.oid=c.relnamespace
      join expected_tables e on e.t=c.relname
-    where n.nspname='public' and c.relrowsecurity) = 9
+    where n.nspname='public' and c.relrowsecurity) = 10
     then 'OK' else 'FAIL' end,
   (select count(*)::text from pg_class c
      join pg_namespace n on n.oid=c.relnamespace
      join expected_tables e on e.t=c.relname
-    where n.nspname='public' and c.relrowsecurity) || ' of 9 protected'
+    where n.nspname='public' and c.relrowsecurity) || ' of 10 protected'
 
 union all
 select 7, 'Anonymous can read only the board and the clock',
@@ -139,11 +152,11 @@ union all
 select 9, 'Realtime publishes every table',
   case when (select count(*) from pg_publication_tables p
      join expected_tables e on e.t=p.tablename
-    where p.pubname='supabase_realtime' and p.schemaname='public') = 9
+    where p.pubname='supabase_realtime' and p.schemaname='public') = 10
     then 'OK' else 'FAIL' end,
   (select count(*)::text from pg_publication_tables p
      join expected_tables e on e.t=p.tablename
-    where p.pubname='supabase_realtime' and p.schemaname='public') || ' of 9 published'
+    where p.pubname='supabase_realtime' and p.schemaname='public') || ' of 10 published'
 
 union all
 select 10, 'Deletes carry their old row',

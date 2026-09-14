@@ -173,7 +173,13 @@ export function individualStandings(contestants, key, cfg, dq = new Set()) {
         division: c.division ?? null,
         entered: Array.isArray(c.answers) && c.answers.length > 0,
         enteredBy: c.entered_by_name ?? '',
-        disqualified: dq.has(String(c.team)),
+        // A contestant is out either on their own account or with their
+        // team. Both rank the same, but only their own disqualification
+        // takes their paper out of the team's best three — a whole team
+        // being out must not erase the record of what it scored.
+        disqualified: dq.has(String(c.team)) || Boolean(c.disqualified),
+        selfDisqualified: Boolean(c.disqualified),
+        dqReason: c.disqualified ? (c.dq_reason ?? '') : '',
         ...result,
       };
     })
@@ -255,21 +261,30 @@ export function gutsMaxPoints(key, cfg) {
 }
 
 /**
- * Combined = a weighted blend of the two rounds, each taken as a share
- * of its own maximum. The rounds are on different scales (a full team
- * can bank 80 individual points against 70 from guts), so weighting raw
- * points would not give the weights you asked for.
+ * Combined = the individual total counted `INDIVIDUAL_MULTIPLIER` times,
+ * plus the guts score. Raw points, no normalising: three perfect papers
+ * are 60, tripled to 180, against 112 from a perfect guts round.
  */
 export const TEAM_COUNTING_MEMBERS = 3;
+export const DEFAULT_INDIVIDUAL_MULTIPLIER = 3;
+
+export function individualMultiplier(cfg) {
+  const n = Number(cfg?.INDIVIDUAL_MULTIPLIER);
+  return Number.isFinite(n) && n >= 0 ? n : DEFAULT_INDIVIDUAL_MULTIPLIER;
+}
+
+/** The most a team can score: its best three papers, tripled, plus guts. */
+export function combinedMaxPoints(key, cfg, division = 'A') {
+  return individualMaxPoints(key, cfg, division) * individualMultiplier(cfg)
+    + gutsMaxPoints(key, cfg);
+}
 
 export function combinedStandings(individuals, guts, key, cfg, teams = []) {
   const meta = new Map(teams.map((t) => [String(t.team), t]));
   const gutsByTeam = new Map(guts.map((g) => [g.team, g]));
 
   const gutsMax = gutsMaxPoints(key, cfg);
-  const wInd = Number(cfg.INDIVIDUAL_WEIGHT);
-  const wGuts = Number(cfg.GUTS_WEIGHT);
-  const wTotal = wInd + wGuts;
+  const mult = individualMultiplier(cfg);
 
   const rows = new Map();
   const ensure = (team) => {
@@ -304,8 +319,11 @@ export function combinedStandings(individuals, guts, key, cfg, teams = []) {
     .map((r) => {
       // A team's individual score is its best three of four members, so a
       // team of three is not handicapped and a fourth member can only
-      // help. Everyone is still listed; only the counted ones are summed.
-      const byScore = [...r.members].sort((a, b) => b.score - a.score);
+      // help. A disqualified contestant is not one of the three: their
+      // paper is out of the results, so it cannot carry their team.
+      // Everyone is still listed; only the counted ones are summed.
+      const eligible = r.members.filter((m) => !m.selfDisqualified);
+      const byScore = [...eligible].sort((a, b) => b.score - a.score);
       const counting = new Set(byScore.slice(0, TEAM_COUNTING_MEMBERS).map((m) => m.individualId));
       r.individual = byScore.slice(0, TEAM_COUNTING_MEMBERS)
         .reduce((sum, m) => sum + m.score, 0);
@@ -315,15 +333,13 @@ export function combinedStandings(individuals, guts, key, cfg, teams = []) {
       // Each division sits its own paper, so a team is measured against
       // the maximum of the paper it actually took.
       const indMax = individualMaxPoints(key, cfg, r.division);
-      const indPct = indMax ? (r.individual / indMax) * 100 : 0;
-      const gutsPct = gutsMax && r.guts != null ? (r.guts / gutsMax) * 100 : 0;
-      const total = wTotal ? (wInd * indPct + wGuts * gutsPct) / wTotal : 0;
+      const total = r.individual * mult + (r.guts ?? 0);
       return {
         ...r,
-        indPct,
-        gutsPct,
         indMax,
         gutsMax,
+        multiplier: mult,
+        max: indMax * mult + gutsMax,
         total,
         entered: r.members.length,
       };
@@ -427,7 +443,8 @@ export function summarise(values) {
  * right, out of how many attempted the paper at all.
  */
 export function problemStats(individuals, division, cfg) {
-  const cohort = individuals.filter((p) => p.division === division && p.answered > 0);
+  const cohort = individuals.filter(
+    (p) => p.division === division && p.answered > 0 && !p.disqualified);
   return Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => {
     let correct = 0;
     let answered = 0;
@@ -447,7 +464,8 @@ export function problemStats(individuals, division, cfg) {
 
 /** How many contestants scored 0, 1, 2 … out of the paper. */
 export function scoreDistribution(individuals, division, cfg, key = null) {
-  const cohort = individuals.filter((p) => p.division === division && p.answered > 0);
+  const cohort = individuals.filter(
+    (p) => p.division === division && p.answered > 0 && !p.disqualified);
   const top = key
     ? keyMaxPoints(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, division)
     : cfg.INDIVIDUAL_PROBLEMS;
@@ -461,10 +479,12 @@ export function scoreDistribution(individuals, division, cfg, key = null) {
 
 /** Everything above, for one division, in one object. */
 export function divisionStatistics(individuals, guts, division, cfg, key = null) {
-  const cohort = individuals.filter((p) => p.division === division && p.answered > 0);
+  const cohort = individuals.filter(
+    (p) => p.division === division && p.answered > 0 && !p.disqualified);
   const problems = problemStats(individuals, division, cfg);
   const ranked = [...problems].sort((a, b) => b.correct - a.correct);
-  const gutsCohort = guts.filter((g) => g.division === division && g.answered > 0);
+  const gutsCohort = guts.filter(
+    (g) => g.division === division && g.answered > 0 && !g.disqualified);
   return {
     division,
     contestants: summarise(cohort.map((p) => p.score)),
@@ -474,6 +494,11 @@ export function divisionStatistics(individuals, guts, division, cfg, key = null)
     fewestSolved: ranked[ranked.length - 1] ?? null,
     distribution: scoreDistribution(individuals, division, cfg, key),
   };
+}
+
+/** One contestant, in the two lines an award slide wants. */
+export function awardLine(person) {
+  return `${person.individualId}${person.name ? ` ${person.name}` : ''}\nScore: ${person.score}`;
 }
 
 /** One line per awarded contestant, ready to paste onto a slide. */
@@ -486,6 +511,71 @@ export function awardLines(individuals, division, count = 10) {
       individualId: p.individualId,
       name: p.name,
       score: p.score,
-      text: `${p.individualId}${p.name ? ` ${p.name}` : ''}\nScore: ${p.score}`,
+      text: awardLine(p),
     }));
+}
+
+// ---------------------------------------------------------------------
+// Rosters
+//
+// Two lists arrive before the contest: who is competing, and who is
+// allowed to score. Both are reference data, kept in the database so
+// they can be corrected on the morning without a redeploy.
+// ---------------------------------------------------------------------
+
+/** Compare names the way a person would: case, spacing and dots aside. */
+export function normaliseName(name) {
+  return String(name ?? '').toLowerCase().replace(/[.,'’-]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+export function parseNameList(text) {
+  return String(text ?? '')
+    .split(/[\n;,]+/)
+    .map((n) => n.trim())
+    .filter(Boolean);
+}
+
+/**
+ * Is this person on the list? An empty list allows everybody, so a
+ * contest that has not filled its staff roster in yet is never locked
+ * out of its own portal.
+ */
+export function nameAllowed(list, name) {
+  const names = Array.isArray(list) ? list : parseNameList(list);
+  if (!names.length) return true;
+  const wanted = normaliseName(name);
+  return Boolean(wanted) && names.some((n) => normaliseName(n) === wanted);
+}
+
+/**
+ * Participants pasted from a spreadsheet: one per line, ID first, then
+ * the name. Commas, tabs and runs of spaces all separate them, so a
+ * copy out of Sheets or a CSV both work without reformatting.
+ */
+export function parseRoster(text) {
+  const rows = [];
+  const seen = new Set();
+  const problems = [];
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line) continue;
+    const [, idPart, namePart = ''] = /^([^,\t]+?)(?:[,\t]|\s{2,})\s*(.*)$/.exec(line)
+      ?? [null, line.split(/\s+/)[0], line.split(/\s+/).slice(1).join(' ')];
+    const parsed = parseIndividualId(idPart);
+    if (!parsed.ok) { problems.push(line); continue; }
+    if (seen.has(parsed.id)) { problems.push(`${line} (duplicate)`); continue; }
+    seen.add(parsed.id);
+    rows.push({
+      individual_id: parsed.id,
+      name: namePart.trim(),
+      division: parsed.division,
+      team: parsed.team,
+    });
+  }
+  return { rows, problems };
+}
+
+/** individual_id -> name, for filling the name box as an ID is typed. */
+export function indexRoster(rows) {
+  return new Map((rows ?? []).map((r) => [String(r.individual_id), r.name ?? '']));
 }

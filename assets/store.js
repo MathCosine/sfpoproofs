@@ -8,7 +8,7 @@ import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js';
 
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 const TABLES = ['app_settings', 'contest_state', 'answer_key', 'teams',
-  'contestants', 'guts_answers', 'claims', 'graders'];
+  'contestants', 'guts_answers', 'claims', 'graders', 'roster'];
 
 const divisionOfTeamKey = (team) => {
   const d = String(team ?? '').charAt(0).toUpperCase();
@@ -18,6 +18,7 @@ const divisionOfTeamKey = (team) => {
 const EMPTY = () => ({
   settings: null, state: null, key: [], teams: [],
   contestants: [], gutsAnswers: [], claims: [], graders: [], gutsPublic: [],
+  roster: [],
 });
 
 // Which cache field each table feeds, and how to tell two rows apart.
@@ -30,6 +31,7 @@ const SHAPE = {
   guts_answers: { field: 'gutsAnswers', id: (r) => `${r.team}|${r.problem}` },
   claims: { field: 'claims', id: (r) => `${r.scope}|${r.ref}` },
   graders: { field: 'graders', id: (r) => r.grader_id },
+  roster: { field: 'roster', id: (r) => r.individual_id },
 };
 
 /**
@@ -146,7 +148,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
     async load() {
       const c = await getClient();
       const all = (table) => fetchAllPages(() => c.from(table).select('*'));
-      const [settings, state, key, teams, contestants, gutsAnswers, claims, graders] =
+      const [settings, state, key, teams, contestants, gutsAnswers, claims, graders, roster] =
         await Promise.all([
           c.from('app_settings').select('*').eq('id', 1).maybeSingle(),
           c.from('contest_state').select('*').eq('id', 1).maybeSingle(),
@@ -156,6 +158,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
           all('guts_answers'),
           all('claims'),
           all('graders'),
+          all('roster'),
         ]);
       const bad = [settings, state].find((r) => r.error);
       if (bad) throw new Error(bad.error.message);
@@ -168,6 +171,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
         gutsAnswers,
         claims,
         graders,
+        roster,
       };
       return cache;
     },
@@ -254,6 +258,31 @@ export function supabaseBackend(cfg, injectedClient = null) {
     async setTeam(team, patch) {
       const c = await getClient();
       const { error } = await c.from('teams').upsert({ team, ...patch }, { onConflict: 'team' });
+      if (error) throw new Error(error.message);
+    },
+
+    /** Change a few fields on one contestant without touching their answers. */
+    async setContestant(individualId, patch) {
+      const c = await getClient();
+      const { error } = await c.from('contestants')
+        .update(patch).eq('individual_id', individualId);
+      if (error) throw new Error(error.message);
+    },
+
+    async saveRoster(rows) {
+      const c = await getClient();
+      // A full roster is a few hundred rows; send it in blocks so one
+      // oversized request cannot be rejected outright.
+      for (let i = 0; i < rows.length; i += 200) {
+        const { error } = await c.from('roster')
+          .upsert(rows.slice(i, i + 200), { onConflict: 'individual_id' });
+        if (error) throw new Error(error.message);
+      }
+    },
+
+    async clearRoster() {
+      const c = await getClient();
+      const { error } = await c.from('roster').delete().neq('individual_id', '');
       if (error) throw new Error(error.message);
     },
 
@@ -507,6 +536,26 @@ function demoBackend(cfg) {
     },
 
     async setTeam(team, patch) { await mutate((db) => upsertTeam(db, team, patch)); },
+
+    async setContestant(individualId, patch) {
+      await mutate((db) => {
+        const i = db.contestants.findIndex((c) => c.individual_id === individualId);
+        if (i >= 0) db.contestants[i] = { ...db.contestants[i], ...patch };
+      });
+    },
+
+    async saveRoster(rows) {
+      await mutate((db) => {
+        db.roster = db.roster ?? [];
+        for (const row of rows) {
+          const i = db.roster.findIndex((r) => r.individual_id === row.individual_id);
+          if (i >= 0) db.roster[i] = { ...db.roster[i], ...row };
+          else db.roster.push({ ...row });
+        }
+      });
+    },
+
+    async clearRoster() { await mutate((db) => { db.roster = []; }); },
     async saveState(patch) { await mutate((db) => { db.state = { ...db.state, ...patch }; }); },
     async setFrozen(frozen) { await mutate((db) => { db.state = { ...db.state, guts_frozen: frozen }; }); },
     async saveSettings(patch) { await mutate((db) => { db.settings = { ...(db.settings ?? {}), ...patch }; }); },

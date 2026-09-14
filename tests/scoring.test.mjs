@@ -8,9 +8,10 @@ import {
   individualKey, GUTS_DIVISION, teamKey, divisionOfTeam, teamNumberOf, isMemberNumber,
   summarise, problemStats, scoreDistribution, divisionStatistics, awardLines,
   TEAM_COUNTING_MEMBERS,
-  scoreGutsTeam, gutsStandings, combinedStandings, splitByDivision, dqTeams,
+  scoreGutsTeam, gutsStandings, combinedStandings, combinedMaxPoints, splitByDivision, dqTeams,
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
+  awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
 import { parseCsv, toCsv } from '../assets/csv.js';
@@ -20,8 +21,7 @@ const cfg = {
   INDIVIDUAL_POINTS: 1,
   GUTS_SETS: 7,
   GUTS_PER_SET: 4,
-  INDIVIDUAL_WEIGHT: 80,
-  GUTS_WEIGHT: 20,
+  INDIVIDUAL_MULTIPLIER: 3,
   MEMBERS: ['1', '2', '3', '4'],
   DIVISIONS: ['A', 'B'],
   CLAIM_TTL_MS: 120000,
@@ -201,11 +201,12 @@ test('guts standings rank on points and keep the team name', () => {
 });
 
 // ---------------------------------------------------------------------
-test('combined blends the two rounds by share of maximum', () => {
+test('combined is the individual total tripled, plus guts', () => {
   const key = fullKey();
   assert.equal(individualMaxPoints(key, cfg, 'A'), 20 * TEAM_COUNTING_MEMBERS,
     'the best three members of twenty points each');
   assert.equal(gutsMaxPoints(key, cfg), 4 * (1 + 2 + 3 + 4 + 5 + 6 + 7));
+  assert.equal(combinedMaxPoints(key, cfg, 'A'), 60 * 3 + 112);
 
   const individuals = [
     { individualId: '1A', team: 'A01', member: 'A', division: 'A', score: 20, disqualified: false },
@@ -216,23 +217,29 @@ test('combined blends the two rounds by share of maximum', () => {
   const guts = [{ team: 'A01', name: 'Cowbell', division: 'A', score: gutsMaxPoints(key, cfg), disqualified: false }];
   const [row] = combinedStandings(individuals, guts, key, cfg,
     [{ team: 'A01', division: 'A', name: 'Cowbell' }]);
-  assert.equal(row.indPct, 100);
-  assert.equal(row.gutsPct, 100);
-  assert.equal(row.total, 100);
+  assert.equal(row.individual, 60, 'best three of four perfect papers');
+  assert.equal(row.total, 60 * 3 + 112);
+  assert.equal(row.max, 292);
+  assert.equal(row.multiplier, 3);
 });
 
-test('80/20 is a true 80/20 across the two rounds', () => {
+test('each round contributes its raw points, nothing scaled', () => {
   const key = fullKey();
   const perfectIndividual = ['1', '2', '3', '4'].map((m) => ({
     individualId: `1${m}`, team: 'A01', member: m, division: 'A', score: 20, disqualified: false,
   }));
   const noGuts = combinedStandings(perfectIndividual, [{ team: 'A01', division: 'A', score: 0 }],
     key, cfg, [{ team: 'A01', division: 'A' }]);
-  assert.equal(noGuts[0].total, 80, 'a perfect individual round alone is worth the weight');
+  assert.equal(noGuts[0].total, 180, 'three perfect papers, tripled');
 
   const onlyGuts = combinedStandings([], [{ team: 'A01', division: 'A', score: gutsMaxPoints(key, cfg) }],
     key, cfg, [{ team: 'A01', division: 'A' }]);
-  assert.equal(onlyGuts[0].total, 20);
+  assert.equal(onlyGuts[0].total, 112, 'guts counts once, at face value');
+
+  // The multiplier is a setting, not a constant in the code.
+  const doubled = combinedStandings(perfectIndividual, [], key,
+    { ...cfg, INDIVIDUAL_MULTIPLIER: 2 }, [{ team: 'A01', division: 'A' }]);
+  assert.equal(doubled[0].total, 120);
 });
 
 test('a disqualified team keeps its points but sorts last', () => {
@@ -245,6 +252,7 @@ test('a disqualified team keeps its points but sorts last', () => {
     [{ team: 'A01', division: 'A', disqualified: true }, { team: 'A02', division: 'A' }]);
   assert.deepEqual(rows.map((r) => r.team), ['A02', 'A01']);
   assert.equal(rows.find((r) => r.team === 'A01').individual, 20, 'nothing was erased');
+  assert.equal(rows.find((r) => r.team === 'A01').total, 60);
 });
 
 test('individual standings inherit their team disqualification', () => {
@@ -566,8 +574,9 @@ test('a team is measured against the maximum of the paper it sat', () => {
     individualId: `1${m}`, team: 'A01', member: m, division: 'B', score: 10, disqualified: false,
   }));
   const [row] = combinedStandings(perfectB, [], key, cfg, [{ team: 'A01', division: 'B' }]);
-  assert.equal(row.indPct, 100, 'a perfect B team is 100% of the B paper, not half of the A one');
-  assert.equal(row.total, 80, 'and so banks the full individual weight');
+  assert.equal(row.individual, 30, 'three counted members of the ten-problem B paper');
+  assert.equal(row.indMax, 30, 'measured against the paper it sat, not the A one');
+  assert.equal(row.total, 90);
 });
 
 test('CSV export neutralises spreadsheet formulas', () => {
@@ -680,7 +689,8 @@ test('a team of three is not handicapped', () => {
   const b = combinedStandings(four, [], key, cfg, [{ team: 'A01', division: 'A' }])[0];
   assert.equal(a.individual, 60);
   assert.equal(a.total, b.total, 'a fourth member who scores nothing changes nothing');
-  assert.equal(a.indPct, 100, 'three perfect members is a perfect team score');
+  assert.equal(a.indMax, 60, 'three perfect members is a perfect team score');
+  assert.equal(a.total, 180, 'sixty points, tripled');
 });
 
 test('a fourth member can only help', () => {
@@ -843,6 +853,7 @@ test('a short team is not handicapped by the best-three rule', () => {
   // The ceiling is three perfect papers either way, so a short team is
   // measured against the same bar and is not quietly punished.
   assert.equal(total(2).indMax, total(4).indMax);
+  assert.equal(total(3).total, 27, 'nine points, tripled');
 });
 
 test('the weakest of four is the one dropped, and it is marked', () => {
@@ -910,4 +921,107 @@ test('the portal refuses Supabase credentials from the URL', async () => {
   assert.equal(board.FROM_ADDRESS_BAR, true);
 
   assert.equal(resolvedConfig('', { allowUrlParams: true }).FROM_ADDRESS_BAR, false);
+});
+
+// ---------------------------------------------------------------------
+// Disqualifying one contestant
+// ---------------------------------------------------------------------
+
+test('a disqualified contestant stops counting towards their team', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const rows = [
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A013', team: 'A01', member: '3', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A014', team: 'A01', member: '4', division: 'A', answers: [1, 2, 9] },
+  ];
+  const clean = combinedStandings(
+    individualStandings(rows, key, small), [], key, small, [{ team: 'A01', division: 'A' }])[0];
+  assert.equal(clean.individual, 9, 'best three of four perfect-ish papers');
+
+  // Take one of the three out. The fourth paper moves up into its place.
+  const out = rows.map((r) => (r.individual_id === 'A011'
+    ? { ...r, disqualified: true, dq_reason: 'Phone on the desk' } : r));
+  const after = combinedStandings(
+    individualStandings(out, key, small), [], key, small, [{ team: 'A01', division: 'A' }])[0];
+  assert.equal(after.individual, 3 + 3 + 2, 'the fourth member is counted instead');
+  assert.equal(after.total, 8 * 3);
+  assert.equal(after.members.find((m) => m.individualId === 'A011').counted, false);
+  assert.equal(after.members.find((m) => m.individualId === 'A014').counted, true);
+});
+
+test('a disqualified contestant drops out of the rankings and the awards', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3],
+      disqualified: true, dq_reason: 'Phone on the desk' },
+    { individual_id: 'A021', team: 'A02', member: '1', division: 'A', answers: [1, 2, 9] },
+  ], key, small);
+  assert.deepEqual(people.map((p) => p.individualId), ['A021', 'A011'], 'sorted last');
+  assert.equal(people[1].dqReason, 'Phone on the desk');
+  assert.deepEqual(awardLines(people, 'A', 10).map((l) => l.individualId), ['A021']);
+  assert.equal(divisionStatistics(people, [], 'A', small, key).contestants.n, 1,
+    'and out of the statistics');
+});
+
+test('disqualifying the whole team does not erase what it scored', () => {
+  const key = fullKey();
+  const small = { ...cfg, INDIVIDUAL_PROBLEMS: 3 };
+  const people = individualStandings(
+    [{ individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] }],
+    key, small, new Set(['A01']));
+  assert.equal(people[0].disqualified, true);
+  assert.equal(people[0].selfDisqualified, false, 'out with the team, not on their own account');
+  const row = combinedStandings(people, [], key, small,
+    [{ team: 'A01', division: 'A', disqualified: true }])[0];
+  assert.equal(row.individual, 3, 'the record still shows what they scored');
+});
+
+// ---------------------------------------------------------------------
+// The two rosters
+// ---------------------------------------------------------------------
+
+test('a participant list is read from whatever the spreadsheet gave you', () => {
+  const { rows, problems } = parseRoster([
+    'A011, Ada Lovelace',
+    'A012\tGrace Hopper',
+    'B021   Katherine Johnson',
+    '  b1004 ,  Mary Jackson  ',
+    '',
+    'not an id at all',
+    'A011, someone else',
+  ].join('\n'));
+  // b1004 is Division B, team 100, member 4 — three-digit teams still read.
+  assert.deepEqual(rows.map((r) => r.individual_id), ['A011', 'A012', 'B021', 'B1004']);
+  assert.deepEqual(rows.map((r) => r.name),
+    ['Ada Lovelace', 'Grace Hopper', 'Katherine Johnson', 'Mary Jackson']);
+  assert.equal(rows[0].team, 'A01');
+  assert.equal(rows[3].division, 'B');
+  assert.equal(rows[3].team, 'B100');
+  assert.equal(problems.length, 2, 'the junk line and the duplicate are reported, not silent');
+});
+
+test('a roster entry with no name is allowed', () => {
+  const { rows } = parseRoster('A011\nA012, ');
+  assert.deepEqual(rows.map((r) => r.name), ['', '']);
+  assert.equal(indexRoster(rows).get('A011'), '');
+});
+
+test('sign-in names are matched the way a person writes them', () => {
+  const admins = 'Thomas Ni\nRyan Wang\nLusen Yao';
+  assert.equal(nameAllowed(admins, 'Thomas Ni'), true);
+  assert.equal(nameAllowed(admins, '  thomas   ni '), true, 'case and spacing forgiven');
+  assert.equal(nameAllowed(admins, "Lusen O'Yao"), false);
+  assert.equal(nameAllowed(admins, 'Xu Shao'), false);
+  assert.equal(nameAllowed(admins, ''), false, 'a blank name is never on a list');
+  assert.deepEqual(parseNameList('Xu Shao, CCMathClub\nAnother One'),
+    ['Xu Shao', 'CCMathClub', 'Another One']);
+});
+
+test('an empty list lets anybody in, so a half-set-up contest is not locked out', () => {
+  assert.equal(nameAllowed('', 'Anyone At All'), true);
+  assert.equal(nameAllowed('   \n  ', 'Anyone At All'), true);
+  assert.equal(nameAllowed([], 'Anyone At All'), true);
 });

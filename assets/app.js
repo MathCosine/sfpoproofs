@@ -9,7 +9,8 @@ import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
   indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
-  TEAM_COUNTING_MEMBERS,
+  TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
+  awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
@@ -71,8 +72,7 @@ function toast(message, kind = 'ok') {
 function recompute() {
   const s = data.settings ?? {};
   if (s.team_count) cfg.TEAM_COUNT = Number(s.team_count);
-  if (s.individual_weight != null) cfg.INDIVIDUAL_WEIGHT = Number(s.individual_weight);
-  if (s.guts_weight != null) cfg.GUTS_WEIGHT = Number(s.guts_weight);
+  if (s.individual_multiplier != null) cfg.INDIVIDUAL_MULTIPLIER = Number(s.individual_multiplier);
 
   const key = indexKey(data.key);
   const dq = dqTeams(data.teams);
@@ -89,6 +89,7 @@ function recompute() {
       (d) => [d, keyGaps(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, d)])),
     keyGapsGuts: keyGaps(key, 'guts', GUTS_N, GUTS_DIVISION),
     teamsByNo: new Map(data.teams.map((t) => [String(t.team), t])),
+    rosterNames: indexRoster(data.roster),
     queue: buildQueue(claims, dq, gutsByTeam),
   };
 }
@@ -296,7 +297,10 @@ function loadExistingSheet({ keepUnsaved = false } = {}) {
   const existing = data.contestants.find((c) => c.individual_id === current.id);
   if (!existing && keepUnsaved) return;
   fillGrid(sheetInputs, existing?.answers ?? []);
-  $('#contestantName').value = existing?.name ?? '';
+  // A saved sheet keeps whatever name it was saved with. A new one takes
+  // the name from the participant list, and stays blank for anyone who
+  // is not on it.
+  $('#contestantName').value = existing?.name ?? derived.rosterNames.get(current.id) ?? '';
 }
 
 function refreshIndividualContext() {
@@ -787,15 +791,20 @@ function paintProgress(teams) {
       const person = derived.byId.get(id);
       const claimed = derived.claims.get(`individual|${id}`);
       let cls = 'person';
-      if (person && person.answered === cfg.INDIVIDUAL_PROBLEMS) cls += ' person--done';
+      if (person?.disqualified) cls += ' person--out';
+      else if (person && person.answered === cfg.INDIVIDUAL_PROBLEMS) cls += ' person--done';
       else if (person && person.answered > 0) cls += ' person--partial';
       else if (claimed) cls += ' person--claimed';
       if (chip.className !== cls) chip.className = cls;
       const score = person ? String(person.score) : '';
       if (chip.lastChild.textContent !== score) chip.lastChild.textContent = score;
+      const rosterName = derived.rosterNames.get(id) ?? '';
       chip.title = person
-        ? `${person.name || id} — ${person.answered}/${cfg.INDIVIDUAL_PROBLEMS} answered, ${person.score} pts`
-        : (claimed ? `${claimed.grader_name} is entering this` : 'not entered');
+        ? `${person.name || rosterName || id} — ${person.answered}/${cfg.INDIVIDUAL_PROBLEMS} `
+          + `answered, ${person.score} pts`
+          + (person.disqualified ? ` · disqualified: ${person.dqReason || 'no reason recorded'}` : '')
+        : (claimed ? `${claimed.grader_name} is entering this`
+          : `${rosterName ? `${rosterName} — ` : ''}not entered`);
     }
   }
 }
@@ -874,26 +883,43 @@ function pager(division, total) {
   return { bar, page, size };
 }
 
+/**
+ * Copy one contestant's award line. The all-ten button below gives you
+ * the whole list; this is for reading names out one at a time.
+ */
+function rowCopyButton(person) {
+  const btn = el('button', 'rowcopy', 'Copy');
+  btn.type = 'button';
+  btn.title = `Copy ${person.individualId}'s ID, name and score`;
+  btn.addEventListener('click', () => {
+    copyText(awardLine(person), `Copied ${person.individualId}.`);
+  });
+  return btn;
+}
+
+/** Put text on the clipboard, with the old-browser fallback. */
+async function copyText(text, done) {
+  try {
+    await navigator.clipboard.writeText(text);
+    toast(done);
+  } catch {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast(done); } catch { toast('Could not copy.', 'error'); }
+    ta.remove();
+  }
+}
+
 /** One award line per contestant, copied straight onto a slide. */
 function copyButton(rows) {
   const btn = el('button', 'btn btn--ghost', 'Copy for slides');
   btn.type = 'button';
-  btn.addEventListener('click', async () => {
-    const text = rows.map((r) => r.text).join('\n\n');
+  btn.addEventListener('click', () => {
     // Confirm with a toast, not by relabelling the button: a background
     // render rebuilds this button and would wipe the confirmation.
-    const done = () => toast(`Copied ${rows.length} for slides.`);
-    try {
-      await navigator.clipboard.writeText(text);
-      done();
-    } catch {
-      const ta = document.createElement('textarea');
-      ta.value = text;
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand('copy'); done(); } catch { toast('Could not copy.', 'error'); }
-      ta.remove();
-    }
+    copyText(rows.map((r) => r.text).join('\n\n'), `Copied ${rows.length} for slides.`);
   });
   return btn;
 }
@@ -905,11 +931,12 @@ function renderBoards() {
   const note = el('p', 'field__hint');
   note.style.marginBottom = '14px';
   if (activeBoard === 'combined') {
-    note.textContent = `Combined = ${cfg.INDIVIDUAL_WEIGHT}% individual + ${cfg.GUTS_WEIGHT}% guts, `
-      + 'each as a share of its own maximum, out of 100. The divisions sit different '
-      + `individual papers, so each team is measured against its own: a full team can bank `
-      + cfg.DIVISIONS.map((d) => `${individualMaxPoints(derived.key, cfg, d)} in ${d}`).join(' and ')
-      + `, plus ${gutsMaxPoints(derived.key, cfg)} from guts.`;
+    const mult = individualMultiplier(cfg);
+    note.textContent = `Combined = the team's individual total × ${mult}, plus its guts score. `
+      + 'The individual total is the best three of four members. A perfect team scores '
+      + cfg.DIVISIONS.map((d) => `${combinedMaxPoints(derived.key, cfg, d)} in ${d}`).join(' and ')
+      + ` — ${individualMaxPoints(derived.key, cfg, 'A') * mult} from the individual round `
+      + `and ${gutsMaxPoints(derived.key, cfg)} from guts.`;
   } else if (activeBoard === 'individual') {
     note.textContent = `One row per contestant, out of ${cfg.INDIVIDUAL_PROBLEMS}.`;
   } else {
@@ -961,9 +988,9 @@ function renderBoards() {
 
     if (activeBoard === 'combined') {
       const cell = (r) => {
-        const n = el('span', 'mono', r.total.toFixed(2));
-        n.title = `individual ${r.individual}/${r.indMax} = ${r.indPct.toFixed(1)}% × ${cfg.INDIVIDUAL_WEIGHT}\n`
-          + `guts ${r.guts ?? 0}/${r.gutsMax} = ${r.gutsPct.toFixed(1)}% × ${cfg.GUTS_WEIGHT}`;
+        const n = el('span', 'mono', String(r.total));
+        n.title = `${r.individual} × ${r.multiplier} = ${r.individual * r.multiplier}\n`
+          + `+ ${r.guts ?? 0} from guts\n= ${r.total} out of ${r.max}`;
         return n;
       };
       const row = (r, i) => [
@@ -991,9 +1018,10 @@ function renderBoards() {
         { text: String(r.correct), cls: 'num' },
         { text: String(r.score), cls: 'num' },
         { text: `${r.answered}/${cfg.INDIVIDUAL_PROBLEMS}`, cls: 'muted' },
+        { node: rowCopyButton(r) },
       ];
       const header = ['#', 'ID', 'Name', { label: 'Correct', num: true },
-        { label: 'Points', num: true }, 'Answered'];
+        { label: 'Points', num: true }, 'Answered', ''];
       if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
       if (bar) host.appendChild(bar);
       if (page === 0 && shown.length) {
@@ -1278,30 +1306,76 @@ async function clockAction(action) {
 // ---------------------------------------------------------------------
 
 function renderWeightPreview() {
-  const ind = Number($('#individualWeight').value) || 0;
-  const guts = Number($('#gutsWeight').value) || 0;
-  const sum = ind + guts;
+  const mult = Number($('#individualMultiplier').value);
   const host = $('#weightPreview');
   host.replaceChildren();
   const d = el('div');
-  if (!sum) {
+  if (!Number.isFinite(mult) || mult < 0) {
     host.className = 'banner banner--error';
-    d.append(el('b', null, 'Both weights are zero'), el('span', null, 'Nothing would be scored.'));
+    d.append(el('b', null, 'That multiplier is not a number'),
+      el('span', null, 'Use zero or more — three is the contest default.'));
   } else {
+    const ind = individualMaxPoints(derived.key, cfg, 'A') * mult;
+    const guts = gutsMaxPoints(derived.key, cfg);
     host.className = 'banner banner--info';
-    const pct = Math.round((ind / sum) * 100);
-    d.append(el('b', null, `A perfect team scores ${pct} from the individual round and ${100 - pct} from guts.`),
-      el('span', null, 'Each round is measured against its own maximum first, so these are the real shares.'));
+    d.append(el('b', null, `A perfect team scores ${ind + guts}: ${ind} from the individual `
+      + `round and ${guts} from guts.`),
+      el('span', null, 'The individual total is the best three of four members, counted '
+        + `${mult} time${mult === 1 ? '' : 's'}. Raw points — nothing is scaled.`));
   }
   host.appendChild(d);
+}
+
+/** Say how many names each list holds, and that empty means everybody. */
+function renderStaffCounts() {
+  for (const [which, label] of [['admin', 'admin'], ['grader', 'staff']]) {
+    const names = parseNameList($(`#${which}Names`).value);
+    $(`#${which}NamesCount`).textContent = names.length
+      ? `${names.length} name${names.length === 1 ? '' : 's'} — only these may sign in.`
+      : `Empty: anyone with the ${label} password.`;
+  }
 }
 
 function renderDqList() {
   const host = $('#dqList');
   host.replaceChildren();
+
+  $('#rosterState').textContent = data.roster.length
+    ? `${data.roster.length} participants loaded.`
+    : 'No participants loaded.';
+
+  const people = data.contestants.filter((c) => c.disqualified)
+    .sort((a, b) => a.individual_id.localeCompare(b.individual_id, undefined, { numeric: true }));
   const out = data.teams.filter((t) => t.disqualified)
     .sort((a, b) => String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
-  if (!out.length) { host.appendChild(el('p', 'field__hint', 'No teams are disqualified.')); return; }
+  if (!out.length && !people.length) {
+    host.appendChild(el('p', 'field__hint', 'Nobody is disqualified.'));
+    return;
+  }
+
+  for (const person of people) {
+    const row = el('div', 'dq-row');
+    const info = el('div');
+    info.append(el('b', null, `${person.individual_id}${person.name ? ` · ${person.name}` : ''}`),
+      el('span', 'muted', `contestant only — ${person.dq_reason || 'no reason recorded'}`));
+    const undo = el('button', 'btn btn--ghost', 'Reinstate');
+    undo.type = 'button';
+    undo.addEventListener('click', async () => {
+      undo.disabled = true;
+      try {
+        await store.setContestant(person.individual_id,
+          { disqualified: false, dq_reason: '', dq_by: '', dq_at: null });
+        await refresh();
+        toast(`${person.individual_id} is back in the results.`);
+      } catch (err) {
+        undo.disabled = false;
+        toast(err.message || 'Could not reinstate that contestant.', 'error');
+      }
+    });
+    row.append(info, undo);
+    host.appendChild(row);
+  }
+
   for (const team of out) {
     const row = el('div', 'dq-row');
     const info = el('div');
@@ -1418,15 +1492,15 @@ function exportCombinedCsv() {
     for (const r of splitByDivision(derived.combined)[division]) {
       const i = r.disqualified ? null : rank++;
       rows.push([i == null ? 'DQ' : i + 1, division, r.team, r.name,
-        r.individual, r.indMax, r.indPct.toFixed(2),
-        r.guts ?? '', r.gutsMax, r.gutsPct.toFixed(2),
-        r.total.toFixed(4), r.disqualified ? 'yes' : 'no',
+        r.individual, r.indMax, r.multiplier,
+        r.guts ?? '', r.gutsMax,
+        r.total, r.max, r.disqualified ? 'yes' : 'no',
         r.members.map((m) => `${m.individualId}:${m.score}`).join(' ')]);
     }
   }
   downloadCsv('cowconuts-2026-combined.csv', toCsv(
     ['rank_in_division', 'division', 'team', 'team_name', 'individual_total', 'individual_max',
-      'individual_pct', 'guts_total', 'guts_max', 'guts_pct', 'combined', 'disqualified',
+      'multiplier', 'guts_total', 'guts_max', 'combined', 'combined_max', 'disqualified',
       'member_breakdown'],
     rows));
 }
@@ -1457,6 +1531,7 @@ function render() {
   if (activeTab === 'key') fillKeyEditor();
   renderClock();
   renderWeightPreview();
+  renderStaffCounts();
   renderDqList();
   applyRole();
 
@@ -1476,8 +1551,9 @@ function render() {
   // a background render, however long you leave it sitting there.
   for (const [id, value] of [
     ['#teamCount', cfg.TEAM_COUNT],
-    ['#individualWeight', cfg.INDIVIDUAL_WEIGHT],
-    ['#gutsWeight', cfg.GUTS_WEIGHT],
+    ['#individualMultiplier', individualMultiplier(cfg)],
+    ['#adminNames', data.settings?.admin_names ?? ''],
+    ['#graderNames', data.settings?.grader_names ?? ''],
     ['#durationMinutes', Math.round((data.state?.guts_duration ?? cfg.GUTS_DURATION) / 60)],
     ['#freezeMinutes', data.state?.freeze_minutes ?? cfg.FREEZE_MINUTES],
   ]) {
@@ -1686,27 +1762,92 @@ function wire() {
   });
   $('#publicLink').href = forceDemo ? 'guts.html?demo=1' : 'guts.html';
 
-  for (const id of ['#teamCount', '#individualWeight', '#gutsWeight',
+  for (const id of ['#teamCount', '#individualMultiplier', '#adminNames', '#graderNames',
     '#durationMinutes', '#freezeMinutes']) {
     $(id).addEventListener('input', () => { $(id).dataset.dirty = '1'; });
   }
-  for (const id of ['#individualWeight', '#gutsWeight']) {
-    $(id).addEventListener('input', renderWeightPreview);
+  $('#individualMultiplier').addEventListener('input', renderWeightPreview);
+  for (const which of ['admin', 'grader']) {
+    $(`#${which}Names`).addEventListener('input', renderStaffCounts);
   }
   $('#saveSettings').addEventListener('click', async () => {
-    const ind = Number($('#individualWeight').value);
-    const guts = Number($('#gutsWeight').value);
-    if (ind + guts <= 0) { toast('One of the weights has to be above zero.', 'error'); return; }
+    const mult = Number($('#individualMultiplier').value);
+    if (!Number.isFinite(mult) || mult < 0) {
+      toast('The multiplier has to be zero or more.', 'error');
+      return;
+    }
     await store.saveSettings({
       team_count: Number($('#teamCount').value) || cfg.TEAM_COUNT,
-      individual_weight: ind,
-      guts_weight: guts,
+      individual_multiplier: mult,
     });
-    for (const id of ['#teamCount', '#individualWeight', '#gutsWeight']) {
-      delete $(id).dataset.dirty;
-    }
+    for (const id of ['#teamCount', '#individualMultiplier']) delete $(id).dataset.dirty;
     await refresh();
     toast('Settings saved for everyone.');
+  });
+
+  $('#saveStaff').addEventListener('click', async () => {
+    const admins = $('#adminNames').value;
+    const graders = $('#graderNames').value;
+    await store.saveSettings({ admin_names: admins, grader_names: graders });
+    for (const id of ['#adminNames', '#graderNames']) delete $(id).dataset.dirty;
+    await refresh();
+    const counted = (t) => parseNameList(t).length;
+    toast(`Sign-in lists saved — ${counted(admins)} admins, ${counted(graders)} scorers.`);
+  });
+
+  $('#rosterImport').addEventListener('click', async () => {
+    const { rows, problems } = parseRoster($('#rosterPaste').value);
+    if (!rows.length) {
+      toast('Nothing recognised. Each line needs an ID like A011, then a name.', 'error');
+      return;
+    }
+    const button = $('#rosterImport');
+    button.disabled = true;
+    try {
+      await store.saveRoster(rows);
+      $('#rosterPaste').value = '';
+      await refresh();
+      toast(problems.length
+        ? `Imported ${rows.length}. ${problems.length} line(s) skipped: ${problems[0]}`
+        : `Imported ${rows.length} participants.`, problems.length ? 'info' : 'ok');
+    } catch (err) {
+      toast(err.message || 'Could not import that list.', 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+
+  $('#rosterClear').addEventListener('click', async () => {
+    const button = $('#rosterClear');
+    if (button.dataset.armed !== '1') {
+      button.dataset.armed = '1';
+      button.textContent = 'Click again to clear';
+      setTimeout(() => { button.dataset.armed = ''; button.textContent = 'Clear the list'; }, 4000);
+      return;
+    }
+    button.dataset.armed = '';
+    button.textContent = 'Clear the list';
+    await store.clearRoster();
+    await refresh();
+    toast('Participant list cleared. Saved sheets keep the names already on them.', 'info');
+  });
+
+  $('#dqPersonAdd').addEventListener('click', async () => {
+    const parsed = parseIndividualId($('#dqPerson').value);
+    const reason = $('#dqPersonReason').value.trim();
+    if (!parsed.ok) { toast('Enter a contestant ID like A011.', 'error'); return; }
+    if (!reason) { toast('Record a reason — it goes on the exports.', 'error'); return; }
+    if (!data.contestants.some((c) => c.individual_id === parsed.id)) {
+      toast(`${parsed.id} has no sheet entered yet, so there is nothing to disqualify.`, 'error');
+      return;
+    }
+    await store.setContestant(parsed.id, {
+      disqualified: true, dq_reason: reason, dq_by: grader.name, dq_at: new Date().toISOString(),
+    });
+    $('#dqPerson').value = '';
+    $('#dqPersonReason').value = '';
+    await refresh();
+    toast(`${parsed.id} disqualified. Their paper is kept and their team is unaffected.`, 'info');
   });
 
   $('#dqAdd').addEventListener('click', async () => {
@@ -1899,6 +2040,31 @@ function checkVersion() {
   return false;
 }
 
+/**
+ * Is this name allowed under this role? Returns the message to show, or
+ * null to let them in.
+ *
+ * This is a roster check, not a lock: whoever holds the password could
+ * type a listed name. It stops the wrong person wandering in and keeps
+ * the name on every sheet one of the names you expect.
+ */
+async function nameRejected(name, admin) {
+  let settings = null;
+  try {
+    settings = (await store.load()).settings;
+  } catch {
+    return null;            // can't read the lists — never lock anyone out
+  }
+  const list = admin ? settings?.admin_names : settings?.grader_names;
+  if (nameAllowed(list, name)) return null;
+  // An admin may also sit down and score, so an admin name passes either door.
+  if (!admin && nameAllowed(settings?.admin_names, name)
+      && parseNameList(settings?.admin_names).length) return null;
+  return admin
+    ? `“${name}” is not on the admin list. Check the spelling, or ask a director to add you.`
+    : `“${name}” is not on the scorer list. Check the spelling, or ask a director to add you.`;
+}
+
 async function boot() {
   checkVersion();
   $('#gateTitle').textContent = cfg.CONTEST_NAME.replace(/ Annual Math Contest$/, '');
@@ -1944,6 +2110,16 @@ async function boot() {
         const result = await store.signIn(adminPassword || passwordInput.value,
           { admin: Boolean(adminPassword) });
         isAdmin = Boolean(result?.admin);
+        // The password says which door you came through; the roster says
+        // whether you are expected. Checked after signing in because the
+        // lists live in the database, which nobody may read until then.
+        const rejected = await nameRejected(name, isAdmin);
+        if (rejected) {
+          await store.signOut().catch(() => {});
+          $('#gateError').textContent = rejected;
+          $('#gateError').classList.add('field__hint--error');
+          return;
+        }
         localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
       } catch (err) {
         $('#gateError').textContent = /Invalid/.test(err.message ?? '')
@@ -1957,6 +2133,12 @@ async function boot() {
       // blank signs you in as a scorer, which is how you preview what the
       // scoring team actually sees.
       isAdmin = Boolean(adminPassword);
+      const rejected = await nameRejected(name, isAdmin);
+      if (rejected) {
+        $('#gateError').textContent = rejected;
+        $('#gateError').classList.add('field__hint--error');
+        return;
+      }
       localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
     }
     await enterApp();
