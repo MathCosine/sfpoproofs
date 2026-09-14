@@ -78,6 +78,16 @@ watch(page, 'tab1');
 
 await page.goto(BASE, { waitUntil: 'networkidle' });
 
+// Seeding writes hundreds of rows one mutation at a time. Wait for the
+// rows rather than for a duration that only holds on a fast machine.
+const seedDemoData = async (p) => {
+  await p.click('#seedDemo');
+  await p.waitForFunction(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+    return (db.teams || []).length >= 12 && (db.contestants || []).length >= 40;
+  }, null, { timeout: 60000 }).catch(() => {});
+};
+
 // ---- gate ---------------------------------------------------------
 check('gate is shown', await page.isVisible('#gate'));
 check('?demo=1 forces the demo store', await page.isVisible('#gateDemo'));
@@ -424,8 +434,7 @@ check('but switching set still loads what was saved',
 
 // ---- leaderboard paging ---------------------------------------------
 await page.click('.tab[data-tab="setup"]');
-await page.click('#seedDemo');
-await page.waitForTimeout(4000);
+await seedDemoData(page);
 await page.click('.tab[data-tab="leaderboard"]');
 await page.click('.tab[data-board="individual"]');
 await page.waitForTimeout(500);
@@ -820,14 +829,22 @@ await Promise.all(crew.map(async (tab, i) => {
     });
   }, i);
 }));
+const expected = Array.from({ length: CREW },
+  (_, i) => `${i % 2 ? 'A' : 'B'}${String(40 + i).padStart(2, '0')}1`);
 await Promise.all(crew.map((tab) => tab.click('#saveSheet')));
-await page.waitForTimeout(2500);
+// Twenty saves queue behind one lock in demo mode, and how long that
+// takes depends entirely on the machine. Wait for the rows themselves,
+// not for a number of milliseconds that happens to work on a fast one.
+await page.waitForFunction((ids) => {
+  const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+  const have = new Set((db.contestants || []).map((c) => c.individual_id));
+  return ids.every((id) => have.has(id));
+}, expected, { timeout: 45000 }).catch(() => {});
 
 const savedIds = await page.evaluate(() => {
   const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
   return (db.contestants || []).map((c) => c.individual_id);
 });
-const expected = Array.from({ length: CREW }, (_, i) => `${i % 2 ? 'A' : 'B'}${String(40 + i).padStart(2, '0')}1`);
 const landed = expected.filter((id) => savedIds.includes(id));
 check('twenty simultaneous saves all land', landed.length === CREW,
   `${landed.length}/${CREW} — missing ${expected.filter((id) => !savedIds.includes(id)).join(', ')}`);
@@ -900,7 +917,7 @@ check('and all ten guts sets land with them',
 // And every one of those tabs is still usable afterwards.
 const alive = await Promise.all(crew.map((tab) => tab.isVisible('#app').catch(() => false)));
 check('every scorer\u2019s tab survives the burst', alive.every(Boolean),
-  `${alive.filter(Boolean).length}/10 alive`);
+  `${alive.filter(Boolean).length}/${CREW} alive`);
 
 await Promise.all(crew.map((tab) => tab.close()));
 
@@ -1049,8 +1066,7 @@ check('the answer key survives the wipe',
 
 // ---- theme + screenshots --------------------------------------------
 await page.click('.tab[data-tab="setup"]');
-await page.click('#seedDemo');
-await page.waitForTimeout(3000);
+await seedDemoData(page);
 await page.click('.tab[data-entry="individual"]');
 await page.click('.tab[data-tab="progress"]');
 await page.waitForTimeout(600);
