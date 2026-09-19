@@ -12,7 +12,7 @@ import {
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
-  graderActivity, sinceLabel,
+  graderActivity, sinceLabel, rosterRows, filterRoster,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
 import { parseCsv, toCsv } from '../assets/csv.js';
@@ -983,6 +983,47 @@ test('disqualifying the whole team does not erase what it scored', () => {
 // ---------------------------------------------------------------------
 // The two rosters
 // ---------------------------------------------------------------------
+
+test('a participant list reads whichever column holds the ID', () => {
+  const { rows, problems } = parseRoster([
+    'Individual ID,Team,Name',                  // a header row is not an error
+    'A011,A01,Ada Lovelace',                    // id, team, name
+    'A012,Grace Hopper',                        // id, name
+    'Mary Jackson,B1004',                       // name, id
+    'B021;A;Katherine Johnson',                 // semicolons, a division column
+    'B022\tB02\tDorothy Vaughan',               // tabs
+    'B023,"Vaughan, Dorothy"',                  // a comma inside a quoted name
+  ].join('\n'));
+  assert.deepEqual(rows.map((r) => r.individual_id),
+    ['A011', 'A012', 'B1004', 'B021', 'B022', 'B023']);
+  assert.deepEqual(rows.map((r) => r.name), [
+    'Ada Lovelace', 'Grace Hopper', 'Mary Jackson',
+    'Katherine Johnson', 'Dorothy Vaughan', 'Vaughan, Dorothy',
+  ]);
+  assert.deepEqual(problems, [], 'nothing above is a mistake');
+  assert.equal(rows[2].team, 'B100', 'the team always comes from the ID');
+});
+
+test('a team column that disagrees with the ID is caught, not quietly dropped', () => {
+  const { rows, problems } = parseRoster('A011,A09,Ada Lovelace');
+  assert.deepEqual(rows, []);
+  assert.match(problems[0], /A011 is in A01/);
+});
+
+test('the roster sorts and searches the way somebody looking for a person would', () => {
+  const rows = rosterRows([
+    { individual_id: 'B021', name: 'Katherine Johnson' },
+    { individual_id: 'A012', name: 'Grace Hopper' },
+    { individual_id: 'A011', name: 'Ada Lovelace' },
+  ]);
+  assert.deepEqual(rows.map((r) => r.individualId), ['A011', 'A012', 'B021']);
+  assert.equal(rows[0].team, 'A01', 'the team is derived when the row has none stored');
+  assert.deepEqual(filterRoster(rows, 'hopper').map((r) => r.individualId), ['A012']);
+  assert.deepEqual(filterRoster(rows, 'b02').map((r) => r.individualId), ['B021'],
+    'by team as well as by name');
+  assert.deepEqual(filterRoster(rows, 'A01').map((r) => r.individualId), ['A011', 'A012']);
+  assert.equal(filterRoster(rows, '  ').length, 3, 'a blank search hides nobody');
+});
 
 test('a participant list is read from whatever the spreadsheet gave you', () => {
   const { rows, problems } = parseRoster([

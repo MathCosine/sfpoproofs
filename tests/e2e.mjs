@@ -1183,13 +1183,78 @@ await shot.close();
   await page.waitForTimeout(300);
 
   // Participants arrive before the contest and fill the name in as an ID
-  // is typed. Anyone not on the list just leaves it blank.
-  await page.fill('#rosterPaste', 'A901, Ada Lovelace\nA902\tGrace Hopper\nnonsense');
+  // is typed. Anyone not on the list just leaves it blank. Import lives
+  // behind a fold, because the list itself is what an admin opens for.
+  await page.click('#rosterList ~ details > summary, details > summary');
+  await page.waitForTimeout(200);
+  // Whatever shape the list arrives in: ID first, ID second, an explicit
+  // team column, a header row, tabs, and a name with a comma in it.
+  await page.fill('#rosterPaste', [
+    'Individual ID, Team, Name',
+    'A901, A90, Ada Lovelace',
+    'A902\tGrace Hopper',
+    'B211,"Johnson, Katherine"',
+    'Mary Jackson, B2004',
+    'A903, A99, Wrong Team Here',
+    'total nonsense',
+  ].join('\n'));
   await page.click('#rosterImport');
-  await page.waitForTimeout(700);
-  check('a pasted participant list imports and reports what it skipped',
-    (await page.textContent('#rosterState')).includes('2 participants'),
+  await page.waitForTimeout(800);
+  check('a list imports whatever shape it arrives in',
+    (await page.textContent('#rosterState')).includes('4 participants'),
     await page.textContent('#rosterState'));
+  check('and says which lines it could not read',
+    (await page.textContent('#rosterProblems')).includes('2 lines skipped'),
+    (await page.textContent('#rosterProblems')).trim().slice(0, 80));
+  check('including a team column that disagrees with the ID',
+    (await page.textContent('#rosterProblems')).includes('A903 is in A90'),
+    (await page.textContent('#rosterProblems')).trim().slice(0, 120));
+  // Names live in input boxes, so read the values, not the text.
+  check('a name with a comma in it survives the quotes',
+    (await page.locator('.roster-row input').evaluateAll(
+      (els) => els.map((e) => e.value))).includes('Johnson, Katherine'));
+  check('and an ID written after the name is still found',
+    (await page.textContent('#rosterList')).includes('B2004'));
+
+  // Editing one person by hand.
+  const row = page.locator('.roster-row', { hasText: 'A902' }).first();
+  await row.locator('input').fill('Grace B Hopper');
+  await row.locator('input').press('Enter');
+  await page.waitForTimeout(700);
+  check('a name can be corrected in place',
+    (await page.evaluate(() => {
+      const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+      return (db.roster || []).find((r) => r.individual_id === 'A902')?.name;
+    })) === 'Grace B Hopper');
+
+  // Adding one by hand, and the search that finds them again.
+  await page.fill('#rosterAddId', 'A904');
+  await page.fill('#rosterAddName', 'Katherine Coleman');
+  await page.click('#rosterAdd');
+  await page.waitForTimeout(700);
+  check('a participant can be added one at a time',
+    (await page.textContent('#rosterState')).includes('5 participants'),
+    await page.textContent('#rosterState'));
+  await page.fill('#rosterSearch', 'coleman');
+  await page.waitForTimeout(300);
+  check('and the search finds them by name',
+    (await page.locator('.roster-row').count()) === 1,
+    `${await page.locator('.roster-row').count()} rows`);
+  await page.fill('#rosterSearch', 'A90');
+  await page.waitForTimeout(300);
+  check('or by team', (await page.locator('.roster-row').count()) >= 3,
+    `${await page.locator('.roster-row').count()} rows`);
+
+  // Removing one.
+  await page.fill('#rosterSearch', 'A904');
+  await page.waitForTimeout(300);
+  await page.locator('.roster-row').first().locator('button', { hasText: 'Remove' }).click();
+  await page.waitForTimeout(700);
+  check('and one can be removed',
+    (await page.textContent('#rosterState')).includes('4 participants'),
+    await page.textContent('#rosterState'));
+  await page.fill('#rosterSearch', '');
+  await page.waitForTimeout(300);
 
   await page.click('.tab[data-entry="individual"]');
   await page.click('#clearSheet');
@@ -1201,7 +1266,7 @@ await shot.close();
   await page.fill('#individualId', 'A902');
   await page.waitForTimeout(400);
   check('and one who is has their name filled in',
-    (await page.inputValue('#contestantName')) === 'Grace Hopper',
+    (await page.inputValue('#contestantName')) === 'Grace B Hopper',
     await page.inputValue('#contestantName'));
   await page.click('#clearSheet');
 

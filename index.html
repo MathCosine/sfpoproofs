@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.19.1">
+<body data-app-version="2026.09.19.2">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -383,19 +383,54 @@
           <span class="muted" id="graderState"></span>
         </div>
 
-        <div class="panel__head" style="margin-top:28px"><h2>Participants</h2></div>
+        <div class="panel__head" style="margin-top:28px"><h2>Participants</h2>
+          <span class="spacer"></span><span class="tag" id="rosterState">none</span></div>
         <p class="field__hint" style="margin-bottom:12px">
-          One per line, ID first, then the name — <span class="mono">A011, Ada Lovelace</span>.
-          Commas, tabs and columns pasted straight out of a spreadsheet all work. Names fill
-          themselves in as an ID is typed; anyone not on the list just leaves it blank.
+          Names fill themselves in as an ID is typed. Anyone not on the list just leaves it
+          blank, and a sheet already saved keeps the name it was saved with.
         </p>
-        <textarea class="input mono" id="rosterPaste" rows="5" spellcheck="false"
-                  placeholder="A011, Ada Lovelace&#10;A012, Grace Hopper"></textarea>
-        <div class="chip-row" style="margin-top:10px">
-          <button class="btn btn--primary" id="rosterImport">Import participants</button>
-          <button class="btn btn--ghost" id="rosterClear">Clear the list</button>
-          <span class="muted" id="rosterState">No participants loaded.</span>
+
+        <div class="grid-3">
+          <div class="field">
+            <label class="field__label" for="rosterAddId">Add — ID</label>
+            <input class="input mono" id="rosterAddId" placeholder="A011" autocomplete="off"
+                   maxlength="6">
+          </div>
+          <div class="field" style="grid-column:span 2">
+            <label class="field__label" for="rosterAddName">Name</label>
+            <input class="input" id="rosterAddName" placeholder="Ada Lovelace" autocomplete="off">
+          </div>
         </div>
+        <div class="chip-row" style="margin-bottom:16px">
+          <button class="btn btn--primary" id="rosterAdd">Add participant</button>
+          <span class="muted" id="rosterAddHint">The team comes from the ID.</span>
+        </div>
+
+        <div class="field">
+          <label class="field__label" for="rosterSearch">Find someone</label>
+          <input class="input" id="rosterSearch" placeholder="ID, team or name" autocomplete="off">
+        </div>
+        <div id="rosterList"></div>
+
+        <details style="margin-top:16px">
+          <summary class="field__label" style="cursor:pointer">Import a list</summary>
+          <p class="field__hint" style="margin:10px 0">
+            One per line. The ID is found wherever it sits, so
+            <span class="mono">A011, Ada Lovelace</span>,
+            <span class="mono">A011, A01, Ada Lovelace</span> and a spreadsheet pasted
+            straight in with a header row all work. Commas, tabs and semicolons separate;
+            quote a name that contains a comma. Importing updates anyone already listed and
+            leaves the rest alone.
+          </p>
+          <textarea class="input mono" id="rosterPaste" rows="6" spellcheck="false"
+                    placeholder="A011, Ada Lovelace&#10;A012, Grace Hopper"></textarea>
+          <div class="chip-row" style="margin-top:10px">
+            <button class="btn btn--primary" id="rosterImport">Import participants</button>
+            <button class="btn btn--ghost" id="rosterExport">Export as CSV</button>
+            <button class="btn btn--ghost" id="rosterClear">Clear the list</button>
+          </div>
+          <div id="rosterProblems"></div>
+        </details>
 
         <div class="panel__head" style="margin-top:28px"><h2>Disqualifications</h2></div>
         <div class="grid-2">
@@ -463,6 +498,6 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.09.19.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.19.2"></script>
 </body>
 </html>

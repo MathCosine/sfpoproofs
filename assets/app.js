@@ -11,7 +11,7 @@ import {
   indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
-  graderActivity, sinceLabel,
+  graderActivity, sinceLabel, rosterRows, filterRoster,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
@@ -1438,6 +1438,92 @@ function renderGraders() {
   }
 }
 
+/**
+ * The participant list, editable a line at a time. Only rebuilt when the
+ * list or the search changes, so a name being typed here is never wiped
+ * by somebody else's save landing in the background.
+ */
+const ROSTER_SHOWN = 40;
+let rosterSignature = null;
+
+function renderRoster() {
+  const host = $('#rosterList');
+  const all = rosterRows(data.roster);
+  const search = $('#rosterSearch').value;
+  const shown = filterRoster(all, search);
+  const signature = `${search}|${all.map((r) => `${r.individualId}:${r.name}`).join(',')}`;
+
+  $('#rosterState').textContent = all.length
+    ? `${all.length} participant${all.length === 1 ? '' : 's'}`
+    : 'none';
+  if (signature === rosterSignature) return;
+  rosterSignature = signature;
+  host.replaceChildren();
+
+  if (!all.length) {
+    host.appendChild(el('p', 'field__hint',
+      'Nobody loaded yet. Add one above, or import a list below.'));
+    return;
+  }
+  if (!shown.length) {
+    host.appendChild(el('p', 'field__hint', `Nobody matches “${search.trim()}”.`));
+    return;
+  }
+
+  const list = el('div', 'roster-list');
+  for (const person of shown.slice(0, ROSTER_SHOWN)) {
+    const row = el('div', 'roster-row');
+    const field = el('input', 'input');
+    field.value = person.name;
+    field.placeholder = 'no name';
+    field.setAttribute('aria-label', `Name for ${person.individualId}`);
+
+    const save = async (next) => {
+      if (next === person.name) return;
+      try {
+        await store.saveRoster([{
+          individual_id: person.individualId,
+          name: next,
+          division: person.division,
+          team: person.team,
+        }]);
+        rosterSignature = null;
+        await refresh();
+      } catch (err) {
+        toast(err.message || 'Could not save that name.', 'error');
+      }
+    };
+    // Save when they leave the box or press Enter — no button to hunt for
+    // down a list of four hundred.
+    field.addEventListener('change', () => save(field.value.trim()));
+    field.addEventListener('keydown', (e) => { if (e.key === 'Enter') field.blur(); });
+
+    const drop = el('button', 'btn btn--ghost', 'Remove');
+    drop.type = 'button';
+    drop.addEventListener('click', async () => {
+      drop.disabled = true;
+      try {
+        await store.removeRosterEntry(person.individualId);
+        rosterSignature = null;
+        await refresh();
+        toast(`${person.individualId} removed from the participant list.`, 'info');
+      } catch (err) {
+        drop.disabled = false;
+        toast(err.message || 'Could not remove that participant.', 'error');
+      }
+    });
+
+    row.append(el('span', 'roster-row__id', person.individualId),
+      el('span', 'roster-row__team', `team ${person.team}`), field, drop);
+    list.appendChild(row);
+  }
+  host.appendChild(list);
+  if (shown.length > ROSTER_SHOWN) {
+    host.appendChild(el('p', 'roster-more',
+      `Showing ${ROSTER_SHOWN} of ${shown.length}. Search to narrow it down.`));
+  }
+}
+
 /** Say how many names each list holds, and that empty means everybody. */
 function renderStaffCounts() {
   for (const [which, label] of [['admin', 'admin'], ['grader', 'staff']]) {
@@ -1451,10 +1537,6 @@ function renderStaffCounts() {
 function renderDqList() {
   const host = $('#dqList');
   host.replaceChildren();
-
-  $('#rosterState').textContent = data.roster.length
-    ? `${data.roster.length} participants loaded.`
-    : 'No participants loaded.';
 
   const people = data.contestants.filter((c) => c.disqualified)
     .sort((a, b) => a.individual_id.localeCompare(b.individual_id, undefined, { numeric: true }));
@@ -1645,6 +1727,7 @@ function render() {
   renderWeightPreview();
   adoptRename();
   renderGraders();
+  renderRoster();
   renderDqList();
   applyRole();
 
@@ -1941,21 +2024,78 @@ function wire() {
     }
   });
 
+  $('#rosterSearch').addEventListener('input', () => { rosterSignature = null; renderRoster(); });
+
+  const addParticipant = async () => {
+    const parsed = parseIndividualId($('#rosterAddId').value);
+    if (!parsed.ok) { toast('Enter an ID like A011.', 'error'); $('#rosterAddId').focus(); return; }
+    const button = $('#rosterAdd');
+    button.disabled = true;
+    try {
+      await store.saveRoster([{
+        individual_id: parsed.id,
+        name: $('#rosterAddName').value.trim(),
+        division: parsed.division,
+        team: parsed.team,
+      }]);
+      $('#rosterAddId').value = '';
+      $('#rosterAddName').value = '';
+      rosterSignature = null;
+      await refresh();
+      toast(`${parsed.id} added to team ${parsed.team}.`);
+      $('#rosterAddId').focus();
+    } catch (err) {
+      toast(err.message || 'Could not add that participant.', 'error');
+    } finally {
+      button.disabled = false;
+    }
+  };
+  $('#rosterAdd').addEventListener('click', addParticipant);
+  for (const id of ['#rosterAddId', '#rosterAddName']) {
+    $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') addParticipant(); });
+  }
+  $('#rosterAddId').addEventListener('input', () => {
+    const parsed = parseIndividualId($('#rosterAddId').value);
+    $('#rosterAddHint').textContent = parsed.ok
+      ? `Division ${parsed.division}, team ${parsed.team}, member ${parsed.member}.`
+      : 'The team comes from the ID.';
+  });
+
+  $('#rosterExport').addEventListener('click', () => {
+    downloadCsv('cowconuts-2026-participants.csv', toCsv(
+      ['individual_id', 'team', 'division', 'name'],
+      rosterRows(data.roster).map((r) => [r.individualId, r.team, r.division, r.name])));
+  });
+
   $('#rosterImport').addEventListener('click', async () => {
     const { rows, problems } = parseRoster($('#rosterPaste').value);
-    if (!rows.length) {
-      toast('Nothing recognised. Each line needs an ID like A011, then a name.', 'error');
+    const host = $('#rosterProblems');
+    host.replaceChildren();
+    if (!rows.length && !problems.length) {
+      toast('Nothing to import — paste a list first.', 'error');
       return;
     }
     const button = $('#rosterImport');
     button.disabled = true;
     try {
-      await store.saveRoster(rows);
+      if (rows.length) await store.saveRoster(rows);
       $('#rosterPaste').value = '';
+      rosterSignature = null;
       await refresh();
-      toast(problems.length
-        ? `Imported ${rows.length}. ${problems.length} line(s) skipped: ${problems[0]}`
-        : `Imported ${rows.length} participants.`, problems.length ? 'info' : 'ok');
+      toast(rows.length
+        ? `Imported ${rows.length} participant${rows.length === 1 ? '' : 's'}.`
+        : 'Nothing on that list could be read.', rows.length ? 'ok' : 'error');
+      // Show every line that could not be read, rather than only the
+      // first: a list is usually fixed in one pass or not at all.
+      if (problems.length) {
+        const warn = el('div', 'banner banner--warn');
+        const d = el('div');
+        d.append(el('b', null, `${problems.length} line${problems.length === 1 ? '' : 's'} skipped`),
+          el('span', null, problems.slice(0, 8).join(' · ')
+            + (problems.length > 8 ? ` · and ${problems.length - 8} more` : '')));
+        warn.append(el('div', null, '⚠'), d);
+        host.appendChild(warn);
+      }
     } catch (err) {
       toast(err.message || 'Could not import that list.', 'error');
     } finally {

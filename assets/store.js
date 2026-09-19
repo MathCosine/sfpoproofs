@@ -286,6 +286,12 @@ export function supabaseBackend(cfg, injectedClient = null) {
       if (error) throw new Error(error.message);
     },
 
+    async removeRosterEntry(individualId) {
+      const c = await getClient();
+      const { error } = await c.from('roster').delete().eq('individual_id', individualId);
+      if (error) throw new Error(error.message);
+    },
+
     async saveState(patch) {
       const c = await getClient();
       const { error } = await c.from('contest_state')
@@ -593,6 +599,12 @@ function demoBackend(cfg) {
     },
 
     async clearRoster() { await mutate((db) => { db.roster = []; }); },
+
+    async removeRosterEntry(individualId) {
+      await mutate((db) => {
+        db.roster = (db.roster ?? []).filter((r) => r.individual_id !== individualId);
+      });
+    },
     async saveState(patch) { await mutate((db) => { db.state = { ...db.state, ...patch }; }); },
     async setFrozen(frozen) { await mutate((db) => { db.state = { ...db.state, guts_frozen: frozen }; }); },
     async saveSettings(patch) { await mutate((db) => { db.settings = { ...(db.settings ?? {}), ...patch }; }); },

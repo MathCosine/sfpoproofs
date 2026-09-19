@@ -552,27 +552,128 @@ export function nameAllowed(list, name) {
  * the name. Commas, tabs and runs of spaces all separate them, so a
  * copy out of Sheets or a CSV both work without reformatting.
  */
+const TEAM_ONLY_RE = /^([AB])(\d{1,3})$/;
+const HEADER_WORDS = /^(individual|contestant|student|competitor|participant|id|team|name|division|div|first|last|full\s*name)\b/i;
+
+/**
+ * One line into cells. Commas, tabs and semicolons all separate, quotes
+ * protect a comma inside a name, and a line with none of those falls back
+ * to runs of spaces — so a copy out of Sheets, a CSV, and a hand-typed
+ * line all arrive the same way.
+ */
+export function splitRosterLine(line) {
+  const cells = [];
+  let cur = '';
+  let quoted = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const ch = line[i];
+    if (quoted) {
+      if (ch !== '"') { cur += ch; continue; }
+      if (line[i + 1] === '"') { cur += '"'; i += 1; } else quoted = false;
+      continue;
+    }
+    if (ch === '"') { quoted = true; continue; }
+    if (ch === ',' || ch === '\t' || ch === ';') { cells.push(cur); cur = ''; continue; }
+    cur += ch;
+  }
+  cells.push(cur);
+  const trimmed = cells.map((c) => c.trim());
+  if (trimmed.filter(Boolean).length > 1) return trimmed;
+  // No delimiter found: "A011  Ada Lovelace" or "A011 Ada Lovelace".
+  const words = line.trim().split(/\s+/);
+  return words.length > 1 ? [words[0], words.slice(1).join(' ')] : trimmed;
+}
+
+/**
+ * Participants, from whatever shape the list arrives in.
+ *
+ * The ID is found by trying to parse each cell rather than by trusting a
+ * column order, so ID-then-name, name-then-ID, and a spreadsheet with an
+ * ID / Team / Name layout all read correctly, with or without a header
+ * row and with extra columns in between.
+ */
 export function parseRoster(text) {
   const rows = [];
-  const seen = new Set();
+  const seen = new Map();
   const problems = [];
+
   for (const raw of String(text ?? '').split(/\r?\n/)) {
-    const line = raw.trim();
-    if (!line) continue;
-    const [, idPart, namePart = ''] = /^([^,\t]+?)(?:[,\t]|\s{2,})\s*(.*)$/.exec(line)
-      ?? [null, line.split(/\s+/)[0], line.split(/\s+/).slice(1).join(' ')];
-    const parsed = parseIndividualId(idPart);
-    if (!parsed.ok) { problems.push(line); continue; }
-    if (seen.has(parsed.id)) { problems.push(`${line} (duplicate)`); continue; }
-    seen.add(parsed.id);
-    rows.push({
+    if (!raw.trim()) continue;
+    const cells = splitRosterLine(raw).filter((c) => c !== '');
+    if (!cells.length) continue;
+
+    let parsed = null;
+    let idAt = -1;
+    for (let i = 0; i < cells.length; i += 1) {
+      const attempt = parseIndividualId(cells[i]);
+      if (attempt.ok) { parsed = attempt; idAt = i; break; }
+    }
+    if (!parsed) {
+      // A header row is not a mistake worth reporting; anything else is.
+      if (!cells.some((c) => HEADER_WORDS.test(c))) problems.push(raw.trim());
+      continue;
+    }
+
+    const rest = cells.filter((_, i) => i !== idAt);
+    // A column holding the team key is information we already have from
+    // the ID — but if it disagrees, that is a typo worth catching.
+    let mismatch = null;
+    const nameParts = [];
+    for (const cell of rest) {
+      const team = TEAM_ONLY_RE.exec(cell.toUpperCase().replace(/[\s\-_.]/g, ''));
+      if (team) {
+        const key = teamKey(team[1], Number(team[2]));
+        if (Number(team[2]) >= 1 && key !== parsed.team) mismatch = cell;
+        continue;                       // matches, or is being reported
+      }
+      if (/^[AB]$/i.test(cell)) continue;             // a bare division column
+      nameParts.push(cell);
+    }
+    if (mismatch) {
+      problems.push(`${raw.trim()} (says team ${mismatch}, but ${parsed.id} is in ${parsed.team})`);
+      continue;
+    }
+
+    const name = nameParts.join(' ').trim();
+    if (seen.has(parsed.id)) {
+      problems.push(`${raw.trim()} (${parsed.id} is already on this list)`);
+      continue;
+    }
+    const row = {
       individual_id: parsed.id,
-      name: namePart.trim(),
+      name,
       division: parsed.division,
       team: parsed.team,
-    });
+    };
+    seen.set(parsed.id, row);
+    rows.push(row);
   }
   return { rows, problems };
+}
+
+/** The roster in the order a person reads it: division, team, member. */
+export function rosterRows(roster) {
+  return [...(roster ?? [])]
+    .map((r) => {
+      const parsed = parseIndividualId(r.individual_id);
+      return {
+        individualId: String(r.individual_id),
+        name: r.name ?? '',
+        team: r.team ?? (parsed.ok ? parsed.team : ''),
+        division: r.division ?? (parsed.ok ? parsed.division : ''),
+        member: parsed.ok ? parsed.member : '',
+      };
+    })
+    .sort((a, b) => a.individualId.localeCompare(b.individualId, undefined, { numeric: true }));
+}
+
+/** Rows whose ID or name contains the search text. */
+export function filterRoster(rows, search) {
+  const wanted = String(search ?? '').trim().toLowerCase();
+  if (!wanted) return rows;
+  return rows.filter((r) => r.individualId.toLowerCase().includes(wanted)
+    || r.name.toLowerCase().includes(wanted)
+    || r.team.toLowerCase().includes(wanted));
 }
 
 /** individual_id -> name, for filling the name box as an ID is typed. */

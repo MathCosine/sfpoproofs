@@ -601,3 +601,20 @@ tbody tr:hover .rowcopy, .rowcopy:focus-visible { opacity: 1; }
 .grader-row__did { font-size: 12px; font-weight: 700; color: var(--muted); margin-left: auto; }
 .grader-row input.input { max-width: 210px; padding: 7px 10px; }
 .grader-row--off { opacity: .72; }
+
+/* Participant list: one editable line each, kept narrow enough that a few
+   hundred of them still scan. */
+.roster-list { max-height: 420px; overflow: auto; overscroll-behavior: contain; }
+.roster-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border: 2px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--card); margin-bottom: 6px;
+}
+.roster-row__id {
+  font-family: var(--mono); font-weight: 800; font-size: 13px;
+  min-width: 62px;
+}
+.roster-row__team { font-size: 11px; font-weight: 700; color: var(--muted); min-width: 58px; }
+.roster-row input.input { flex: 1; padding: 6px 10px; min-width: 120px; }
+.roster-row .btn { padding: 5px 10px; font-size: 12px; }
+.roster-more { font-size: 12px; font-weight: 700; color: var(--muted); padding: 6px 2px; }

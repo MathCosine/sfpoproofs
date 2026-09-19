@@ -85,10 +85,29 @@ to publish the accusation. A disqualified contestant stops ranking, drops off th
 lines and the statistics, and stops counting towards their team's best three; the rest
 of their team is untouched. Both are reversible from Admin.
 
-**A participant list** pasted into Admin fills the name in as an ID is typed —
-`A011, Ada Lovelace` per line, straight out of a spreadsheet. Anyone not on the list
-simply leaves the name blank, and a sheet that has already been saved keeps whatever
-name it was saved with.
+**A participant list** fills the name in as an ID is typed. Anyone not on the list simply
+leaves the name blank, and a sheet that has already been saved keeps whatever name it was
+saved with.
+
+Admin keeps it as one editable line per person — ID, team, name — with a search that
+matches any of the three, an add box for one-offs, and a remove on each row. Names save
+as you leave the box. Import is folded underneath: **the ID is found wherever it sits in
+the line**, so all of these read correctly, with or without a header row:
+
+```
+A011, Ada Lovelace
+A011, A01, Ada Lovelace
+Ada Lovelace, A011
+A011<tab>A01<tab>Ada Lovelace
+A011,"Lovelace, Ada"
+```
+
+Commas, tabs and semicolons separate; quotes protect a comma inside a name; a bare
+division column is ignored. A team column that **disagrees** with the ID is reported
+rather than quietly dropped — that is a typo worth catching — as is any line with no
+readable ID, and every skipped line is listed at once rather than one at a time.
+Importing updates anyone already listed and leaves the rest alone. Export gives you the
+whole list back as CSV.
 
 **Sign-in lists** say who may use each password. One name per line in Admin; a name
 must match what they type at the door, give or take case, spacing and punctuation. An
@@ -350,8 +369,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 82 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 189 browser checks, including twenty scorers at once
+npm test               # 85 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 199 browser checks, including twenty scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
