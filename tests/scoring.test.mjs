@@ -12,6 +12,7 @@ import {
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
+  graderActivity, sinceLabel,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
 import { parseCsv, toCsv } from '../assets/csv.js';
@@ -1024,4 +1025,58 @@ test('an empty list lets anybody in, so a half-set-up contest is not locked out'
   assert.equal(nameAllowed('', 'Anyone At All'), true);
   assert.equal(nameAllowed('   \n  ', 'Anyone At All'), true);
   assert.equal(nameAllowed([], 'Anyone At All'), true);
+});
+
+// ---------------------------------------------------------------------
+// The scorer register
+// ---------------------------------------------------------------------
+
+test('the register says who is here and how much each of them keyed', () => {
+  const now = Date.UTC(2026, 8, 19, 12, 0, 0);
+  const ago = (ms) => new Date(now - ms).toISOString();
+  const rows = graderActivity(
+    [
+      { grader_id: 'g-left', name: 'Gone Home', last_seen: ago(45 * 60000) },
+      { grader_id: 'g-here', name: 'Xu Shao', last_seen: ago(4000) },
+      { grader_id: 'g-idle', name: 'On A Break', last_seen: ago(5 * 60000) },
+    ],
+    [
+      { entered_by: 'g-here' }, { entered_by: 'g-here' }, { entered_by: 'g-left' },
+      { entered_by: '' }, { },
+    ],
+    [
+      // Four answers of one set, then one of another: two sets, not five.
+      { entered_by: 'g-here', team: 'A01', problem: 1 },
+      { entered_by: 'g-here', team: 'A01', problem: 2 },
+      { entered_by: 'g-here', team: 'A01', problem: 3 },
+      { entered_by: 'g-here', team: 'A01', problem: 4 },
+      { entered_by: 'g-here', team: 'A01', problem: 5 },
+    ],
+    cfg, now);
+
+  assert.deepEqual(rows.map((r) => r.graderId), ['g-here', 'g-idle', 'g-left'],
+    'here first, then by how long they have been quiet');
+  assert.equal(rows[0].online, true);
+  assert.equal(rows[0].sheets, 2, 'rows with no scorer on them are not counted');
+  assert.equal(rows[0].sets, 2, 'a set is one set however many answers it took');
+  assert.equal(rows[2].online, false);
+  assert.equal(rows[2].sheets, 1);
+  assert.equal(rows[2].sets, 0);
+});
+
+test('the register copes with an empty contest', () => {
+  assert.deepEqual(graderActivity([], [], [], cfg), []);
+  assert.deepEqual(graderActivity(null, null, null, cfg), []);
+  const [only] = graderActivity(
+    [{ grader_id: 'g1', name: 'Solo', last_seen: 'not a date' }], [], [], cfg);
+  assert.equal(only.online, false, 'an unreadable timestamp reads as gone, not as here');
+  assert.equal(only.sheets, 0);
+});
+
+test('how long ago reads the way a person would say it', () => {
+  assert.equal(sinceLabel(3000), 'just now');
+  assert.equal(sinceLabel(4 * 60000), '4 min ago');
+  assert.equal(sinceLabel(2 * 3600000), '2 h ago');
+  assert.equal(sinceLabel(50 * 3600000), '2 d ago');
+  assert.equal(sinceLabel(Infinity), 'never');
 });

@@ -343,6 +343,43 @@ export function supabaseBackend(cfg, injectedClient = null) {
       }, { onConflict: 'grader_id' });
     },
 
+    /**
+     * Correct a scorer's name everywhere it was stamped. The name is
+     * copied onto each row as it is entered so it survives the scorer
+     * leaving, which means fixing a typo has to reach all of them.
+     */
+    async renameGrader(graderId, name) {
+      const c = await getClient();
+      for (const [table, idColumn, nameColumn] of [
+        ['graders', 'grader_id', 'name'],
+        ['claims', 'grader_id', 'grader_name'],
+        ['contestants', 'entered_by', 'entered_by_name'],
+        ['guts_answers', 'entered_by', 'entered_by_name'],
+      ]) {
+        const { error } = await c.from(table)
+          .update({ [nameColumn]: name }).eq(idColumn, graderId);
+        if (error) throw new Error(error.message);
+      }
+    },
+
+    /** Forget a scorer and let go of anything they were holding. */
+    async removeGrader(graderId) {
+      const c = await getClient();
+      await c.from('claims').delete().eq('grader_id', graderId);
+      const { error } = await c.from('graders').delete().eq('grader_id', graderId);
+      if (error) throw new Error(error.message);
+    },
+
+    /** Drop everyone who has not checked in for a while. */
+    async clearIdleGraders(maxAgeSeconds) {
+      const c = await getClient();
+      const cutoff = new Date(Date.now() - maxAgeSeconds * 1000).toISOString();
+      const { data, error } = await c.from('graders')
+        .delete().lt('last_seen', cutoff).select('grader_id');
+      if (error) throw new Error(error.message);
+      return data?.length ?? 0;
+    },
+
     async clearAll() {
       const c = await getClient();
       const counts = {};
@@ -592,6 +629,31 @@ function demoBackend(cfg) {
         if (i >= 0) db.graders[i] = row; else db.graders.push(row);
       });
     },
+    async renameGrader(graderId, name) {
+      await mutate((db) => {
+        for (const g of db.graders) if (g.grader_id === graderId) g.name = name;
+        for (const c of db.claims) if (c.grader_id === graderId) c.grader_name = name;
+        for (const c of db.contestants) if (c.entered_by === graderId) c.entered_by_name = name;
+        for (const g of db.gutsAnswers) if (g.entered_by === graderId) g.entered_by_name = name;
+      });
+    },
+
+    async removeGrader(graderId) {
+      await mutate((db) => {
+        db.claims = db.claims.filter((c) => c.grader_id !== graderId);
+        db.graders = db.graders.filter((g) => g.grader_id !== graderId);
+      });
+    },
+
+    async clearIdleGraders(maxAgeSeconds) {
+      return mutate((db) => {
+        const cutoff = Date.now() - maxAgeSeconds * 1000;
+        const before = db.graders.length;
+        db.graders = db.graders.filter((g) => new Date(g.last_seen).getTime() >= cutoff);
+        return before - db.graders.length;
+      });
+    },
+
     async clearAll() {
       return mutate((db) => {
         const counts = {};

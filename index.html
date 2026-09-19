@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.14.1">
+<body data-app-version="2026.09.19.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -370,6 +370,19 @@
           <span class="muted">An admin name also works at the scorer door.</span>
         </div>
 
+        <div class="panel__head" style="margin-top:28px"><h2>Scorers</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          Everyone who has signed in, and what they have keyed. Renaming somebody corrects
+          their name on every sheet and set they entered, and reaches their screen within
+          a minute. Removing a scorer forgets the row and lets go of anything
+          they were holding — it never touches their work.
+        </p>
+        <div id="graderList"></div>
+        <div class="chip-row" style="margin-top:12px">
+          <button class="btn btn--ghost" id="clearIdleGraders">Forget everyone who has left</button>
+          <span class="muted" id="graderState"></span>
+        </div>
+
         <div class="panel__head" style="margin-top:28px"><h2>Participants</h2></div>
         <p class="field__hint" style="margin-bottom:12px">
           One per line, ID first, then the name — <span class="mono">A011, Ada Lovelace</span>.
@@ -450,6 +463,6 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.09.14.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.19.1"></script>
 </body>
 </html>

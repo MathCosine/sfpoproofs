@@ -99,6 +99,13 @@ name — so it keeps the wrong person out and keeps the name on every sheet one 
 recognise. Locked out by a typo? In the SQL Editor:
 `update app_settings set admin_names = '' where id = 1;`
 
+**The scorer register** in Admin lists everyone who has signed in, whether they are here
+now, and how much each of them keyed. Correcting a name there fixes it on every sheet and
+set that person entered, and reaches their own screen within a minute — otherwise their
+next check-in would write the old spelling straight back. Removing somebody forgets the
+row and releases anything they were holding; it never touches their work. One button
+forgets everyone who has been quiet for ten minutes.
+
 **Clear test data** wipes a dry run while keeping your key and settings.
 
 ---
@@ -303,12 +310,28 @@ with twenty scorers signed in and three board screens running:
 | Three board screens following every change | ~60 MB |
 | **Total against a 5 GB monthly allowance** | **~130 MB, about 3%** |
 
-Realtime messages land near 25,000 against a two-million monthly allowance, and
-concurrent connections near 25 against 200. **Nothing here needs a paid plan** — the
-free tier has roughly thirty times the headroom required, and the resync pauses
-entirely in a tab nobody is looking at. The browser tests run twenty real tabs
-signing in, colliding on one sheet and saving at the same instant, so the figure is
-measured behaviour rather than an estimate.
+Egress is not the binding limit — **realtime messages are**, and they are dominated by
+the two things every tab writes on a timer rather than by anything anyone types. Each
+write fans out to every open screen, so one tab writing every twenty seconds costs
+twenty messages every twenty seconds across a room of twenty scorers:
+
+| Per six-hour contest, twenty scorers | Messages |
+| --- | --- |
+| Saying "still here" — every 60 s, not 20 | 144,000 |
+| Renewing a held lock — at ⅔ of its life, not every tick | 108,000 |
+| The ~1,100 actual saves | 22,000 |
+| Three board screens following the standings | 3,300 |
+| **Total against the two-million monthly allowance** | **~277,000 · 14%** |
+
+On the old cadence — both timers firing every twenty seconds — the same contest came to
+about 890,000, or 45% of the month's allowance in one afternoon. Nothing about the lock
+changed: it still lasts two minutes and still frees a walked-away sheet on its own. It
+is simply not rewritten four times inside each of those two minutes.
+
+Concurrent connections land near 25 against 200. **Nothing here needs a paid plan.** The
+resync also pauses entirely in a tab nobody is looking at. The browser tests run twenty
+real tabs signing in, colliding on one sheet and saving at the same instant, so the
+behaviour is measured rather than estimated.
 
 ---
 
@@ -327,8 +350,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 79 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 180 browser checks, including twenty scorers at once
+npm test               # 82 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 189 browser checks, including twenty scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

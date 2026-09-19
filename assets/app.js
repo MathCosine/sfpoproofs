@@ -11,6 +11,7 @@ import {
   indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
+  graderActivity, sinceLabel,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
@@ -598,6 +599,9 @@ function wantedClaim() {
 }
 
 let claiming = false;
+// When the lock we hold was last written, so the renewal below can wait
+// until it is actually near expiry.
+let lastClaimAt = 0;
 
 async function claimCurrent() {
   const want = wantedClaim();
@@ -620,6 +624,7 @@ async function claimCurrent() {
     }
     blockedBy = null;
     held = want;
+    lastClaimAt = Date.now();
   } catch { /* a lost claim must never block entry */ } finally {
     claiming = false;
   }
@@ -1326,6 +1331,113 @@ function renderWeightPreview() {
   host.appendChild(d);
 }
 
+// The last name we ourselves wrote to the register. Anything different
+// showing up there was written by somebody else — an admin correcting it.
+let lastPushedName = null;
+
+function pushHeartbeat() {
+  lastPushedName = grader.name;
+  return store.heartbeat(grader).catch(() => {});
+}
+
+/**
+ * An admin correcting a name in the Scorers panel has to reach the person
+ * it belongs to. Without this their next heartbeat, twenty seconds later,
+ * would write the old name straight back over the correction.
+ */
+function adoptRename() {
+  const mine = data.graders.find((g) => g.grader_id === grader.id);
+  if (!mine?.name || mine.name === grader.name || mine.name === lastPushedName) return;
+  grader.name = mine.name;
+  localStorage.setItem('contest-grader-name', grader.name);
+  $('#whoamiName').textContent = grader.name;
+  toast(`A director corrected your name to ${grader.name}.`, 'info');
+}
+
+/**
+ * The scorer register. Rebuilt only when the register itself changes, so
+ * a name being typed into one of these boxes is never wiped by somebody
+ * else's save landing in the background.
+ */
+let graderRowsSignature = null;
+
+function renderGraders() {
+  const host = $('#graderList');
+  const rows = graderActivity(data.graders, data.contestants, data.gutsAnswers, cfg);
+  const signature = rows.map((r) => `${r.graderId}|${r.name}|${r.online}|${r.sheets}|${r.sets}`)
+    .join(',');
+  const gone = rows.filter((r) => !r.online).length;
+  $('#graderState').textContent = rows.length
+    ? `${rows.length - gone} here, ${gone} gone.`
+    : '';
+  if (signature === graderRowsSignature) return;
+  graderRowsSignature = signature;
+  host.replaceChildren();
+
+  if (!rows.length) {
+    host.appendChild(el('p', 'field__hint', 'Nobody has signed in yet.'));
+    return;
+  }
+
+  for (const person of rows) {
+    const row = el('div', `grader-row${person.online ? '' : ' grader-row--off'}`);
+    const who = el('div', 'grader-row__who');
+    who.append(el('span', 'grader-row__name', person.name || '(no name)'),
+      el('span', 'grader-row__seen',
+        person.online ? 'here now' : `last seen ${sinceLabel(person.idleMs)}`));
+
+    const field = el('input', 'input');
+    field.value = person.name;
+    field.setAttribute('aria-label', `Name for ${person.name || person.graderId}`);
+    field.addEventListener('input', () => { field.dataset.dirty = '1'; });
+
+    const save = el('button', 'btn btn--ghost', 'Rename');
+    save.type = 'button';
+    save.addEventListener('click', async () => {
+      const next = field.value.trim();
+      if (!next) { toast('A scorer needs a name.', 'error'); return; }
+      if (next === person.name) { toast('That is already their name.', 'info'); return; }
+      save.disabled = true;
+      try {
+        await store.renameGrader(person.graderId, next);
+        graderRowsSignature = null;
+        await refresh();
+        toast(`Renamed to ${next} on ${person.sheets} sheet(s) and ${person.sets} set(s).`);
+      } catch (err) {
+        save.disabled = false;
+        toast(err.message || 'Could not rename that scorer.', 'error');
+      }
+    });
+
+    const drop = el('button', 'btn btn--ghost', 'Remove');
+    drop.type = 'button';
+    drop.addEventListener('click', async () => {
+      if (drop.dataset.armed !== '1') {
+        drop.dataset.armed = '1';
+        drop.textContent = 'Click again';
+        setTimeout(() => { drop.dataset.armed = ''; drop.textContent = 'Remove'; }, 4000);
+        return;
+      }
+      drop.disabled = true;
+      try {
+        await store.removeGrader(person.graderId);
+        graderRowsSignature = null;
+        await refresh();
+        toast(`${person.name || 'That scorer'} removed. Their entries are untouched.`, 'info');
+      } catch (err) {
+        drop.disabled = false;
+        toast(err.message || 'Could not remove that scorer.', 'error');
+      }
+    });
+
+    row.append(who, field, save, drop,
+      el('span', 'grader-row__did',
+        `${person.sheets} sheet${person.sheets === 1 ? '' : 's'} · `
+        + `${person.sets} set${person.sets === 1 ? '' : 's'}`));
+    host.appendChild(row);
+  }
+}
+
 /** Say how many names each list holds, and that empty means everybody. */
 function renderStaffCounts() {
   for (const [which, label] of [['admin', 'admin'], ['grader', 'staff']]) {
@@ -1531,7 +1643,8 @@ function render() {
   if (activeTab === 'key') fillKeyEditor();
   renderClock();
   renderWeightPreview();
-  renderStaffCounts();
+  adoptRename();
+  renderGraders();
   renderDqList();
   applyRole();
 
@@ -1562,6 +1675,8 @@ function render() {
       input.value = value;
     }
   }
+  // After the boxes are filled, never before: these counts read them.
+  renderStaffCounts();
 }
 
 async function refresh() {
@@ -1795,6 +1910,37 @@ function wire() {
     toast(`Sign-in lists saved — ${counted(admins)} admins, ${counted(graders)} scorers.`);
   });
 
+  $('#clearIdleGraders').addEventListener('click', async () => {
+    const button = $('#clearIdleGraders');
+    // Ten minutes, not the two the lock uses: somebody stepping out for a
+    // coffee has not left, and forgetting them mid-contest is startling.
+    const IDLE_MINUTES = 10;
+    if (button.dataset.armed !== '1') {
+      button.dataset.armed = '1';
+      button.textContent = `Click again — anyone quiet for ${IDLE_MINUTES} min`;
+      setTimeout(() => {
+        button.dataset.armed = '';
+        button.textContent = 'Forget everyone who has left';
+      }, 4000);
+      return;
+    }
+    button.dataset.armed = '';
+    button.textContent = 'Forget everyone who has left';
+    button.disabled = true;
+    try {
+      const gone = await store.clearIdleGraders(IDLE_MINUTES * 60);
+      graderRowsSignature = null;
+      await refresh();
+      toast(gone
+        ? `Forgot ${gone} scorer${gone === 1 ? '' : 's'}. Nothing they entered was touched.`
+        : 'Everyone on the list has been active in the last ten minutes.', 'info');
+    } catch (err) {
+      toast(err.message || 'Could not clear the list.', 'error');
+    } finally {
+      button.disabled = false;
+    }
+  });
+
   $('#rosterImport').addEventListener('click', async () => {
     const { rows, problems } = parseRoster($('#rosterPaste').value);
     if (!rows.length) {
@@ -1918,7 +2064,7 @@ function wire() {
     grader.name = next.trim();
     localStorage.setItem('contest-grader-name', grader.name);
     $('#whoamiName').textContent = grader.name;
-    store.heartbeat(grader).catch(() => {});
+    pushHeartbeat();
   });
 
   const savedTheme = localStorage.getItem('contest-theme');
@@ -1993,7 +2139,7 @@ async function enterApp() {
 
   wire();
   try { await store.releaseStale(Math.round(cfg.CLAIM_TTL_MS / 1000)); } catch { /* best effort */ }
-  await store.heartbeat(grader).catch(() => {});
+  await pushHeartbeat();
   await refresh();
 
   store.onChange((snapshot) => {
@@ -2001,8 +2147,16 @@ async function enterApp() {
   });
   startClockTicker();
 
+  // One tick, two cadences. Both of these writes fan out to every open
+  // screen as a realtime message, so each runs only as often as it has
+  // to rather than on every tick.
+  let lastPresence = 0;
   setInterval(() => {
-    store.heartbeat(grader).catch(() => {});
+    const now = Date.now();
+    if (now - lastPresence >= cfg.PRESENCE_MS) {
+      lastPresence = now;
+      pushHeartbeat();
+    }
     // Renew the lock we hold, and re-take the one on screen if we never
     // got it — a claim skipped because another was in flight would
     // otherwise leave the sheet looking free while somebody types into
@@ -2010,6 +2164,8 @@ async function enterApp() {
     const want = wantedClaim();
     if (!want) return;
     if (held && held.scope === want.scope && held.ref === want.ref) {
+      if (now - lastClaimAt < cfg.CLAIM_RENEW_MS) return;
+      lastClaimAt = now;
       store.claim(want.scope, want.ref, grader, cfg.CLAIM_TTL_MS).catch(() => {});
     } else {
       claimCurrent();

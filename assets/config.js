@@ -12,7 +12,7 @@
 // Bumped on every deploy. index.html and guts.html carry the same string
 // in data-app-version; a mismatch means the browser has a half-updated
 // copy and the portal says so rather than misbehaving quietly.
-export const APP_VERSION = '2026.09.14.1';
+export const APP_VERSION = '2026.09.19.1';
 
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
@@ -50,8 +50,20 @@ export const CONFIG = {
   LEADERBOARD_PAGE: 10,
 
   // ---- Live coordination -------------------------------------------
+  // A lock lasts this long; a scorer who walks away frees their sheet
+  // after it, without anybody having to do anything.
   CLAIM_TTL_MS: 120000,
+  // The tick everything else is scheduled off. It costs nothing on its
+  // own — the two cadences below decide what actually gets written.
   HEARTBEAT_MS: 20000,
+  // Renew a held lock at two thirds of its life. Rewriting it on every
+  // tick instead bought no extra safety and sent four realtime messages
+  // to every open screen inside one lock's lifetime.
+  CLAIM_RENEW_MS: 80000,
+  // How often to say "still here". This only feeds the online count and
+  // the scorer register, so a minute is plenty, and every write of it is
+  // a realtime message to every tab in the building.
+  PRESENCE_MS: 60000,
 };
 
 // ---------------------------------------------------------------------

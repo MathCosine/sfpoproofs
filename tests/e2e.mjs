@@ -1255,6 +1255,18 @@ await shot.close();
   check('the sign-in lists count what you typed',
     (await page.textContent('#graderNamesCount')).includes('2 names'),
     await page.textContent('#graderNamesCount'));
+
+  // The count reads the box, and the box is filled late in a render. Read
+  // too early it reported a saved list as empty — which says the lists are
+  // not in force, the opposite of the truth.
+  await page.click('.tab[data-tab="progress"]');
+  await page.waitForTimeout(300);
+  await page.click('.tab[data-tab="setup"]');
+  await page.waitForTimeout(500);
+  check('and still count it after the panel is rebuilt',
+    (await page.textContent('#graderNamesCount')).includes('2 names')
+    && (await page.textContent('#adminNamesCount')).includes('2 names'),
+    `${await page.textContent('#adminNamesCount')} / ${await page.textContent('#graderNamesCount')}`);
 }
 
 {
@@ -1298,6 +1310,86 @@ await shot.close();
   await visitor.waitForSelector('#app:not(.hidden)');
   check('and a listed admin does', (await visitor.textContent('#roleBadge')).trim() === 'admin');
   await visitor.close();
+}
+
+// ---- correcting a scorer's name, and clearing the register -----------
+{
+  // A second scorer, so there is somebody to rename who is not us.
+  const helper = await ctx.newPage();
+  watch(helper, 'helper');
+  await helper.addInitScript(() => {
+    localStorage.setItem('contest-grader-id', 'grader-typo');
+    localStorage.setItem('contest-grader-name', 'Xu Shoa');
+  });
+  await helper.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await helper.waitForSelector('#app:not(.hidden)');
+  await helper.fill('#individualId', 'A951');
+  await helper.evaluate(() => {
+    document.querySelectorAll('#answerGrid .ans input').forEach((input, i) => {
+      input.value = String(i + 1);
+      input.dispatchEvent(new Event('input'));
+    });
+  });
+  await helper.click('#saveSheet');
+  await helper.waitForTimeout(900);
+
+  await page.click('.tab[data-tab="setup"]');
+  await page.waitForTimeout(600);
+  const rowFor = (name) => page.locator('.grader-row', { hasText: name }).first();
+  check('the register lists everyone who has signed in',
+    (await page.locator('.grader-row').count()) >= 2,
+    `${await page.locator('.grader-row').count()} rows`);
+  check('and counts what each of them keyed',
+    (await rowFor('Xu Shoa').locator('.grader-row__did').textContent()).includes('1 sheet'),
+    await rowFor('Xu Shoa').locator('.grader-row__did').textContent());
+
+  await rowFor('Xu Shoa').locator('input').fill('Xu Shao');
+  await rowFor('Xu Shoa').locator('button', { hasText: 'Rename' }).click();
+  await page.waitForTimeout(900);
+  check('renaming a scorer corrects the register',
+    (await page.locator('.grader-row').allInnerTexts()).join(' ').includes('Xu Shao'));
+  const stamped = await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+    return (db.contestants || []).find((c) => c.individual_id === 'A951')?.entered_by_name;
+  });
+  check('and the sheets they already entered', stamped === 'Xu Shao', String(stamped));
+
+  // It has to reach the person it belongs to, or their heartbeat writes
+  // the typo straight back.
+  await helper.waitForFunction(
+    () => document.querySelector('#whoamiName').textContent === 'Xu Shao',
+    null, { timeout: 30000 }).catch(() => {});
+  check('and reaches the scorer it belongs to',
+    (await helper.textContent('#whoamiName')) === 'Xu Shao',
+    await helper.textContent('#whoamiName'));
+  await helper.close();
+
+  // Removing one forgets the row without touching their work.
+  await page.waitForTimeout(600);
+  const before = await page.locator('.grader-row').count();
+  const target = page.locator('.grader-row', { hasText: 'Xu Shao' }).first();
+  await target.locator('button', { hasText: 'Remove' }).click();
+  await target.locator('button', { hasText: 'Click again' }).click();
+  await page.waitForTimeout(900);
+  check('removing a scorer takes two clicks and then drops them',
+    (await page.locator('.grader-row').count()) === before - 1,
+    `${before} -> ${await page.locator('.grader-row').count()}`);
+  const kept = await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db') || '{}');
+    return (db.contestants || []).find((c) => c.individual_id === 'A951')?.entered_by_name;
+  });
+  check('while their entries stay exactly where they were', kept === 'Xu Shao', String(kept));
+
+  await page.click('#clearIdleGraders');
+  await page.waitForTimeout(200);
+  check('clearing the register is armed before it fires',
+    (await page.textContent('#clearIdleGraders')).includes('Click again'),
+    await page.textContent('#clearIdleGraders'));
+  await page.click('#clearIdleGraders');
+  await page.waitForTimeout(900);
+  check('and says so when everybody is still active',
+    (await page.locator('.toast').last().textContent()).includes('active in the last ten'),
+    (await page.locator('.toast').last().textContent()).trim().slice(0, 60));
 }
 
 // ---- the whole contest at once ---------------------------------------

@@ -588,3 +588,16 @@ tbody tr:hover { background: color-mix(in srgb, var(--cyan) 16%, transparent); }
 tbody tr:hover .rowcopy, .rowcopy:focus-visible { opacity: 1; }
 .rowcopy:active { transform: translate(1px, 1px); }
 .person--out { background: var(--red); text-decoration: line-through; }
+
+/* Scorer register: name, what they keyed, and the two admin actions. */
+.grader-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 12px; border: 2px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--card); margin-bottom: 8px;
+}
+.grader-row__who { display: flex; flex-direction: column; gap: 2px; min-width: 190px; }
+.grader-row__name { font-weight: 800; }
+.grader-row__seen { font-size: 12px; font-weight: 600; color: var(--muted); }
+.grader-row__did { font-size: 12px; font-weight: 700; color: var(--muted); margin-left: auto; }
+.grader-row input.input { max-width: 210px; padding: 7px 10px; }
+.grader-row--off { opacity: .72; }

@@ -579,3 +579,56 @@ export function parseRoster(text) {
 export function indexRoster(rows) {
   return new Map((rows ?? []).map((r) => [String(r.individual_id), r.name ?? '']));
 }
+
+// ---------------------------------------------------------------------
+// Who has been scoring
+//
+// The graders table is a live register: a row per person who has signed
+// in, refreshed on a heartbeat. This turns it into something an admin can
+// act on — who is here, who has gone, and how much each of them keyed.
+// ---------------------------------------------------------------------
+
+export function graderActivity(graders, contestants, gutsAnswers, cfg, now = Date.now()) {
+  const sheets = new Map();
+  for (const c of contestants ?? []) {
+    const id = c.entered_by;
+    if (id) sheets.set(id, (sheets.get(id) ?? 0) + 1);
+  }
+  // Guts arrives one answer at a time; a person keyed a *set*, so count
+  // the distinct team-and-set pairs rather than the twenty-eight boxes.
+  const setsByGrader = new Map();
+  for (const g of gutsAnswers ?? []) {
+    const id = g.entered_by;
+    if (!id) continue;
+    if (!setsByGrader.has(id)) setsByGrader.set(id, new Set());
+    setsByGrader.get(id).add(`${g.team}:${setOfProblem(Number(g.problem), cfg)}`);
+  }
+  return (graders ?? [])
+    .map((g) => {
+      const seen = new Date(g.last_seen).getTime();
+      const idle = Number.isFinite(seen) ? now - seen : Infinity;
+      return {
+        graderId: g.grader_id,
+        name: g.name ?? '',
+        lastSeen: g.last_seen,
+        idleMs: idle,
+        online: idle <= cfg.CLAIM_TTL_MS,
+        sheets: sheets.get(g.grader_id) ?? 0,
+        sets: setsByGrader.get(g.grader_id)?.size ?? 0,
+      };
+    })
+    .sort((a, b) => Number(b.online) - Number(a.online)
+      || a.idleMs - b.idleMs
+      || a.name.localeCompare(b.name));
+}
+
+/** "just now", "4 min ago", "2 h ago" — enough to tell here from gone. */
+export function sinceLabel(ms) {
+  if (!Number.isFinite(ms)) return 'never';
+  const mins = Math.floor(ms / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours} h ago`;
+  return `${Math.floor(hours / 24)} d ago`;
+}
