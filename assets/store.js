@@ -119,8 +119,12 @@ export function supabaseBackend(cfg, injectedClient = null) {
   let cache = EMPTY();
   let resync = null;
   let onVisible = null;
+  let lastLoadAt = 0;
   const listeners = new Set();
   let timer = null;
+
+  /** The team as this tab last saw it, or undefined if it has never seen it. */
+  const cachedTeam = (team) => cache.teams.find((t) => String(t.team) === String(team));
 
   async function getClient() {
     if (client) return client;
@@ -184,7 +188,10 @@ export function supabaseBackend(cfg, injectedClient = null) {
           all('answer_key'),
           all('teams'),
           all('contestants'),
-          all('guts_answers'),
+          // The largest table by far, and only four of its columns are
+          // ever read. entered_by_name and updated_at are roughly half its
+          // weight across 2,800 rows, on every open and every resync.
+          fetchAllPages(() => c.from('guts_answers').select('team,problem,answer,entered_by')),
           all('claims'),
           all('graders'),
           optional('roster'),
@@ -208,6 +215,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
         roster,
         missingTables: missing,
       };
+      lastLoadAt = Date.now();
       return cache;
     },
 
@@ -242,6 +250,12 @@ export function supabaseBackend(cfg, injectedClient = null) {
           }
           channel.subscribe((status) => {
             if (status !== 'SUBSCRIBED') return;
+            // Close the gap between the snapshot we hold and the moment
+            // the socket started listening. On a reconnect that gap can
+            // be minutes and this matters; at startup the portal loaded a
+            // heartbeat ago, and reloading every table a second later
+            // doubled the cost of opening the page for no new data.
+            if (Date.now() - lastLoadAt < 5000) return;
             api.load().then((fresh) => listeners.forEach((fn) => fn(fresh))).catch(() => {});
           });
         });
@@ -270,8 +284,12 @@ export function supabaseBackend(cfg, injectedClient = null) {
       // on every sheet bumps updated_at, fires the public-board trigger and
       // pushes a realtime message to every open portal, hundreds of times
       // over, for a value that is set once.
-      const existing = await c.from('teams').select('division').eq('team', row.team).maybeSingle();
-      if (existing.data?.division === row.division) return;
+      //
+      // And answer that from the snapshot we already hold rather than
+      // asking: the teams table is loaded, kept current by realtime, and
+      // re-read every five minutes. Asking made every saved sheet two
+      // round trips instead of one, four hundred times a contest.
+      if (cachedTeam(row.team)?.division === row.division) return;
       const { error: teamError } = await c.from('teams')
         .upsert({ team: row.team, division: row.division }, { onConflict: 'team' });
       if (teamError) throw new Error(teamError.message);
@@ -283,7 +301,10 @@ export function supabaseBackend(cfg, injectedClient = null) {
         const { error } = await c.from('teams')
           .upsert({ team, name: teamName }, { onConflict: 'team' });
         if (error) throw new Error(error.message);
-      } else {
+      } else if (!cachedTeam(team)) {
+        // The row has to exist or the team never reaches the public board,
+        // which rebuilds from `teams`. But if we already have it, saying so
+        // again is a wasted round trip on every guts set of the contest.
         await c.from('teams').upsert({ team }, { onConflict: 'team', ignoreDuplicates: true });
       }
       const payload = problems.map((p) => ({

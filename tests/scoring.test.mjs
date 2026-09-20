@@ -1226,3 +1226,135 @@ test('a missing table is told apart from a real failure', () => {
   assert.equal(isMissingTable({ message: 'permission denied for table answer_key' }), false);
   assert.equal(isMissingTable(null), false);
 });
+
+// ---------------------------------------------------------------------
+// What each action costs the database
+// ---------------------------------------------------------------------
+
+/** A client that records every request the store makes. */
+function countingClient(seed = {}) {
+  const calls = [];
+  const chain = {
+    eq: () => chain, neq: () => chain, lt: () => chain, select: () => chain,
+    maybeSingle: async () => ({ data: null, error: null }),
+    then: (r) => Promise.resolve({ data: [], error: null }).then(r),
+  };
+  const table = (name) => {
+    const self = {
+      select(cols) { calls.push(`select ${name}${cols && cols !== '*' ? ` ${cols}` : ''}`); return self; },
+      eq: () => self, order: () => self,
+      range: async (from) => ({ data: from === 0 ? (seed[name] ?? []) : [], error: null }),
+      maybeSingle: async () => ({ data: seed[name]?.[0] ?? null, error: null }),
+      upsert: async () => { calls.push(`upsert ${name}`); return { error: null }; },
+      insert() {
+        calls.push(`insert ${name}`);
+        return { select: () => ({ maybeSingle: async () => ({ data: {}, error: null }) }) };
+      },
+      update() { calls.push(`update ${name}`); return chain; },
+      delete() { calls.push(`delete ${name}`); return chain; },
+      then: (r) => Promise.resolve({ data: [], error: null }).then(r),
+    };
+    return self;
+  };
+  return {
+    calls,
+    client: {
+      from: table,
+      channel: () => ({ on() { return this; }, subscribe() {} }),
+      auth: { getSession: async () => ({ data: { session: null } }) },
+      rpc: async () => ({ error: null }),
+    },
+  };
+}
+
+test('a save costs one request once the team is known', async () => {
+  // Both of these used to ask the server something the snapshot already
+  // knew, doubling the round trips on the two actions of the whole
+  // contest that happen eleven hundred times.
+  const { calls, client } = countingClient({ teams: [{ team: 'A01', division: 'A', name: 'Cowbell' }] });
+  const store = supabaseBackend({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' },
+    client);
+  await store.load();
+
+  calls.length = 0;
+  await store.saveContestant({ individual_id: 'A011', team: 'A01', division: 'A', answers: [] });
+  assert.deepEqual(calls, ['upsert contestants'], 'no second trip to check the division');
+
+  calls.length = 0;
+  await store.saveGutsSet('A01', [{ problem: 1, answer: 2 }], 'g', 'G', null);
+  assert.deepEqual(calls, ['upsert guts_answers'], 'no second trip to create a team we have');
+});
+
+test('but a team we have never seen is still created', async () => {
+  const { calls, client } = countingClient({ teams: [] });
+  const store = supabaseBackend({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' },
+    client);
+  await store.load();
+
+  calls.length = 0;
+  await store.saveContestant({ individual_id: 'B011', team: 'B01', division: 'B', answers: [] });
+  assert.deepEqual(calls, ['upsert contestants', 'upsert teams'],
+    'an unknown team is written, or it never reaches the public board');
+
+  calls.length = 0;
+  await store.saveGutsSet('B02', [{ problem: 1, answer: 2 }], 'g', 'G', null);
+  assert.deepEqual(calls, ['upsert teams', 'upsert guts_answers']);
+});
+
+test('the biggest table is read without the columns nothing uses', async () => {
+  const { calls, client } = countingClient();
+  const store = supabaseBackend({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' },
+    client);
+  await store.load();
+  // entered_by_name and updated_at are about half the weight of 2,800
+  // rows and are never read on the client.
+  assert.ok(calls.includes('select guts_answers team,problem,answer,entered_by'),
+    `guts_answers was read as: ${calls.filter((c) => c.includes('guts_answers'))}`);
+});
+
+test('opening the portal reads every table once, not twice', async () => {
+  // refresh() loads, then the socket connects and the subscribe handler
+  // loaded everything again a second later — doubling the cost of opening
+  // the page, for every scorer, every time they reloaded a tab.
+  //
+  // onChange watches page visibility and starts the resync timer, so it
+  // needs a document to attach to and a dispose() afterwards: without
+  // both, the timer outlives the test and the runner never exits.
+  const hadDocument = 'document' in globalThis;
+  const realDocument = globalThis.document;
+  globalThis.document = {
+    visibilityState: 'visible', addEventListener() {}, removeEventListener() {},
+  };
+
+  const open = async (gapMs) => {
+    const { calls, client } = countingClient();
+    let onSubscribed = null;
+    client.channel = () => ({ on() { return this; }, subscribe(cb) { onSubscribed = cb; } });
+    const store = supabaseBackend(
+      { SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' }, client);
+    try {
+      await store.load();
+      store.onChange(() => {});
+      await new Promise((r) => setTimeout(r, 30));
+      if (gapMs) await new Promise((r) => setTimeout(r, gapMs));
+      onSubscribed?.('SUBSCRIBED');
+      await new Promise((r) => setTimeout(r, 50));
+      return calls.filter((c) => c.startsWith('select')).length;
+    } finally {
+      store.dispose();
+    }
+  };
+
+  try {
+    const atStartup = await open(0);
+    assert.equal(atStartup, 9, `opening should read nine tables once, read ${atStartup}`);
+
+    // A reconnect is different: the gap it is closing can be minutes wide,
+    // so there it still reloads.
+    const afterDrop = await open(5200);
+    assert.equal(afterDrop, 18, 'a reconnect still closes the gap it missed');
+  } finally {
+    if (hadDocument) globalThis.document = realDocument;
+    else delete globalThis.document;
+  }
+});

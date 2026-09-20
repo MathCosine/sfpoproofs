@@ -316,6 +316,16 @@ implementation and it does not survive contact with a real contest — twenty st
 machines each pulling a couple of hundred kilobytes per keystroke-sized change runs
 to gigabytes of egress in an afternoon.
 
+**Nothing is asked for twice.** Opening the portal used to read every table, then read
+them all again a second later when the realtime socket finished connecting — double the
+cost of opening the page, for every scorer, every reload. The second read now happens
+only when the gap it closes is real, which is a reconnect rather than a startup. Saving
+a sheet used to ask the server which division a team was in, and saving a guts set used
+to make sure the team row existed: both are answered from the snapshot already in hand,
+so each is one request instead of two — about eleven hundred round trips across a
+contest. And `guts_answers`, much the largest table, is read without the two columns
+nothing on the client uses, which is 55% off it raw and a quarter off it compressed.
+
 **The public board only writes rows that changed.** `refresh_guts_public()` upserts
 with an `IS DISTINCT FROM` guard, so one guts entry moves one row instead of
 rewriting all hundred and emitting a realtime message per team per save.
@@ -333,10 +343,10 @@ with twenty scorers signed in and three board screens running:
 | | |
 | --- | --- |
 | Twenty tabs loading the portal | ~1 MB |
-| The five-minute resync, twenty tabs, six hours | ~60 MB |
+| The five-minute resync, twenty tabs, six hours | ~43 MB |
 | Realtime rows for ~1,100 saves, fanned out to twenty | ~7 MB |
 | Three board screens following every change | ~60 MB |
-| **Total against a 5 GB monthly allowance** | **~130 MB, about 3%** |
+| **Total against a 5 GB monthly allowance** | **~110 MB, about 2%** |
 
 Egress is not the binding limit — **realtime messages are**, and they are dominated by
 the two things every tab writes on a timer rather than by anything anyone types. Each
@@ -378,7 +388,7 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 89 unit tests: scoring, the clock, realtime patching, lock contention
+npm test               # 93 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 203 browser checks, including twenty scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
