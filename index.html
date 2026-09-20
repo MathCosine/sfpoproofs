@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.19.2">
+<body data-app-version="2026.09.20.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -411,6 +411,11 @@
           <input class="input" id="rosterSearch" placeholder="ID, team or name" autocomplete="off">
         </div>
         <div id="rosterList"></div>
+        <div class="chip-row" style="margin-top:10px">
+          <button class="btn btn--ghost" id="rosterExport">Export as CSV</button>
+          <button class="btn btn--warn" id="rosterClear">Remove every participant</button>
+          <span class="muted">Only this list. Answer sheets, scores and the key are untouched.</span>
+        </div>
 
         <details style="margin-top:16px">
           <summary class="field__label" style="cursor:pointer">Import a list</summary>
@@ -426,8 +431,6 @@
                     placeholder="A011, Ada Lovelace&#10;A012, Grace Hopper"></textarea>
           <div class="chip-row" style="margin-top:10px">
             <button class="btn btn--primary" id="rosterImport">Import participants</button>
-            <button class="btn btn--ghost" id="rosterExport">Export as CSV</button>
-            <button class="btn btn--ghost" id="rosterClear">Clear the list</button>
           </div>
           <div id="rosterProblems"></div>
         </details>
@@ -498,6 +501,6 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.09.19.2"></script>
+<script type="module" src="assets/app.js?v=2026.09.20.1"></script>
 </body>
 </html>

@@ -107,7 +107,8 @@ division column is ignored. A team column that **disagrees** with the ID is repo
 rather than quietly dropped — that is a typo worth catching — as is any line with no
 readable ID, and every skipped line is listed at once rather than one at a time.
 Importing updates anyone already listed and leaves the rest alone. Export gives you the
-whole list back as CSV.
+whole list back as CSV, and **Remove every participant** empties the list and nothing
+else — answer sheets, scores, teams and the answer key are untouched.
 
 **Sign-in lists** say who may use each password. One name per line in Admin; a name
 must match what they type at the door, give or take case, spacing and punctuation. An
@@ -300,9 +301,12 @@ project's "Max rows" setting — 1000 by default — and returns the first page 
 error. `guts_answers` reaches 2800 rows at a hundred teams, so a plain select would
 have silently dropped two thirds of the guts round. Reads page until they run out.
 
-**The portal patches, it does not refetch.** Realtime events are folded into the
-cached snapshot row by row, with a full reload only on reconnect and every five
-minutes as a safety net. Refetching every table on every change is the obvious
+**The portal patches, it does not refetch** — including its own writes. Realtime events
+are folded into the cached snapshot row by row, and a saved sheet folds in the row it
+just sent rather than reloading. Refreshing after each write meant nine table reads and
+the whole contest coming back down after every save; that is what made the portal drag
+on a real database, where the demo store's localStorage had hidden it. A full reload now
+happens only on reconnect and every five minutes as a safety net. Refetching every table on every change is the obvious
 implementation and it does not survive contact with a real contest — twenty staff
 machines each pulling a couple of hundred kilobytes per keystroke-sized change runs
 to gigabytes of egress in an afternoon.
@@ -369,8 +373,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 85 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 199 browser checks, including twenty scorers at once
+npm test               # 87 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 203 browser checks, including twenty scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

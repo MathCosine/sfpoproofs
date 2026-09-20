@@ -177,6 +177,18 @@ export function supabaseBackend(cfg, injectedClient = null) {
     },
 
     /**
+     * Fold a row we just wrote into the cached snapshot, so the screen can
+     * move on without pulling the whole contest back down first. Realtime
+     * delivers the authoritative row a moment later and the five-minute
+     * resync is still the backstop — this is a head start, not a second
+     * source of truth.
+     */
+    patchLocal(table, row, eventType = 'UPDATE') {
+      cache = applyPatch(cache, table, { eventType, new: row, old: row });
+      return cache;
+    },
+
+    /**
      * Realtime events patch the cached snapshot in place; a full reload
      * happens only on (re)subscribe and every RESYNC_MS as a safety net
      * against a dropped event.
@@ -539,6 +551,7 @@ function demoBackend(cfg) {
     async currentEmail() { return null; },
     async signOut() {},
     async load() { return read(); },
+    patchLocal() { return read(); },
     onChange(cb) { listeners.add(cb); return () => listeners.delete(cb); },
 
     async saveContestant(row) {

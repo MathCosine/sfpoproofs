@@ -1245,6 +1245,19 @@ await shot.close();
   check('or by team', (await page.locator('.roster-row').count()) >= 3,
     `${await page.locator('.roster-row').count()} rows`);
 
+  // Correcting several in a row must not take the cursor away between
+  // them: the list rebuilds on structure, and a name is not structure.
+  await page.fill('#rosterSearch', '');
+  await page.waitForTimeout(300);
+  await page.locator('.roster-row input').first().evaluate((e) => { e.dataset.mark = 'kept'; });
+  await page.locator('.roster-row input').first().fill('Renamed Once');
+  await page.locator('.roster-row input').first().press('Enter');
+  await page.waitForTimeout(700);
+  check('correcting a name leaves the list standing, cursor and all',
+    (await page.locator('.roster-row input').first()
+      .evaluate((e) => e.dataset.mark ?? '')) === 'kept',
+    'the row was thrown away and rebuilt');
+
   // Removing one.
   await page.fill('#rosterSearch', 'A904');
   await page.waitForTimeout(300);
@@ -1255,6 +1268,30 @@ await shot.close();
     await page.textContent('#rosterState'));
   await page.fill('#rosterSearch', '');
   await page.waitForTimeout(300);
+
+  // Erasing only the participants, and nothing else.
+  const sheetsBefore = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('contest-demo-db') || '{}').contestants?.length ?? 0);
+  await page.click('#rosterClear');
+  await page.waitForTimeout(200);
+  check('erasing the participant list is armed first',
+    (await page.textContent('#rosterClear')).includes('Click again'),
+    await page.textContent('#rosterClear'));
+  await page.click('#rosterClear');
+  await page.waitForTimeout(900);
+  check('and then empties it',
+    (await page.textContent('#rosterState')).trim() === 'none',
+    await page.textContent('#rosterState'));
+  check('while every answer sheet is left exactly where it was',
+    (await page.evaluate(
+      () => JSON.parse(localStorage.getItem('contest-demo-db') || '{}').contestants?.length ?? 0))
+      === sheetsBefore,
+    `${sheetsBefore} sheets before`);
+
+  // Put back the two that the checks below read.
+  await page.fill('#rosterPaste', 'A901, Ada Lovelace\nA902, Grace B Hopper');
+  await page.click('#rosterImport');
+  await page.waitForTimeout(900);
 
   await page.click('.tab[data-entry="individual"]');
   await page.click('#clearSheet');

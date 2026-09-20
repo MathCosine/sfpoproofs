@@ -1121,3 +1121,64 @@ test('how long ago reads the way a person would say it', () => {
   assert.equal(sinceLabel(50 * 3600000), '2 d ago');
   assert.equal(sinceLabel(Infinity), 'never');
 });
+
+// ---------------------------------------------------------------------
+// Saving must not re-download the contest
+// ---------------------------------------------------------------------
+
+test('a save patches the cache instead of pulling every table back down', async () => {
+  // Refreshing after each write meant ten round trips and the whole
+  // contest after every saved sheet, which is what made the portal drag.
+  let selects = 0;
+  const query = () => {
+    const self = {
+      select() { selects += 1; return self; },
+      eq() { return self; },
+      neq() { return self; },
+      range() { return self; },
+      order() { return self; },
+      maybeSingle: async () => ({ data: null, error: null }),
+      upsert: async () => ({ error: null }),
+      update: () => ({ eq: async () => ({ error: null }) }),
+      delete: () => ({ eq: async () => ({ error: null }) }),
+      then: (resolve) => Promise.resolve({ data: [], error: null }).then(resolve),
+    };
+    return self;
+  };
+  const client = {
+    from: () => query(),
+    channel: () => ({ on() { return this; }, subscribe() {} }),
+    auth: { getSession: async () => ({ data: { session: null } }) },
+  };
+  const store = supabaseBackend({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' },
+    client);
+
+  await store.load();
+  assert.ok(selects >= 8, `a full load reads every table — saw ${selects}`);
+
+  selects = 0;
+  await store.saveContestant({ individual_id: 'A011', team: 'A01', answers: [] });
+  store.patchLocal('contestants', { individual_id: 'A011', team: 'A01', answers: [] });
+  assert.ok(selects <= 1, `a sheet save should read at most one table, read ${selects}`);
+
+  selects = 0;
+  await store.saveRoster([{ individual_id: 'A011', name: 'Ada Lovelace' }]);
+  const cache = store.patchLocal('roster', { individual_id: 'A011', name: 'Ada Lovelace' });
+  assert.equal(selects, 0, 'a roster edit should read nothing back');
+  assert.equal(cache.roster.find((r) => r.individual_id === 'A011')?.name, 'Ada Lovelace',
+    'and the screen sees the change immediately');
+});
+
+test('a local patch removes a row as well as adding one', () => {
+  const client = {
+    from: () => ({}),
+    channel: () => ({ on() { return this; }, subscribe() {} }),
+    auth: { getSession: async () => ({ data: { session: null } }) },
+  };
+  const store = supabaseBackend({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' },
+    client);
+  store.patchLocal('roster', { individual_id: 'A011', name: 'Ada' });
+  store.patchLocal('roster', { individual_id: 'A012', name: 'Grace' });
+  const after = store.patchLocal('roster', { individual_id: 'A011' }, 'DELETE');
+  assert.deepEqual(after.roster.map((r) => r.individual_id), ['A012']);
+});

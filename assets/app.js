@@ -420,23 +420,25 @@ async function saveSheet() {
 
   const button = $('#saveSheet');
   button.disabled = true;
+  // Read the row before clearing the form, not after.
+  const row = {
+    individual_id: current.id,
+    team: current.team,
+    member: current.member,
+    division,
+    name: $('#contestantName').value.trim(),
+    answers: values,
+    entered_by: grader.id,
+    entered_by_name: grader.name,
+    entered_at: new Date().toISOString(),
+  };
   try {
-    await store.saveContestant({
-      individual_id: current.id,
-      team: current.team,
-      member: current.member,
-      division,
-      name: $('#contestantName').value.trim(),
-      answers: values,
-      entered_by: grader.id,
-      entered_by_name: grader.name,
-      entered_at: new Date().toISOString(),
-    });
+    await store.saveContestant(row);
     const result = scoreSheet(values, derived.key, cfg, division);
     toast(`${current.id} saved · ${result.correct}/${cfg.INDIVIDUAL_PROBLEMS} · ${result.score} pts`);
     await releaseHeld();
     clearSheet({ keepTeam: true });
-    await refresh();
+    applyWrite([['contestants', row]]);
   } catch (err) {
     toast(err.message || 'Could not save that sheet.', 'error');
   } finally {
@@ -576,7 +578,21 @@ async function saveGutsSet() {
     $('#gutsSet').value = String(next);
     gutsLoadedRef = null;
     fillGrid(gutsInputs, []);
-    await refresh();
+    applyWrite([
+      ...problems.map((p, i) => ['guts_answers', {
+        team: current.team,
+        problem: p,
+        answer: values[i],
+        entered_by: grader.id,
+        entered_by_name: grader.name,
+      }]),
+      ['teams', {
+        ...(team ?? {}),
+        team: current.team,
+        division: current.division,
+        name: typedName || team?.name || '',
+      }],
+    ]);
     gutsInputs[0]?.focus();
   } catch (err) {
     toast(err.message || 'Could not save that set.', 'error');
@@ -1444,83 +1460,104 @@ function renderGraders() {
  * by somebody else's save landing in the background.
  */
 const ROSTER_SHOWN = 40;
-let rosterSignature = null;
+let rosterShape = null;
+const rosterFields = new Map();      // individual_id -> input
 
 function renderRoster() {
   const host = $('#rosterList');
   const all = rosterRows(data.roster);
   const search = $('#rosterSearch').value;
-  const shown = filterRoster(all, search);
-  const signature = `${search}|${all.map((r) => `${r.individualId}:${r.name}`).join(',')}`;
+  const shown = filterRoster(all, search).slice(0, ROSTER_SHOWN);
 
   $('#rosterState').textContent = all.length
     ? `${all.length} participant${all.length === 1 ? '' : 's'}`
     : 'none';
-  if (signature === rosterSignature) return;
-  rosterSignature = signature;
-  host.replaceChildren();
 
-  if (!all.length) {
-    host.appendChild(el('p', 'field__hint',
-      'Nobody loaded yet. Add one above, or import a list below.'));
-    return;
+  // Rebuild only when the rows on screen change. A name being corrected
+  // changes the data but not the shape, and rebuilding for that took the
+  // cursor out from under whoever was typing the next one.
+  const shape = `${search}|${all.length}|${shown.map((r) => r.individualId).join(',')}`;
+  if (shape !== rosterShape) {
+    rosterShape = shape;
+    rosterFields.clear();
+    host.replaceChildren();
+
+    if (!all.length) {
+      host.appendChild(el('p', 'field__hint',
+        'Nobody loaded yet. Add one above, or import a list below.'));
+      return;
+    }
+    if (!shown.length) {
+      host.appendChild(el('p', 'field__hint', `Nobody matches “${search.trim()}”.`));
+      return;
+    }
+
+    const list = el('div', 'roster-list');
+    for (const person of shown) {
+      const row = el('div', 'roster-row');
+      const field = el('input', 'input');
+      field.value = person.name;
+      field.placeholder = 'no name';
+      field.setAttribute('aria-label', `Name for ${person.individualId}`);
+      rosterFields.set(person.individualId, field);
+
+      const save = async () => {
+        const next = field.value.trim();
+        const current = rosterRows(data.roster)
+          .find((r) => r.individualId === person.individualId);
+        if (!current || next === current.name) return;
+        try {
+          const written = {
+            individual_id: person.individualId,
+            name: next,
+            division: person.division,
+            team: person.team,
+          };
+          await store.saveRoster([written]);
+          applyWrite([['roster', written]]);
+        } catch (err) {
+          toast(err.message || 'Could not save that name.', 'error');
+        }
+      };
+      // Saves when you leave the box or press Enter, so a list can be
+      // corrected by tabbing straight down it.
+      field.addEventListener('change', save);
+      field.addEventListener('keydown', (e) => { if (e.key === 'Enter') field.blur(); });
+
+      const drop = el('button', 'btn btn--ghost', 'Remove');
+      drop.type = 'button';
+      drop.addEventListener('click', async () => {
+        drop.disabled = true;
+        try {
+          await store.removeRosterEntry(person.individualId);
+          rosterShape = null;
+          applyWrite([['roster', { individual_id: person.individualId }, 'DELETE']]);
+          toast(`${person.individualId} removed from the participant list.`, 'info');
+        } catch (err) {
+          drop.disabled = false;
+          toast(err.message || 'Could not remove that participant.', 'error');
+        }
+      });
+
+      row.append(el('span', 'roster-row__id', person.individualId),
+        el('span', 'roster-row__team', `team ${person.team}`), field, drop);
+      list.appendChild(row);
+    }
+    host.appendChild(list);
+    const matches = filterRoster(all, search).length;
+    if (matches > ROSTER_SHOWN) {
+      host.appendChild(el('p', 'roster-more',
+        `Showing ${ROSTER_SHOWN} of ${matches}. Search to narrow it down.`));
+    }
   }
-  if (!shown.length) {
-    host.appendChild(el('p', 'field__hint', `Nobody matches “${search.trim()}”.`));
-    return;
-  }
 
-  const list = el('div', 'roster-list');
-  for (const person of shown.slice(0, ROSTER_SHOWN)) {
-    const row = el('div', 'roster-row');
-    const field = el('input', 'input');
-    field.value = person.name;
-    field.placeholder = 'no name';
-    field.setAttribute('aria-label', `Name for ${person.individualId}`);
-
-    const save = async (next) => {
-      if (next === person.name) return;
-      try {
-        await store.saveRoster([{
-          individual_id: person.individualId,
-          name: next,
-          division: person.division,
-          team: person.team,
-        }]);
-        rosterSignature = null;
-        await refresh();
-      } catch (err) {
-        toast(err.message || 'Could not save that name.', 'error');
-      }
-    };
-    // Save when they leave the box or press Enter — no button to hunt for
-    // down a list of four hundred.
-    field.addEventListener('change', () => save(field.value.trim()));
-    field.addEventListener('keydown', (e) => { if (e.key === 'Enter') field.blur(); });
-
-    const drop = el('button', 'btn btn--ghost', 'Remove');
-    drop.type = 'button';
-    drop.addEventListener('click', async () => {
-      drop.disabled = true;
-      try {
-        await store.removeRosterEntry(person.individualId);
-        rosterSignature = null;
-        await refresh();
-        toast(`${person.individualId} removed from the participant list.`, 'info');
-      } catch (err) {
-        drop.disabled = false;
-        toast(err.message || 'Could not remove that participant.', 'error');
-      }
-    });
-
-    row.append(el('span', 'roster-row__id', person.individualId),
-      el('span', 'roster-row__team', `team ${person.team}`), field, drop);
-    list.appendChild(row);
-  }
-  host.appendChild(list);
-  if (shown.length > ROSTER_SHOWN) {
-    host.appendChild(el('p', 'roster-more',
-      `Showing ${ROSTER_SHOWN} of ${shown.length}. Search to narrow it down.`));
+  // Repaint: anybody else's correction lands here, but never on top of a
+  // box somebody is currently typing in.
+  for (const person of shown) {
+    const field = rosterFields.get(person.individualId);
+    if (field && field !== document.activeElement && field.value !== person.name) {
+      field.value = person.name;
+    }
   }
 }
 
@@ -1760,6 +1797,19 @@ function render() {
   }
   // After the boxes are filled, never before: these counts read them.
   renderStaffCounts();
+}
+
+/**
+ * After a write, fold the row we just sent into the cached snapshot and
+ * repaint — instead of `refresh()`, which pulls all eight tables back
+ * down. At a hundred teams that is ten round trips and the whole contest
+ * after every saved sheet, which is what made the portal feel slow.
+ */
+function applyWrite(patches) {
+  for (const [table, row, eventType] of patches) {
+    data = store.patchLocal(table, row, eventType ?? 'UPDATE');
+  }
+  render();
 }
 
 async function refresh() {
@@ -2024,7 +2074,7 @@ function wire() {
     }
   });
 
-  $('#rosterSearch').addEventListener('input', () => { rosterSignature = null; renderRoster(); });
+  $('#rosterSearch').addEventListener('input', renderRoster);
 
   const addParticipant = async () => {
     const parsed = parseIndividualId($('#rosterAddId').value);
@@ -2032,16 +2082,17 @@ function wire() {
     const button = $('#rosterAdd');
     button.disabled = true;
     try {
-      await store.saveRoster([{
+      const row = {
         individual_id: parsed.id,
         name: $('#rosterAddName').value.trim(),
         division: parsed.division,
         team: parsed.team,
-      }]);
+      };
+      await store.saveRoster([row]);
       $('#rosterAddId').value = '';
       $('#rosterAddName').value = '';
-      rosterSignature = null;
-      await refresh();
+      rosterShape = null;
+      applyWrite([['roster', row]]);
       toast(`${parsed.id} added to team ${parsed.team}.`);
       $('#rosterAddId').focus();
     } catch (err) {
@@ -2080,7 +2131,7 @@ function wire() {
     try {
       if (rows.length) await store.saveRoster(rows);
       $('#rosterPaste').value = '';
-      rosterSignature = null;
+      rosterShape = null;
       await refresh();
       toast(rows.length
         ? `Imported ${rows.length} participant${rows.length === 1 ? '' : 's'}.`
@@ -2107,15 +2158,21 @@ function wire() {
     const button = $('#rosterClear');
     if (button.dataset.armed !== '1') {
       button.dataset.armed = '1';
-      button.textContent = 'Click again to clear';
-      setTimeout(() => { button.dataset.armed = ''; button.textContent = 'Clear the list'; }, 4000);
+      button.textContent = `Click again — removes all ${data.roster.length}`;
+      setTimeout(() => {
+        button.dataset.armed = '';
+        button.textContent = 'Remove every participant';
+      }, 4000);
       return;
     }
     button.dataset.armed = '';
-    button.textContent = 'Clear the list';
+    button.textContent = 'Remove every participant';
+    const had = data.roster.length;
     await store.clearRoster();
+    rosterShape = null;
     await refresh();
-    toast('Participant list cleared. Saved sheets keep the names already on them.', 'info');
+    toast(`Removed ${had} participant${had === 1 ? '' : 's'}. `
+      + 'Answer sheets and scores are untouched, and saved sheets keep their names.', 'info');
   });
 
   $('#dqPersonAdd').addEventListener('click', async () => {
