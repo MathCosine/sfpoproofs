@@ -18,7 +18,7 @@ const divisionOfTeamKey = (team) => {
 const EMPTY = () => ({
   settings: null, state: null, key: [], teams: [],
   contestants: [], gutsAnswers: [], claims: [], graders: [], gutsPublic: [],
-  roster: [],
+  roster: [], missingTables: [],
 });
 
 // Which cache field each table feeds, and how to tell two rows apart.
@@ -88,11 +88,26 @@ const PAGE_SIZE = 1000;
  * `makeQuery` has to build a fresh query each call: a PostgREST builder
  * cannot be reused once it has been awaited.
  */
+/**
+ * Does this error mean the table simply is not there yet? PostgREST says
+ * 42P01 from Postgres, or PGRST205 from its own schema cache.
+ */
+export function isMissingTable(error) {
+  const text = `${error?.code ?? ''} ${error?.message ?? error ?? ''}`;
+  return /42P01|PGRST205|does not exist|schema cache|could not find the table/i.test(text);
+}
+
 export async function fetchAllPages(makeQuery, pageSize = PAGE_SIZE) {
   const rows = [];
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await makeQuery().range(from, from + pageSize - 1);
-    if (error) throw new Error(error.message);
+    if (error) {
+      // Keep the code on the way out: it is how a missing table is told
+      // apart from a real failure, and the message alone is not reliable.
+      const wrapped = new Error(error.message);
+      wrapped.code = error.code;
+      throw wrapped;
+    }
     if (data?.length) rows.push(...data);
     if (!data || data.length < pageSize) return rows;
   }
@@ -147,7 +162,21 @@ export function supabaseBackend(cfg, injectedClient = null) {
 
     async load() {
       const c = await getClient();
+      const missing = [];
       const all = (table) => fetchAllPages(() => c.from(table).select('*'));
+      // A table a later version of the schema adds must not take the whole
+      // portal down before somebody has run it. Reference data comes back
+      // empty and says which table is missing; results tables do not, and
+      // are reported as the setup step they are.
+      const optional = async (table) => {
+        try {
+          return await all(table);
+        } catch (err) {
+          if (!isMissingTable(err)) throw err;
+          missing.push(table);
+          return [];
+        }
+      };
       const [settings, state, key, teams, contestants, gutsAnswers, claims, graders, roster] =
         await Promise.all([
           c.from('app_settings').select('*').eq('id', 1).maybeSingle(),
@@ -158,10 +187,15 @@ export function supabaseBackend(cfg, injectedClient = null) {
           all('guts_answers'),
           all('claims'),
           all('graders'),
-          all('roster'),
+          optional('roster'),
         ]);
       const bad = [settings, state].find((r) => r.error);
-      if (bad) throw new Error(bad.error.message);
+      if (bad) {
+        throw new Error(isMissingTable(bad.error)
+          ? 'This database has not been set up yet. Run supabase/schema.sql in the '
+            + 'Supabase SQL Editor, then reload.'
+          : bad.error.message);
+      }
       cache = {
         settings: settings.data ?? null,
         state: state.data ?? null,
@@ -172,6 +206,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
         claims,
         graders,
         roster,
+        missingTables: missing,
       };
       return cache;
     },

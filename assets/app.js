@@ -1483,6 +1483,18 @@ function renderRoster() {
     host.replaceChildren();
 
     if (!all.length) {
+      // Says which of the two it is: nothing imported yet, or the table
+      // the schema adds is not in this database yet.
+      if (data.missingTables?.includes('roster')) {
+        const warn = el('div', 'banner banner--warn');
+        const d = el('div');
+        d.append(el('b', null, 'This database has no participant table yet'),
+          el('span', null, 'Run supabase/schema.sql in the Supabase SQL Editor, then '
+            + 'reload. Everything else on this page works without it.'));
+        warn.append(el('div', null, '⚠'), d);
+        host.appendChild(warn);
+        return;
+      }
       host.appendChild(el('p', 'field__hint',
         'Nobody loaded yet. Add one above, or import a list below.'));
       return;
@@ -2368,6 +2380,12 @@ async function enterApp() {
       claimCurrent();
     }
   }, cfg.HEARTBEAT_MS);
+
+  if (data.missingTables?.length) {
+    toast(`Your database is missing: ${data.missingTables.join(', ')}. `
+      + 'Run supabase/schema.sql in the Supabase SQL Editor. Everything else works.',
+    'error');
+  }
 
   addEventListener('pagehide', () => { releaseHeld(); });
   $('#individualId').focus();

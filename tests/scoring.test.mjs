@@ -606,7 +606,7 @@ test('CSV still round-trips commas and quotes', () => {
 // Reading a whole table, not the first page of it
 // ---------------------------------------------------------------------
 
-import { fetchAllPages } from '../assets/store.js';
+import { fetchAllPages, isMissingTable } from '../assets/store.js';
 
 /** A stand-in that behaves like Supabase: it will not return more than cap rows. */
 function pagedTable(total, cap = 1000) {
@@ -1181,4 +1181,48 @@ test('a local patch removes a row as well as adding one', () => {
   store.patchLocal('roster', { individual_id: 'A012', name: 'Grace' });
   const after = store.patchLocal('roster', { individual_id: 'A011' }, 'DELETE');
   assert.deepEqual(after.roster.map((r) => r.individual_id), ['A012']);
+});
+
+// ---------------------------------------------------------------------
+// A database that is one schema run behind
+// ---------------------------------------------------------------------
+
+test('a table the schema has not added yet does not take the portal down', async () => {
+  // The roster table arrived in a later schema run. Until somebody runs
+  // it, every other table still has to load — otherwise the whole portal
+  // is dead on a database that is one step behind.
+  const query = (table) => {
+    const self = {
+      select() { return self; },
+      eq() { return self; },
+      order() { return self; },
+      range: async () => (table === 'roster'
+        ? { data: null,
+          error: { code: 'PGRST205', message: "Could not find the table 'public.roster'" } }
+        : { data: [{ id: 1 }], error: null }),
+      maybeSingle: async () => ({ data: { id: 1 }, error: null }),
+    };
+    return self;
+  };
+  const client = {
+    from: (t) => query(t),
+    channel: () => ({ on() { return this; }, subscribe() {} }),
+    auth: { getSession: async () => ({ data: { session: null } }) },
+  };
+  const store = supabaseBackend({ SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' },
+    client);
+
+  const snapshot = await store.load();
+  assert.deepEqual(snapshot.missingTables, ['roster'], 'and it says which one is missing');
+  assert.deepEqual(snapshot.roster, [], 'the missing one reads as empty');
+  assert.equal(snapshot.contestants.length, 1, 'everything else still loads');
+});
+
+test('a missing table is told apart from a real failure', () => {
+  assert.equal(isMissingTable({ code: '42P01' }), true);
+  assert.equal(isMissingTable({ code: 'PGRST205' }), true);
+  assert.equal(isMissingTable({ message: 'relation "public.roster" does not exist' }), true);
+  assert.equal(isMissingTable({ message: 'JWT expired' }), false);
+  assert.equal(isMissingTable({ message: 'permission denied for table answer_key' }), false);
+  assert.equal(isMissingTable(null), false);
 });

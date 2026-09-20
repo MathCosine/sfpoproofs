@@ -194,6 +194,11 @@ with the new one. Use something long — four or five unrelated words beats a sh
 scramble, and it has to be read out to twenty people. The password is never in this
 repo, and changing it does not touch any data.
 
+A database that is one schema run behind does not take the portal down. Reference data
+the schema adds later — the participant list — comes back empty with a banner naming the
+table to run, and everything else keeps working. A results table genuinely missing is
+reported as the setup step it is, rather than as a Postgres error.
+
 ### 2b. Close sign-up — do not skip this
 
 **Authentication → Sign In / Providers → Email → turn off "Allow new users to sign
@@ -373,7 +378,7 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 87 unit tests: scoring, the clock, realtime patching, lock contention
+npm test               # 89 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 203 browser checks, including twenty scorers at once
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
