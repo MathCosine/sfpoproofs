@@ -253,6 +253,25 @@ begin
     return;
   end if;
 
+  -- One rebuild at a time.
+  --
+  -- This runs from a trigger, so twenty scorers saving at the same
+  -- moment run twenty copies of it at once, each locking most of
+  -- guts_public. The row order a scan hands back is not the same in
+  -- every session — least of all while teams are being created, which
+  -- is exactly what the first minutes of grading look like — so two
+  -- rebuilds would take the same rows in opposite orders and Postgres
+  -- would kill one of them for deadlock. The scorer saw "deadlock
+  -- detected" and lost the save.
+  --
+  -- The lock is taken before any row of guts_public is touched and is
+  -- released at commit. Nothing that holds it ever waits for a row
+  -- another holder could be sitting on, so it cannot deadlock in turn;
+  -- rebuilds simply queue. At full size (100 teams, 2,800 guts answers)
+  -- a rebuild measures about 3 ms, so twenty queued behind each other
+  -- come to a twentieth of a second and nobody notices.
+  perform pg_advisory_xact_lock(hashtext('refresh_guts_public'));
+
   insert into guts_public (team, name, division, score, solved, answered, set_mask,
                            disqualified, updated_at)
   select t.team,
@@ -290,6 +309,9 @@ begin
       ) per_set
      group by team
   ) sm on sm.team = t.team
+  -- Belt as well as braces: a fixed order means every rebuild takes the
+  -- rows the same way round even if the lock above is ever removed.
+  order by t.team
   on conflict (team) do update set
     name = excluded.name,
     division = excluded.division,

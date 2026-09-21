@@ -158,11 +158,16 @@ changes nothing and prints a row per check; every row should say OK. Any FAIL me
 re-run `schema.sql`, which migrates in place.
 
 This matters because the schema has changed since the first version: the answer key
-was split by division, the public board gained set progress, and the functions were
-closed to anonymous callers. It is also the fastest way to find out whether an
-earlier run actually applied — the SQL Editor runs a script as one transaction, so a
-single failing statement rolls the whole thing back and leaves the database exactly
-as it was.
+was split by division, the public board gained set progress, the functions were
+closed to anonymous callers, and — most recently — the public-board rebuild was made
+to run one at a time. That last one is worth re-running for on its own: without it,
+two scorers saving in the same instant could deadlock in the database and one of them
+would lose the save, which is exactly what the opening minutes of grading look like.
+`verify.sql` reports it as **Public board rebuilds one at a time**.
+
+Verifying is also the fastest way to find out whether an earlier run actually
+applied — the SQL Editor runs a script as one transaction, so a single failing
+statement rolls the whole thing back and leaves the database exactly as it was.
 
 ### 1. A Supabase project
 
@@ -368,8 +373,10 @@ is simply not rewritten four times inside each of those two minutes.
 
 Concurrent connections land near 25 against 200. **Nothing here needs a paid plan.** The
 resync also pauses entirely in a tab nobody is looking at. The browser tests run twenty
-real tabs signing in, colliding on one sheet and saving at the same instant, so the
-behaviour is measured rather than estimated.
+real tabs signing in, colliding on one sheet and saving at the same instant, and
+`npm run test:db` repeats the collision from twenty separate connections against a real
+Postgres — so the behaviour is measured rather than estimated, on both sides of the
+wire.
 
 ---
 
@@ -390,13 +397,47 @@ data. The bar reads **demo mode** in amber throughout.
 ```bash
 npm test               # 93 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 203 browser checks, including twenty scorers at once
+npm run test:db        # 18 checks: twenty connections racing a real Postgres
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
-Ten scorers at once is covered from both ends: the lock's mutual exclusion is unit
-tested against the Postgres contract (ten racing claims on one sheet, exactly one
-wins; an abandoned claim can be taken over, a live one cannot), and the browser
-suite runs ten real tabs with ten identities entering and saving simultaneously.
+**Twenty scorers at once** is covered from three sides, because each one misses what
+the others catch:
+
+| | what it runs | what it proves |
+|---|---|---|
+| `npm test` | the lock logic against the Postgres contract | the rules are right |
+| `npm run test:e2e` | twenty real browser tabs, twenty identities | the portal behaves |
+| `npm run test:db` | twenty connections against a real Postgres | the database holds |
+
+The third is the one that matters on contest day, and the one the others cannot
+reach: the browser tabs share a single Web Locks API inside one browser, whereas
+twenty laptops in a gym share nothing but the database. So `test:db` applies
+`supabase/schema.sql` verbatim to a throwaway Postgres and fires the portal's exact
+statements from twenty connections timed to land in the same instant — one sheet
+claimed by twenty (exactly one wins, nineteen are told who has it), an abandoned
+sheet (taken over once, not twenty times), a sheet still being worked on (renews for
+its holder, blocks everyone else), twenty sheets at once (nobody waits), twenty
+saves landing together, twenty guts sets firing the public-board trigger at once
+(no deadlock), and twenty scorers arriving together.
+
+It earned its keep immediately: twenty saves landing together deadlocked in the
+database roughly one storm in three, and a scorer whose save lost that coin toss got
+an error instead of a saved paper. Two rebuilds of the public board were walking the
+same rows in different orders. `refresh_guts_public()` now takes a transaction-level
+advisory lock before it touches a row, so rebuilds queue instead of colliding. A
+rebuild measures about 3 ms at full contest size, so twenty of them queued behind
+each other cost a twentieth of a second. And because "usually passes" is not a
+regression test, the suite also checks the serialisation directly: hold one rebuild
+open, and a second must wait.
+
+It needs a database:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/postgres npm run test:db
+```
+
+CI brings up its own `postgres:16` for it, so it runs on every push.
 
 The unit tests cover where a mistake would silently produce a wrong winner: blank
 versus wrong versus unkeyed answers, zero as a real answer, rising guts points, the

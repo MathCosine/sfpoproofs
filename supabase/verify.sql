@@ -175,6 +175,14 @@ select 11, 'Public board rebuild triggers',
     then 'OK' else 'FAIL' end,
   'One each on guts_answers, answer_key and teams'
 
+union all
+select 11.5, 'Public board rebuilds one at a time',
+  case when (select prosrc from pg_proc
+             where proname = 'refresh_guts_public'
+               and pronamespace = 'public'::regnamespace) like '%pg_advisory_xact_lock%'
+    then 'OK' else 'FAIL' end,
+  'Without it two scorers saving at the same moment can deadlock and lose a save'
+
 -- 6. the singleton rows --------------------------------------------------
 union all
 select 12, 'Settings and contest state rows exist',
