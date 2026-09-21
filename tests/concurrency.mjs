@@ -328,9 +328,17 @@ const saveSheet = async (n, at, sheet = null) => {
 {
   await sql('truncate contestants, guts_answers, guts_public, teams');
   const holder = psql(['-v', 'ON_ERROR_STOP=1', '-c',
-    `begin; select refresh_guts_public(); select pg_sleep(4); commit;`]);
-  // Let the holder get its lock before asking for the same one.
-  await new Promise((r) => setTimeout(r, 1200));
+    `begin; select refresh_guts_public(); select pg_sleep(9); commit;`]);
+  // Wait for the holder to actually hold it rather than guessing how
+  // long its process takes to start. A fixed pause would pass or fail on
+  // how busy the machine is, which is the opposite of what this checks.
+  let held = false;
+  for (let i = 0; i < 80 && !held; i++) {
+    held = (await one(`select count(*) from pg_locks
+                       where locktype = 'advisory' and granted`)) !== '0';
+    if (!held) await new Promise((r) => setTimeout(r, 100));
+  }
+  check('the rebuild takes a lock at all', held, held ? '' : 'no advisory lock appeared');
   let blocked = false;
   try {
     await psql(['-v', 'ON_ERROR_STOP=1', '-c',

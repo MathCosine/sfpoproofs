@@ -397,7 +397,7 @@ data. The bar reads **demo mode** in amber throughout.
 ```bash
 npm test               # 93 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 203 browser checks, including twenty scorers at once
-npm run test:db        # 18 checks: twenty connections racing a real Postgres
+npm run test:db        # 19 checks: twenty connections racing a real Postgres
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
