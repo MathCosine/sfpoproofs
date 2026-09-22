@@ -168,6 +168,13 @@ any of those strays can be read with the anon key, because that key ships with t
 site: a table from another project arrives under its own rules, not ours, and one with
 row level security switched off is readable by anyone who opens the page.
 
+If what it finds is another project's schema, [`supabase/undo-pip.sql`](supabase/undo-pip.sql)
+is the shape of the cure: it removes one named set of foreign tables and functions and
+nothing else. It checks its own removal list against the contest's ten tables and six
+functions before it runs, stops without changing anything if a table it is about to
+drop still holds rows, and leaves anything it cannot positively identify alone —
+printing it, with its source, for you to judge.
+
 It looks hardest at the one script that can really hurt: the clean-up block at the
 bottom of `schema.sql`, meant for reusing the old proof-grading project. Four of the
 six table names it drops belong to this contest too, so running it here takes the
