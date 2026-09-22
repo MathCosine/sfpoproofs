@@ -43,6 +43,20 @@ mytrg(g) as (
 extension_fns as (
   select objid from pg_depend where classid = 'pg_proc'::regclass and deptype = 'e'
 ),
+-- Only public is this contest's business. Supabase's own schemas --
+-- auth, storage, realtime, cron -- carry triggers and functions of their
+-- own, and calling those strays would send you hunting something that
+-- was always meant to be there. The table name is carried along because
+-- one trigger name on six tables is six findings, not one.
+stray_triggers as (
+  select c.relname || '.' || t.tgname as who
+    from pg_trigger t
+    join pg_class c on c.oid = t.tgrelid
+    join pg_namespace n on n.oid = c.relnamespace
+   where not t.tgisinternal
+     and n.nspname = 'public'
+     and t.tgname not in (select g from mytrg)
+),
 strays as (
   select c.relname, c.relkind from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
@@ -87,6 +101,25 @@ orphans as (
                   where not exists (select 1 from public.teams t where t.team = g.team)',
                 false, false, '')))[1]::text::bigint end as guts
 ),
+-- A stray table is reachable by the published key if row level security
+-- is off, or if it is on but a policy lets anon in.
+exposed as (
+  select s.relname,
+         case when not c.relrowsecurity then 'row level security is off'
+              else 'a policy lets anon in' end as why
+    from strays s
+    join pg_class c on c.relname = s.relname
+    join pg_namespace n on n.oid = c.relnamespace and n.nspname = 'public'
+   where s.relkind in ('r','p')
+     -- has_table_privilege raises on a role that is not there, and this
+     -- file has to survive being run somewhere that is not Supabase.
+     and exists (select 1 from pg_roles where rolname = 'anon')
+     and has_table_privilege('anon', c.oid, 'SELECT')
+     and (not c.relrowsecurity
+          or exists (select 1 from pg_policies p
+                      where p.schemaname = 'public' and p.tablename = s.relname
+                        and 'anon' = any(p.roles)))
+),
 results as (
 
 -- 1. here, and should not be ---------------------------------------------
@@ -113,12 +146,9 @@ select 2, 'Functions that this contest did not create',
            'none -- only the six this contest owns')
 
 union all
-select 3, 'Triggers that this contest did not create',
-  case when (select count(*) from pg_trigger
-              where not tgisinternal and tgname not in (select g from mytrg)) = 0
-    then 'OK' else 'CHECK' end,
-  coalesce((select string_agg(tgname, ', ' order by tgname) from pg_trigger
-             where not tgisinternal and tgname not in (select g from mytrg)),
+select 3, 'Triggers on public tables that this contest did not create',
+  case when (select count(*) from stray_triggers) = 0 then 'OK' else 'CHECK' end,
+  coalesce((select string_agg(who, ', ' order by who) from stray_triggers),
            'none -- only the seven this contest owns')
 
 -- 2. should be here, and is not -------------------------------------------
@@ -220,7 +250,20 @@ select 10, 'The destructive ones, most-run first', 'INFO',
                  order by calls desc limit 8) top', false, false, '')))[1]::text,
          'none so far') end
 
--- 5. what is in there right now --------------------------------------------
+-- 5. can the published key read what does not belong here? -----------------
+-- The anon key ships with the site, so anything in public that anon can
+-- reach is readable by anyone who views the page. That is fine for this
+-- contest's two public tables and is exactly what row level security is
+-- there to stop everywhere else -- but a stray table from another
+-- project arrives under its own rules, not ours.
+union all
+select 10.5, 'Stray tables the published key can read',
+  case when (select count(*) from exposed) = 0 then 'OK' else 'CHECK' end,
+  coalesce((select string_agg(relname || ' (' || why || ')', ', ' order by relname)
+              from exposed),
+           'none -- nothing foreign is reachable with the anon key')
+
+-- 6. what is in there right now --------------------------------------------
 union all
 select 11, 'Data on hand', 'INFO',
   concat_ws(', ',

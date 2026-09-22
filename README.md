@@ -163,7 +163,10 @@ re-run `schema.sql`, which migrates in place.
 meant for a different project may have landed here. Also read-only. It lists anything
 in the database this contest did not create, anything of ours that is missing, and —
 from `pg_stat_statements`, which Supabase has on by default — the statements the
-database has actually been asked to run, destructive ones first.
+database has actually been asked to run, destructive ones first. It also says whether
+any of those strays can be read with the anon key, because that key ships with the
+site: a table from another project arrives under its own rules, not ours, and one with
+row level security switched off is readable by anyone who opens the page.
 
 It looks hardest at the one script that can really hurt: the clean-up block at the
 bottom of `schema.sql`, meant for reusing the old proof-grading project. Four of the
