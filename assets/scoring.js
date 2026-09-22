@@ -497,22 +497,50 @@ export function divisionStatistics(individuals, guts, division, cfg, key = null)
 }
 
 /** One contestant, in the two lines an award slide wants. */
+/**
+ * Places for an already-sorted list, the way a contest announces them:
+ * everyone on the same score shares the place, and the next distinct
+ * score takes the number their position gives it. Two firsts are both
+ * first and there is no second.
+ *
+ * Counting 1, 2, 3 down the rows instead is the obvious thing and it is
+ * wrong in a way nobody notices until the medals are being handed out:
+ * with a few hundred papers marked out of twenty, a tie at the top is
+ * not a rare case, it is the normal one.
+ */
+export function competitionRanks(rows, valueOf = (r) => r.score) {
+  const places = [];
+  let lastValue;
+  let lastPlace = 0;
+  rows.forEach((row, i) => {
+    const value = valueOf(row);
+    if (i > 0 && value === lastValue) { places.push(lastPlace); return; }
+    lastPlace = i + 1;
+    lastValue = value;
+    places.push(lastPlace);
+  });
+  return places;
+}
+
 export function awardLine(person) {
   return `${person.individualId}${person.name ? ` ${person.name}` : ''}\nScore: ${person.score}`;
 }
 
 /** One line per awarded contestant, ready to paste onto a slide. */
 export function awardLines(individuals, division, count = 10) {
-  return individuals
-    .filter((p) => p.division === division && !p.disqualified && p.answered > 0)
-    .slice(0, count)
-    .map((p, i) => ({
-      place: i + 1,
-      individualId: p.individualId,
-      name: p.name,
-      score: p.score,
-      text: awardLine(p),
-    }));
+  const eligible = individuals
+    .filter((p) => p.division === division && !p.disqualified && p.answered > 0);
+  // Placed across the whole division, then cut to the top few: a place
+  // worked out inside the slice would renumber itself every time the
+  // list got longer or shorter.
+  const places = competitionRanks(eligible);
+  return eligible.slice(0, count).map((p, i) => ({
+    place: places[i],
+    individualId: p.individualId,
+    name: p.name,
+    score: p.score,
+    text: awardLine(p),
+  }));
 }
 
 // ---------------------------------------------------------------------
@@ -677,8 +705,19 @@ export function filterRoster(rows, search) {
 }
 
 /** individual_id -> name, for filling the name box as an ID is typed. */
+/**
+ * ID -> name, for filling the name in as soon as an ID is typed.
+ *
+ * Takes rows in either shape: straight from the database, where the
+ * column is individual_id, or after rosterRows() has turned them into
+ * individualId. They differ by one underscore, they are three lines
+ * apart in this file, and getting it wrong produces a map of
+ * "undefined" that quietly fills in nothing at all.
+ */
 export function indexRoster(rows) {
-  return new Map((rows ?? []).map((r) => [String(r.individual_id), r.name ?? '']));
+  return new Map((rows ?? [])
+    .map((r) => [String(r.individual_id ?? r.individualId ?? ''), r.name ?? ''])
+    .filter(([id]) => id && id !== 'undefined'));
 }
 
 // ---------------------------------------------------------------------

@@ -7,6 +7,7 @@ import {
   indexKey, keyGaps, keyMaxPoints, scoreSheet, individualStandings, indexGutsAnswers,
   individualKey, GUTS_DIVISION, teamKey, divisionOfTeam, teamNumberOf, isMemberNumber,
   summarise, problemStats, scoreDistribution, divisionStatistics, awardLines,
+  competitionRanks,
   TEAM_COUNTING_MEMBERS,
   scoreGutsTeam, gutsStandings, combinedStandings, combinedMaxPoints, splitByDivision, dqTeams,
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
@@ -694,6 +695,22 @@ test('a team of three is not handicapped', () => {
   assert.equal(a.total, 180, 'sixty points, tripled');
 });
 
+test('a short team and an over-full one both score their best three', () => {
+  // No-shows and spares are both ordinary on the day. A team of one is
+  // not scaled up to look like a team of three, and a fifth member does
+  // not sneak a fourth paper into the total.
+  const key = fullKey();
+  const team = [{ team: 'A01', division: 'A' }];
+  const total = (n) => combinedStandings(
+    Array.from({ length: n }, (_, i) => member('A01', i + 1, 20)),
+    [], key, cfg, team)[0].total;
+  assert.equal(total(1), 60, 'one perfect paper, tripled');
+  assert.equal(total(2), 120);
+  assert.equal(total(3), 180);
+  assert.equal(total(4), 180, 'the fourth is dropped');
+  assert.equal(total(5), 180, 'and so is the fifth');
+});
+
 test('a fourth member can only help', () => {
   const key = fullKey();
   const weak = [member('A01', 1, 10), member('A01', 2, 10), member('A01', 3, 10)];
@@ -800,6 +817,50 @@ test('award lines skip contestants who sat nothing', () => {
     { individual_id: 'A013', team: 'A01', member: '3', division: 'A', answers: null },
   ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
   assert.deepEqual(awardLines(people, 'A', 10).map((l) => l.individualId), ['A011']);
+});
+
+test('the roster index takes rows in either shape', () => {
+  // Straight from the database it is individual_id; after rosterRows()
+  // it is individualId. One underscore apart, and getting it wrong
+  // builds a map of "undefined" that fills in nothing and says nothing.
+  const fromDb = [{ individual_id: 'A011', name: 'Ada Lovelace' }];
+  const fromRows = rosterRows(fromDb);
+  assert.equal(indexRoster(fromDb).get('A011'), 'Ada Lovelace');
+  assert.equal(indexRoster(fromRows).get('A011'), 'Ada Lovelace');
+  assert.equal(indexRoster([{ name: 'No Id' }]).size, 0, 'a row with no ID is dropped');
+  assert.equal(indexRoster(null).size, 0);
+});
+
+test('tied contestants share a place, and the next one skips', () => {
+  // Marked out of twenty with a few hundred papers in the room, a tie at
+  // the top is the normal case, not a rare one. Counting down the rows
+  // would print one of two equal firsts as second, which is the wrong
+  // medal handed to a real child.
+  const r = (scores) => competitionRanks(scores.map((score) => ({ score })));
+  assert.deepEqual(r([20, 18, 18, 17, 12]), [1, 2, 2, 4, 5]);
+  assert.deepEqual(r([9, 9, 9]), [1, 1, 1], 'three-way tie is three firsts');
+  assert.deepEqual(r([10, 9, 8, 8]), [1, 2, 3, 3], 'a tie at the bottom still shares');
+  assert.deepEqual(r([5, 4, 3]), [1, 2, 3]);
+  assert.deepEqual(r([7]), [1]);
+  assert.deepEqual(r([]), []);
+});
+
+test('places can be read off any value, not just the score', () => {
+  const rows = [{ total: 180 }, { total: 180 }, { total: 120 }];
+  assert.deepEqual(competitionRanks(rows, (x) => x.total), [1, 1, 3]);
+});
+
+test('award places are shared by a tie and worked out before the cut', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A021', team: 'A02', member: '1', division: 'A', answers: [1, 2, 3] },
+    { individual_id: 'A031', team: 'A03', member: '1', division: 'A', answers: [1, 2, 99] },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+  assert.deepEqual(awardLines(people, 'A', 10).map((l) => l.place), [1, 1, 3],
+    'two firsts and no second');
+  // Cutting the list must not renumber what is left of it.
+  assert.deepEqual(awardLines(people, 'A', 2).map((l) => l.place), [1, 1]);
 });
 
 test('the distribution spans the points the key actually awards', () => {

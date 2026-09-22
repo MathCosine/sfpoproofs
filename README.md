@@ -147,6 +147,13 @@ and both maxima so a result can be rechecked by hand.
 
 A disqualified contestant's paper is not one of the three.
 
+**Equal scores share a place.** Two people on twenty are both first, and the next
+score down is third — on the leaderboard, on the projector board, and in every
+exported file. Counting 1, 2, 3 down the rows is the obvious implementation and it is
+wrong in a way nobody notices until the medals are being handed out: with a few
+hundred papers marked out of twenty, a tie at the top is not the rare case, it is the
+normal one. Two firsts are both shown in gold and no silver is awarded.
+
 ---
 
 ## Setup

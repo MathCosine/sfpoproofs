@@ -148,7 +148,7 @@ footer .spacer{margin-left:auto}
 @media (prefers-reduced-motion:reduce){.resttrack{transition:none!important}}
 </style>
 </head>
-<body data-app-version="2026.09.20.3">
+<body data-app-version="2026.09.22.1">
 <div class="wrap">
   <header>
     <div class="brand">
@@ -188,9 +188,9 @@ footer .spacer{margin-left:auto}
 </div>
 
 <script type="module">
-import { resolvedConfig } from './assets/config.js?v=2026.09.20.3';
-import { createPublicStore } from './assets/store.js?v=2026.09.20.3';
-import { gutsRemaining, formatClock } from './assets/scoring.js?v=2026.09.20.3';
+import { resolvedConfig } from './assets/config.js?v=2026.09.22.1';
+import { createPublicStore } from './assets/store.js?v=2026.09.22.1';
+import { gutsRemaining, formatClock, competitionRanks } from './assets/scoring.js?v=2026.09.22.1';
 
 // The board has no password to give away, so it may still be pointed at a
 // project from the address bar — that is how a projector machine is set
@@ -249,11 +249,17 @@ function render() {
     (a, b) => Number(b.score) - Number(a.score)
       || String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
   const live = ranked;
+  // Two teams on the same score are both in that place, and the place
+  // after them is the one their position gives it. A projector counting
+  // 1, 2, 3 down the rows would show a shared lead as a lead and a
+  // second, in front of the room it is wrong in front of.
+  const places = competitionRanks(ranked, (r) => Number(r.score));
 
   $('#contestName').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
   $('#teamCount').textContent = live.length || '—';
   $('#leadScore').textContent = live.length ? Number(live[0].score) : '—';
-  $('#leadCount').textContent = live.length ? `Top ${Math.min(10, live.length)}` : '';
+  $('#leadCount').textContent = live.length
+    ? `Top ${places[Math.min(10, live.length) - 1]}` : '';
   $('#frozenFlag').hidden = !state?.guts_frozen;
 
   // ---- leaders: a card each, with their set progress ----------------
@@ -263,7 +269,8 @@ function render() {
     lead.appendChild(el('div', 'empty', 'Waiting for the first set to be scored.'));
   }
   live.slice(0, 10).forEach((row, i) => {
-    const card = el('div', `card${i < 3 ? ` card--${i + 1}` : ''}`);
+    const place = places[i];
+    const card = el('div', `card${place <= 3 ? ` card--${place}` : ''}`);
 
     const who = el('div', 'who');
     who.appendChild(el('div', 'name', row.name || `Team ${row.team}`));
@@ -276,7 +283,7 @@ function render() {
     const sets = el('div', 'sets');
     sets.append(segments(row.set_mask ?? 0), el('span', 'onset', setLabel(row.set_mask ?? 0)));
 
-    card.append(el('div', 'place', String(i + 1)), who, sets,
+    card.append(el('div', 'place', String(place)), who, sets,
       el('div', 'score', String(Number(row.score))));
     lead.appendChild(card);
   });
@@ -292,7 +299,7 @@ function render() {
   rest.forEach((row, i) => {
     const line = el('div', 'rrow');
     line.append(
-      el('div', 'place', String(i + 11)),
+      el('div', 'place', String(places[i + 10])),
       el('div', 'name', row.name || `Team ${row.team}`),
       el('div', 'onset', setLabel(row.set_mask ?? 0)),
       el('div', 'score', String(Number(row.score))),

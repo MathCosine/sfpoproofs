@@ -9,6 +9,7 @@ import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
   indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
+  competitionRanks,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster,
@@ -869,7 +870,7 @@ function table(headers, rows) {
   wrap.appendChild(t);
   return wrap;
 }
-const rankCls = (i) => `rank${i < 3 ? ` rank--${i + 1}` : ''}`;
+const rankCls = (place) => `rank${place <= 3 ? ` rank--${place}` : ''}`;
 
 /**
  * Ten at a time, with arrows. A hundred rows of a leaderboard is not
@@ -1006,6 +1007,10 @@ function renderBoards() {
     const { bar, page, size } = pager(division, ranked.length);
     const shown = ranked.slice(page * size, (page + 1) * size);
     const offset = page * size;
+    // Worked out across the division rather than down the page, so the
+    // eleventh row is eleventh and a tie keeps its shared place.
+    const places = competitionRanks(ranked,
+      activeBoard === 'combined' ? (r) => r.total : (r) => r.score);
 
     if (activeBoard === 'combined') {
       const cell = (r) => {
@@ -1014,8 +1019,9 @@ function renderBoards() {
           + `+ ${r.guts ?? 0} from guts\n= ${r.total} out of ${r.max}`;
         return n;
       };
-      const row = (r, i) => [
-        { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
+      const row = (r, place) => [
+        { text: place == null ? 'DQ' : String(place),
+          cls: place == null ? 'rank' : rankCls(place) },
         { text: r.name ? `${r.team} · ${r.name}` : `Team ${r.team}` },
         { text: String(r.individual), cls: 'num' },
         { text: r.guts == null ? '—' : String(r.guts), cls: 'num' },
@@ -1024,7 +1030,7 @@ function renderBoards() {
       ];
       const header = ['#', 'Team', { label: 'Individual', num: true }, { label: 'Guts', num: true },
         { label: 'Combined', num: true }, 'Sheets'];
-      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
+      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, places[offset + i]))));
       if (bar) host.appendChild(bar);
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
@@ -1032,8 +1038,9 @@ function renderBoards() {
         host.appendChild(w);
       }
     } else if (activeBoard === 'individual') {
-      const row = (r, i) => [
-        { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
+      const row = (r, place) => [
+        { text: place == null ? 'DQ' : String(place),
+          cls: place == null ? 'rank' : rankCls(place) },
         { text: r.individualId },
         { text: r.name || '—' },
         { text: String(r.correct), cls: 'num' },
@@ -1043,7 +1050,7 @@ function renderBoards() {
       ];
       const header = ['#', 'ID', 'Name', { label: 'Correct', num: true },
         { label: 'Points', num: true }, 'Answered', ''];
-      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
+      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, places[offset + i]))));
       if (bar) host.appendChild(bar);
       if (page === 0 && shown.length) {
         const copyRow = el('div', 'chip-row');
@@ -1058,8 +1065,9 @@ function renderBoards() {
         host.appendChild(w);
       }
     } else {
-      const row = (r, i) => [
-        { text: i == null ? 'DQ' : String(i + 1), cls: i == null ? 'rank' : rankCls(i) },
+      const row = (r, place) => [
+        { text: place == null ? 'DQ' : String(place),
+          cls: place == null ? 'rank' : rankCls(place) },
         { text: r.name ? `${r.team} · ${r.name}` : `Team ${r.team}` },
         { text: String(r.correct), cls: 'num' },
         { text: String(r.score), cls: 'num' },
@@ -1067,7 +1075,7 @@ function renderBoards() {
       ];
       const header = ['#', 'Team', { label: 'Correct', num: true },
         { label: 'Points', num: true }, 'Sets'];
-      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, offset + i))));
+      if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, places[offset + i]))));
       if (bar) host.appendChild(bar);
       if (out.length) {
         const w = table(header, out.map((r) => row(r, null)));
@@ -1644,14 +1652,18 @@ function renderDqList() {
  * contests — a single global rank column would have read as a combined
  * placing that nobody is actually competing for.
  */
-function rankedByDivision(rows) {
+function rankedByDivision(rows, valueOf = (r) => r.score) {
   const out = [];
   for (const division of [...cfg.DIVISIONS, null]) {
     const group = division === null
       ? rows.filter((r) => r.division !== 'A' && r.division !== 'B')
       : rows.filter((r) => r.division === division);
-    let rank = 0;
-    for (const row of group) out.push([row, row.disqualified ? 'DQ' : String(++rank)]);
+    const ranked = group.filter((r) => !r.disqualified);
+    const places = competitionRanks(ranked, valueOf);
+    const place = new Map(ranked.map((r, i) => [r, places[i]]));
+    for (const row of group) {
+      out.push([row, row.disqualified ? 'DQ' : String(place.get(row))]);
+    }
   }
   return out;
 }
@@ -1730,16 +1742,14 @@ function exportStatsCsv() {
 
 function exportCombinedCsv() {
   const rows = [];
-  for (const division of ['A', 'B']) {
-    let rank = 0;
-    for (const r of splitByDivision(derived.combined)[division]) {
-      const i = r.disqualified ? null : rank++;
-      rows.push([i == null ? 'DQ' : i + 1, division, r.team, r.name,
-        r.individual, r.indMax, r.multiplier,
-        r.guts ?? '', r.gutsMax,
-        r.total, r.max, r.disqualified ? 'yes' : 'no',
-        r.members.map((m) => `${m.individualId}:${m.score}`).join(' ')]);
-    }
+  // Combined teams are placed on their combined total, and tied teams
+  // share a place, exactly as the board on screen shows them.
+  for (const [r, place] of rankedByDivision(derived.combined, (t) => t.total)) {
+    rows.push([place, r.division ?? '', r.team, r.name,
+      r.individual, r.indMax, r.multiplier,
+      r.guts ?? '', r.gutsMax,
+      r.total, r.max, r.disqualified ? 'yes' : 'no',
+      r.members.map((m) => `${m.individualId}:${m.score}`).join(' ')]);
   }
   downloadCsv('cowconuts-2026-combined.csv', toCsv(
     ['rank_in_division', 'division', 'team', 'team_name', 'individual_total', 'individual_max',

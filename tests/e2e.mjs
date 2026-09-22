@@ -1004,9 +1004,9 @@ await page.click('#dqList button');
 await page.waitForTimeout(500);
 
 // ---- exports --------------------------------------------------------
-const readDownload = async (id) => {
-  const dl = page.waitForEvent('download', { timeout: 5000 });
-  await page.click(id);
+const readDownload = async (id, p = page) => {
+  const dl = p.waitForEvent('download', { timeout: 5000 });
+  await p.click(id);
   const d = await dl;
   const stream = await d.createReadStream();
   const chunks = [];
@@ -1215,6 +1215,22 @@ await shot.close();
       (els) => els.map((e) => e.value))).includes('Johnson, Katherine'));
   check('and an ID written after the name is still found',
     (await page.textContent('#rosterList')).includes('B2004'));
+
+  // The whole point of the list: the name is already there when a scorer
+  // types the ID, so nobody copies it off a sheet by hand four hundred
+  // times. Checked on the entry screen, not in the roster editor.
+  await page.fill('#individualId', 'A901');
+  await page.waitForTimeout(400);
+  check('typing an ID fills the name in from the participant list',
+    (await page.inputValue('#contestantName')) === 'Ada Lovelace',
+    await page.inputValue('#contestantName'));
+  await page.fill('#individualId', 'A909');
+  await page.waitForTimeout(400);
+  check('and somebody not on the list is left blank rather than guessed at',
+    (await page.inputValue('#contestantName')) === '',
+    await page.inputValue('#contestantName'));
+  await page.click('.tab[data-tab="setup"]');
+  await page.waitForTimeout(300);
 
   // Editing one person by hand.
   const row = page.locator('.roster-row', { hasText: 'A902' }).first();
@@ -1615,6 +1631,71 @@ await shot.close();
   check('and does not scroll the page itself',
     await bigBoard.evaluate(() => document.body.scrollHeight <= window.innerHeight + 2));
   await scale.close();
+}
+
+// ---- a tie is a tie ------------------------------------------------
+// Papers are marked out of twenty in a room of a few hundred, so two
+// equal top scores is the normal case. Counting 1, 2, 3 down the rows
+// would put one of two equal firsts second, and somebody would be handed
+// the wrong medal on the strength of it.
+{
+  const tied = await browser.newContext({ viewport: { width: 1500, height: 980 } });
+  const tp = await tied.newPage();
+  watch(tp, 'tie');
+  await tp.goto(BASE, { waitUntil: 'domcontentloaded' });
+  await tp.fill('#graderName', 'Tie Checker');
+  await tp.fill('#adminPassword', 'demo');
+  await tp.click('#gateEnter');
+  await tp.waitForSelector('#app:not(.hidden)');
+  await tp.click('.tab[data-tab="setup"]');
+  await seedDemoData(tp);
+
+  // Two perfect papers in the same division, and one short of perfect.
+  const keyA = await tp.evaluate(() => JSON.parse(localStorage.getItem('contest-demo-db') || '{}')
+    .key.filter((r) => r.round === 'individual' && r.division === 'A')
+    .sort((a, b) => a.problem - b.problem).map((r) => r.answer));
+  const fill = async (id, answers) => {
+    await tp.fill('#individualId', id);
+    await tp.waitForTimeout(350);
+    await tp.evaluate((vals) => {
+      document.querySelectorAll('#answerGrid .ans input').forEach((input, i) => {
+        input.value = vals[i] == null ? '' : String(vals[i]);
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      });
+    }, answers);
+    await tp.click('#saveSheet');
+    await tp.waitForTimeout(450);
+  };
+  await fill('A091', keyA);
+  await fill('A092', keyA);
+  await fill('A093', keyA.map((a, i) => (i === 0 ? null : a)));
+
+  await tp.click('.tab[data-tab="leaderboard"]');
+  await tp.click('.tab[data-board="individual"]');
+  await tp.waitForTimeout(500);
+  const top = await tp.evaluate(() => [...document.querySelectorAll('#boards table tbody tr')]
+    .slice(0, 4).map((tr) => [...tr.children].map((td) => td.textContent.trim())));
+  const places = top.map((r) => r[0]);
+  const points = top.map((r) => r[4]);
+  check('two equal top scores are both first',
+    points[0] === points[1] && places[0] === '1' && places[1] === '1',
+    `places ${places.slice(0, 3).join(',')} for points ${points.slice(0, 3).join(',')}`);
+  check('and the next score takes third, not second',
+    places[2] === '3', `third row shows ${places[2]}`);
+  const divA = tp.locator('#boards .table-wrap').first();
+  const gold = await divA.locator('tbody tr .rank--1').count();
+  check('both of them are shown as gold, and nothing is shown as silver',
+    gold === 2 && (await divA.locator('tbody tr .rank--2').count()) === 0,
+    `${gold} gold in division A`);
+
+  // The file handed to whoever reads the results out has to agree.
+  await tp.click('.tab[data-tab="setup"]');
+  const csv = (await readDownload('#exportIndividual', tp)).text.replace(/^\uFEFF/, '');
+  const ranks = csv.trim().split('\n').slice(1)
+    .filter((l) => l.split(',')[1] === 'A').slice(0, 3).map((l) => l.split(',')[0]);
+  check('the exported file places the tie the same way',
+    ranks.join(',') === '1,1,3', ranks.join(',') || 'no csv');
+  await tied.close();
 }
 
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));
