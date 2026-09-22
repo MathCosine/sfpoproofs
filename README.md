@@ -157,6 +157,23 @@ Paste [`supabase/verify.sql`](supabase/verify.sql) into the SQL Editor and run i
 changes nothing and prints a row per check; every row should say OK. Any FAIL means
 re-run `schema.sql`, which migrates in place.
 
+### Not sure what has been run in there?
+
+[`supabase/whatran.sql`](supabase/whatran.sql) is the companion, for when a script
+meant for a different project may have landed here. Also read-only. It lists anything
+in the database this contest did not create, anything of ours that is missing, and —
+from `pg_stat_statements`, which Supabase has on by default — the statements the
+database has actually been asked to run, destructive ones first.
+
+It looks hardest at the one script that can really hurt: the clean-up block at the
+bottom of `schema.sql`, meant for reusing the old proof-grading project. Four of the
+six table names it drops belong to this contest too, so running it here takes the
+teams, locks, scorers and settings while leaving the answer sheets standing. Re-running
+`schema.sql` afterwards puts the tables back empty and everything *looks* fine — so the
+check that matters is the one for answer sheets whose team row is gone, which cannot
+happen any other way. Your own history is worth reading beside it: SQL Editor → the
+list in the left sidebar.
+
 This matters because the schema has changed since the first version: the answer key
 was split by division, the public board gained set progress, the functions were
 closed to anonymous callers, and — most recently — the public-board rebuild was made
