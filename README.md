@@ -164,6 +164,24 @@ Paste [`supabase/verify.sql`](supabase/verify.sql) into the SQL Editor and run i
 changes nothing and prints a row per check; every row should say OK. Any FAIL means
 re-run `schema.sql`, which migrates in place.
 
+### Ready for the day?
+
+[`supabase/preflight.sql`](supabase/preflight.sql) is the one to run the week before and
+again on the morning. Read-only, twenty rows, and every row says **GO**, **FIX**, **LOOK**
+or **INFO**. It checks the schema is current and the deadlock fix is in; that sign-up is
+off, the published key reaches only the public board, and only a director can change the
+answer key; that the key is actually filled in and the participant list loaded, with
+every ID readable and every team a sensible size; that the clock is parked and no
+rehearsal data or stale locks are lying about; and it estimates the day's realtime
+messages and egress against the free-tier allowances from the row counts it finds.
+
+```
+Schema is complete                              GO    all ten tables and all six functions are here
+The answer key is filled in                     FIX   40 still unset (individual A 20, individual B 20)
+The participant list is loaded                  GO    176 on the list — A: 88 in 22 teams, B: 88 in 22 teams
+Realtime messages, estimated for the day        INFO  about 296,000 of the 2,000,000 a month (15%)
+```
+
 ### Not sure what has been run in there?
 
 [`supabase/whatran.sql`](supabase/whatran.sql) is the companion, for when a script
@@ -376,29 +394,35 @@ scoring team, but it is not a link to post to every competitor at once.
 
 ### Twenty scorers, costed
 
-A six-hour contest at full size — 100 teams, 400 answer sheets, 2,800 guts answers —
-with twenty scorers signed in and three board screens running:
+Both tables below are measured, not guessed: the payloads by serialising a contest of
+each size and gzipping it, the messages by counting one realtime message per changed
+row per subscribed client, which is what Supabase actually bills.
 
-| | |
-| --- | --- |
-| Twenty tabs loading the portal | ~1 MB |
-| The five-minute resync, twenty tabs, six hours | ~43 MB |
-| Realtime rows for ~1,100 saves, fanned out to twenty | ~7 MB |
-| Three board screens following every change | ~60 MB |
-| **Total against a 5 GB monthly allowance** | **~110 MB, about 2%** |
+| Six hours, twenty scorers, three board screens | This contest<br>44 teams, 176 sheets | Full size<br>100 teams, 400 sheets |
+| --- | --- | --- |
+| One full load of the whole contest | 157 KB raw · **9 KB gzipped** | 350 KB · **19 KB** |
+| Twenty tabs opening it | 0.2 MB | 0.4 MB |
+| The five-minute resync, twenty tabs, six hours | 13 MB | 26 MB |
+| **Against a 5 GB monthly allowance** | **well under 1%** | **well under 1%** |
 
 Egress is not the binding limit — **realtime messages are**, and they are dominated by
 the two things every tab writes on a timer rather than by anything anyone types. Each
-write fans out to every open screen, so one tab writing every twenty seconds costs
-twenty messages every twenty seconds across a room of twenty scorers:
+changed row fans out to every open screen, so one tab writing on a timer costs twenty
+messages across a room of twenty scorers:
 
-| Per six-hour contest, twenty scorers | Messages |
-| --- | --- |
-| Saying "still here" — every 60 s, not 20 | 144,000 |
-| Renewing a held lock — at ⅔ of its life, not every tick | 108,000 |
-| The ~1,100 actual saves | 22,000 |
-| Three board screens following the standings | 3,300 |
-| **Total against the two-million monthly allowance** | **~277,000 · 14%** |
+| Per six-hour contest, twenty scorers | This contest | Full size |
+| --- | --- | --- |
+| Saying "still here" — every 60 s, not 20 | 144,000 | 144,000 |
+| Locks: claimed, released, and renewed at ⅔ of their life | 127,000 | 152,000 |
+| The saves themselves, row by row | 30,000 | 67,000 |
+| The public board following the standings | 7,000 | 16,000 |
+| **Against the two-million monthly allowance** | **~308,000 · 15%** | **~379,000 · 19%** |
+
+Note what that table says: **the contest could be three times the size and still fit**,
+because the two timers dominate and they scale with the number of scorers, not with the
+number of papers. An earlier version of this section put the full-size figure at
+277,000 by counting a four-row guts save as one message and leaving lock traffic out
+altogether; 379,000 is what it actually comes to.
 
 On the old cadence — both timers firing every twenty seconds — the same contest came to
 about 890,000, or 45% of the month's allowance in one afternoon. Nothing about the lock
@@ -406,7 +430,13 @@ changed: it still lasts two minutes and still frees a walked-away sheet on its o
 is simply not rewritten four times inside each of those two minutes.
 
 Concurrent connections land near 25 against 200. **Nothing here needs a paid plan.** The
-resync also pauses entirely in a tab nobody is looking at. The browser tests run twenty
+resync also pauses entirely in a tab nobody is looking at.
+
+The one free-tier limit that has nothing to do with size: **a free project pauses after
+about a week with nothing touching it**, and waking it is a manual restore that takes a
+few minutes. Open the portal once in the week before the contest and again on the
+morning, so it is awake when the room is. `supabase/preflight.sql` says so on every
+run, because it is the failure that has nothing to do with anything you did. The browser tests run twenty
 real tabs signing in, colliding on one sheet and saving at the same instant, and
 `npm run test:db` repeats the collision from twenty separate connections against a real
 Postgres — so the behaviour is measured rather than estimated, on both sides of the
@@ -429,8 +459,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 93 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 203 browser checks, including twenty scorers at once
+npm test               # 98 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 209 browser checks, including twenty scorers at once
 npm run test:db        # 19 checks: twenty connections racing a real Postgres
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
