@@ -1688,6 +1688,34 @@ await shot.close();
     gold === 2 && (await divA.locator('tbody tr .rank--2').count()) === 0,
     `${gold} gold in division A`);
 
+  // Places on the copied list are a toggle, because a slide that shows
+  // its own numbers does not want them and a reader working down an
+  // unnumbered list will announce a tie as a first and a second.
+  const copyRow = tp.locator('#boards .chip-row').first();
+  check('the awards list is names and scores until asked otherwise',
+    (await copyRow.locator('input[type=checkbox]').isChecked()) === false);
+  await copyRow.locator('input[type=checkbox]').check();
+  await tp.waitForTimeout(400);
+  const awarded = await tp.evaluate(() => {
+    // Headless has no clipboard, and writeText is a read-only property
+    // where it does, so install a stub rather than assigning over one.
+    let copied = null;
+    if (!navigator.clipboard) {
+      Object.defineProperty(navigator, 'clipboard', { value: {}, configurable: true });
+    }
+    Object.defineProperty(navigator.clipboard, 'writeText', {
+      value: async (t) => { copied = t; }, configurable: true, writable: true,
+    });
+    document.querySelector('#boards .chip-row button').click();
+    return new Promise((r) => setTimeout(() => r(copied), 300));
+  });
+  check('turning places on marks the tie as two firsts',
+    (awarded ?? '').split('\n\n').slice(0, 3).map((b) => b.split(' ')[0]).join(',')
+      === '1st,1st,3rd',
+    (awarded ?? 'nothing copied').split('\n').slice(0, 3).join(' / '));
+  check('and the choice survives a repaint',
+    await tp.locator('#boards .chip-row input[type=checkbox]').first().isChecked());
+
   // The file handed to whoever reads the results out has to agree.
   await tp.click('.tab[data-tab="setup"]');
   const csv = (await readDownload('#exportIndividual', tp)).text.replace(/^\uFEFF/, '');

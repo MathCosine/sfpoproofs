@@ -11,7 +11,7 @@ import {
   indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
   competitionRanks,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
-  awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
+  awardLine, nameAllowed, closestName, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
@@ -872,6 +872,12 @@ function table(headers, rows) {
 }
 const rankCls = (place) => `rank${place <= 3 ? ` rank--${place}` : ''}`;
 
+// Whether the awards list carries its place numbers. A view preference,
+// so it lives in this browser and never in the contest.
+let awardPlaces = (() => {
+  try { return localStorage.getItem('contest-award-places') === 'on'; } catch { return false; }
+})();
+
 /**
  * Ten at a time, with arrows. A hundred rows of a leaderboard is not
  * something anyone reads; the top ten is, and the rest is there when
@@ -1055,8 +1061,25 @@ function renderBoards() {
       if (page === 0 && shown.length) {
         const copyRow = el('div', 'chip-row');
         copyRow.style.marginTop = '8px';
-        copyRow.append(copyButton(awardLines(derived.individuals, division, cfg.LEADERBOARD_PAGE)),
-          el('span', 'muted', 'ID, name and score for the top ten, ready to paste'));
+        const toggle = el('label', 'muted');
+        toggle.style.cssText = 'display:inline-flex;align-items:center;gap:6px;cursor:pointer';
+        const box = el('input');
+        box.type = 'checkbox';
+        box.checked = awardPlaces;
+        box.addEventListener('change', () => {
+          awardPlaces = box.checked;
+          try { localStorage.setItem('contest-award-places', awardPlaces ? 'on' : 'off'); }
+          catch { /* a browser with storage turned off still gets the toggle */ }
+          renderBoards();
+        });
+        toggle.append(box, document.createTextNode('with places'));
+        copyRow.append(
+          copyButton(awardLines(derived.individuals, division, cfg.LEADERBOARD_PAGE,
+            { withPlaces: awardPlaces })),
+          toggle,
+          el('span', 'muted', awardPlaces
+            ? 'place, ID, name and score for the top ten — tied scores share a place'
+            : 'ID, name and score for the top ten, ready to paste'));
         host.appendChild(copyRow);
       }
       if (out.length) {
@@ -2441,9 +2464,15 @@ async function nameRejected(name, admin) {
   // An admin may also sit down and score, so an admin name passes either door.
   if (!admin && nameAllowed(settings?.admin_names, name)
       && parseNameList(settings?.admin_names).length) return null;
-  return admin
-    ? `“${name}” is not on the admin list. Check the spelling, or ask a director to add you.`
-    : `“${name}” is not on the scorer list. Check the spelling, or ask a director to add you.`;
+  // Almost every rejection on the day will be a typo, and a typo that
+  // only a director can clear is a queue at the door. Name the closest
+  // match so most people can fix it where they stand.
+  const near = closestName(list, name);
+  const which = admin ? 'admin' : 'scorer';
+  return near
+    ? `“${name}” is not on the ${which} list. Did you mean “${near}”?`
+    : `“${name}” is not on the ${which} list. Check the spelling, `
+      + 'or ask a director to add you.';
 }
 
 async function boot() {

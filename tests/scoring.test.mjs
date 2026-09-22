@@ -7,12 +7,12 @@ import {
   indexKey, keyGaps, keyMaxPoints, scoreSheet, individualStandings, indexGutsAnswers,
   individualKey, GUTS_DIVISION, teamKey, divisionOfTeam, teamNumberOf, isMemberNumber,
   summarise, problemStats, scoreDistribution, divisionStatistics, awardLines,
-  competitionRanks,
+  competitionRanks, ordinal,
   TEAM_COUNTING_MEMBERS,
   scoreGutsTeam, gutsStandings, combinedStandings, combinedMaxPoints, splitByDivision, dqTeams,
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
-  awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
+  awardLine, nameAllowed, closestName, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
@@ -817,6 +817,47 @@ test('award lines skip contestants who sat nothing', () => {
     { individual_id: 'A013', team: 'A01', member: '3', division: 'A', answers: null },
   ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
   assert.deepEqual(awardLines(people, 'A', 10).map((l) => l.individualId), ['A011']);
+});
+
+test('the awards list can carry its places, and a tie says so twice', () => {
+  const key = fullKey();
+  const people = individualStandings([
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A',
+      name: 'Ada Lovelace', answers: [1, 2, 3] },
+    { individual_id: 'A021', team: 'A02', member: '1', division: 'A',
+      name: 'Grace Hopper', answers: [1, 2, 3] },
+    { individual_id: 'A031', team: 'A03', member: '1', division: 'A',
+      name: '', answers: [1, 2, 99] },
+  ], key, { ...cfg, INDIVIDUAL_PROBLEMS: 3 });
+
+  const plain = awardLines(people, 'A', 10);
+  assert.equal(plain[0].text, 'A011 Ada Lovelace\nScore: 3', 'off by default');
+
+  const placed = awardLines(people, 'A', 10, { withPlaces: true });
+  assert.deepEqual(placed.map((l) => l.text.split('\n')[0]), [
+    '1st · A011 Ada Lovelace',
+    '1st · A021 Grace Hopper',
+    '3rd · A031',
+  ], 'two firsts, then a third, and no trailing space on a missing name');
+});
+
+test('ordinals read the way a person says them', () => {
+  assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101].map(ordinal),
+    ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st']);
+});
+
+test('a near-miss on the scorer list is named, a stranger is not', () => {
+  // An enforced list turns every typo into a volunteer queueing for a
+  // director at the one moment every director is busy.
+  const list = 'Xu Shao\nCCMathClub\nThomas Ni\nMary-Jane Watson';
+  assert.equal(closestName(list, 'Xu Sha'), 'Xu Shao', 'one letter out');
+  assert.equal(closestName(list, 'Shao Xu'), 'Xu Shao', 'surname first');
+  assert.equal(closestName(list, 'Shao'), 'Xu Shao', 'half the name');
+  assert.equal(closestName(list, 'CC MathClub'), 'CCMathClub', 'a space that is not there');
+  assert.equal(closestName(list, 'Mary Jane Watson'), 'Mary-Jane Watson', 'a missing hyphen');
+  assert.equal(closestName(list, 'Zebedee Quux'), null, 'a stranger is told nothing');
+  assert.equal(closestName(list, ''), null);
+  assert.equal(closestName('', 'Anyone'), null, 'an empty list suggests nothing');
 });
 
 test('the roster index takes rows in either shape', () => {

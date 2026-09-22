@@ -522,12 +522,32 @@ export function competitionRanks(rows, valueOf = (r) => r.score) {
   return places;
 }
 
-export function awardLine(person) {
-  return `${person.individualId}${person.name ? ` ${person.name}` : ''}\nScore: ${person.score}`;
+/** 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th, 21st. */
+export function ordinal(n) {
+  const num = Number(n);
+  if (!Number.isFinite(num)) return String(n ?? '');
+  const tens = Math.abs(num) % 100;
+  const ones = Math.abs(num) % 10;
+  const suffix = tens >= 11 && tens <= 13 ? 'th'
+    : ones === 1 ? 'st' : ones === 2 ? 'nd' : ones === 3 ? 'rd' : 'th';
+  return `${num}${suffix}`;
+}
+
+export function awardLine(person, place = null) {
+  const who = `${person.individualId}${person.name ? ` ${person.name}` : ''}`;
+  return `${place == null ? '' : `${ordinal(place)} · `}${who}\nScore: ${person.score}`;
 }
 
 /** One line per awarded contestant, ready to paste onto a slide. */
-export function awardLines(individuals, division, count = 10) {
+/**
+ * `withPlaces` puts the place on each line. Off, the list is names and
+ * scores in order and makes no claim about placing, which is right for a
+ * slide that shows its own numbers. On, it says "1st" and two people on
+ * the same score both say it -- which is the point, because a reader
+ * working down an unnumbered list will announce a tie as a first and a
+ * second.
+ */
+export function awardLines(individuals, division, count = 10, { withPlaces = false } = {}) {
   const eligible = individuals
     .filter((p) => p.division === division && !p.disqualified && p.answered > 0);
   // Placed across the whole division, then cut to the top few: a place
@@ -539,7 +559,7 @@ export function awardLines(individuals, division, count = 10) {
     individualId: p.individualId,
     name: p.name,
     score: p.score,
-    text: awardLine(p),
+    text: awardLine(p, withPlaces ? places[i] : null),
   }));
 }
 
@@ -568,6 +588,63 @@ export function parseNameList(text) {
  * contest that has not filled its staff roster in yet is never locked
  * out of its own portal.
  */
+/**
+ * The nearest name on a list to what somebody actually typed, or null if
+ * nothing is close.
+ *
+ * A list that is enforced turns every typo into a locked-out volunteer
+ * looking for a director, at the one moment every director is busy. Most
+ * of those are one letter, a missing half of a double-barrelled name, or
+ * a surname typed first. Naming the closest match turns almost all of
+ * them back into something the person can fix themselves.
+ *
+ * Only offered when it is genuinely close: a small edit distance, or the
+ * typed name being one of the words in a longer one. Anything looser
+ * would start suggesting a colleague's name to a stranger.
+ */
+export function closestName(list, name) {
+  const names = Array.isArray(list) ? list : parseNameList(list);
+  const wanted = normaliseName(name);
+  if (!wanted || !names.length) return null;
+
+  const distance = (a, b) => {
+    // Ordinary Levenshtein, one row at a time. The lists are a few dozen
+    // names long, so nothing here needs to be clever.
+    if (a === b) return 0;
+    let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+    for (let i = 1; i <= a.length; i += 1) {
+      const row = [i];
+      for (let j = 1; j <= b.length; j += 1) {
+        row[j] = Math.min(
+          prev[j] + 1,
+          row[j - 1] + 1,
+          prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+        );
+      }
+      prev = row;
+    }
+    return prev[b.length];
+  };
+
+  let best = null;
+  let bestScore = Infinity;
+  for (const candidate of names) {
+    const other = normaliseName(candidate);
+    if (!other) continue;
+    const words = other.split(' ');
+    // "Shao" for "Xu Shao", or the two halves the other way round.
+    const sameWords = wanted.split(' ').slice().sort().join(' ')
+      === words.slice().sort().join(' ');
+    const isWord = words.includes(wanted);
+    const d = sameWords || isWord ? 1 : distance(wanted, other);
+    // One slip in a short name, two in a long one, and never more than a
+    // quarter of the name.
+    const allowed = Math.min(3, Math.max(1, Math.floor(other.length / 4)));
+    if (d <= allowed && d < bestScore) { best = candidate; bestScore = d; }
+  }
+  return best;
+}
+
 export function nameAllowed(list, name) {
   const names = Array.isArray(list) ? list : parseNameList(list);
   if (!names.length) return true;

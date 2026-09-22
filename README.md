@@ -510,6 +510,15 @@ threshold, and the realtime cache patching. The browser suite drives the whole
 entry flow, the public board, and the locking, and asserts it never contacts a live
 Supabase project.
 
+## On the day
+
+[`scorer-card.html`](scorer-card.html) is a one-page reference to print for each of the
+twenty people scoring: how to sign in, how to read a contestant ID, what to do about a
+blank versus a zero versus a digit nobody can read, what "someone else has this sheet"
+means, and what to do when a screen misbehaves. It fits one side of Letter or A4, and
+the password is deliberately not on it — write it in by hand, so a card left on a desk
+is not a way in. There is a link to it in Admin, beside the scorer list.
+
 ## Layout
 
 ```
@@ -522,6 +531,7 @@ assets/
   scoring.js            pure logic — grading, standings, the clock
   csv.js                exports
   styles.css            design system
+scorer-card.html        one printed page per scorer, for the day
 supabase/schema.sql     paste into the Supabase SQL editor
 tests/                  unit tests + a two-tab browser test
 ```
