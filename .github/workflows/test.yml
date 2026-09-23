@@ -57,3 +57,8 @@ jobs:
       - run: npm run test:e2e
         env:
           CHROMIUM_PATH: ''
+      # The e2e suite runs in demo mode, which has no accounts. This one
+      # drives the real Supabase sign-in path with the real supabase-js.
+      - run: npm run test:auth
+        env:
+          CHROMIUM_PATH: ''

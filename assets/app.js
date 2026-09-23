@@ -2373,6 +2373,11 @@ async function seedDemo() {
 
 // ---------------------------------------------------------------------
 async function enterApp() {
+  // The role goes on before the portal is shown, not after the first load
+  // of data. The page is built in the scorer's state, and it used to wait
+  // for render() to decide -- so every scorer saw the admin panel until
+  // the data arrived, and for good if it never did.
+  applyRole();
   $('#gate').classList.add('hidden');
   $('#app').classList.remove('hidden');
   $('#whoamiName').textContent = grader.name;
@@ -2503,11 +2508,25 @@ async function boot() {
     $('#adminHint').textContent =
       'Demo mode: type anything for admin, or leave it blank for the scorer view.';
   }
-  if (grader.name && await store.hasSession().catch(() => false)) {
-    const email = await store.currentEmail().catch(() => null);
-    isAdmin = email ? email === cfg.ADMIN_EMAIL : localStorage.getItem('contest-role') !== 'scorer';
-    await enterApp();
-    return;
+  // Coming back to a signed-in browser has to pass the same two checks as
+  // the door. It used to take whatever session the browser had stored,
+  // without asking the server whether it was still alive and without
+  // looking at the name list -- so a name turned away at the door, or a
+  // session a password change had ended, walked in on a reload, and a
+  // browser that could not say which account it held was treated as an
+  // admin. Now the server says who this is, the name list is checked
+  // again, and anything short of both is the sign-in screen.
+  if (grader.name) {
+    const email = await store.verifiedEmail().catch(() => null);
+    if (email) {
+      isAdmin = email === cfg.ADMIN_EMAIL;
+      if (!(await nameRejected(grader.name, isAdmin))) {
+        await enterApp();
+        return;
+      }
+      await store.signOut().catch(() => {});
+      isAdmin = false;
+    }
   }
 
   const submit = async () => {

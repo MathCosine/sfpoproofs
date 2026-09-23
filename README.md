@@ -128,7 +128,20 @@ not a secret; told which half they already have, somebody holding the other half
 exactly what to go looking for.
 
 That costs a scorer who mistypes their own name the hint that it was the name, which is
-why the printed card tells them to have both written down. Locked out by a typo in the
+why the printed card tells them to have both written down.
+
+**A reload goes through the same door.** Coming back to a signed-in browser asks the
+server who this is — not the browser's own storage, which keeps a session looking alive
+for up to an hour after a password change has ended it — and checks the name list again.
+Anything short of both is the sign-in screen. **Sign out ends that browser's session and
+nobody else's**: supabase-js signs out every session on the account by default, which on
+a shared account is the whole room, and keeps the session anyway if the server call
+fails, so the portal asks for a local sign-out and clears the browser itself regardless.
+**The page is built in the scorer's state**, with every admin control hidden until the
+account is known to be the admin one; it used to wait for the first load of data to hide
+them, so a scorer on a slow connection saw Admin, and one whose load failed kept seeing
+it. `npm run test:auth` drives all of this with the real supabase-js against a stand-in
+for Supabase Auth; the code before the fix fails eight of its checks. Locked out by a typo in the
 list itself? In the SQL Editor:
 `update app_settings set admin_names = '' where id = 1;`
 
@@ -494,6 +507,7 @@ data. The bar reads **demo mode** in amber throughout.
 npm test               # 98 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 209 browser checks, including twenty scorers at once
 npm run test:db        # 26 checks: twenty connections racing a real Postgres, and the password change
+npm run test:auth      # 24 checks: the real Supabase sign-in path, with the real supabase-js
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 

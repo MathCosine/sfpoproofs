@@ -1441,15 +1441,37 @@ await shot.close();
 
 // ---- correcting a scorer's name, and clearing the register -----------
 {
-  // A second scorer, so there is somebody to rename who is not us.
+  // A second scorer, so there is somebody to rename who is not us: one
+  // who signed in under a misspelt name before the scorer list was
+  // switched on. With it on, the door and a reload both turn that name
+  // away -- as they should -- so the list comes off for their arrival and
+  // goes back on once they are in.
+  await page.click('.tab[data-tab="setup"]');
+  await page.waitForTimeout(300);
+  const graderList = await page.inputValue('#graderNames');
+  await page.fill('#graderNames', '');
+  await page.click('#saveStaff');
+  await page.waitForTimeout(600);
+
   const helper = await ctx.newPage();
   watch(helper, 'helper');
   await helper.addInitScript(() => {
     localStorage.setItem('contest-grader-id', 'grader-typo');
     localStorage.setItem('contest-grader-name', 'Xu Shoa');
+    // Demo mode keeps the role per browser profile, so without this the
+    // helper would arrive as whoever signed in here last -- an admin.
+    localStorage.setItem('contest-role', 'scorer');
   });
   await helper.goto(BASE, { waitUntil: 'domcontentloaded' });
   await helper.waitForSelector('#app:not(.hidden)');
+  check('a scorer who arrived before the list existed is a scorer, not an admin',
+    (await helper.textContent('#roleBadge')).trim() === 'scorer',
+    (await helper.textContent('#roleBadge')).trim());
+
+  await page.evaluate(() => localStorage.setItem('contest-role', 'admin'));
+  await page.fill('#graderNames', graderList);
+  await page.click('#saveStaff');
+  await page.waitForTimeout(600);
   await helper.fill('#individualId', 'A951');
   await helper.evaluate(() => {
     document.querySelectorAll('#answerGrid .ans input').forEach((input, i) => {

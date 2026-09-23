@@ -126,12 +126,23 @@ export function supabaseBackend(cfg, injectedClient = null) {
   /** The team as this tab last saw it, or undefined if it has never seen it. */
   const cachedTeam = (team) => cache.teams.find((t) => String(t.team) === String(team));
 
+  // Everything supabase-js keeps for this session, under the key it was
+  // given plus the suffixes it adds.
+  const SESSION_KEY = 'contest-staff-session';
+  function clearStoredSession() {
+    try {
+      for (const k of Object.keys(localStorage)) {
+        if (k === SESSION_KEY || k.startsWith(`${SESSION_KEY}-`)) localStorage.removeItem(k);
+      }
+    } catch { /* storage off: nothing was stored */ }
+  }
+
   async function getClient() {
     if (client) return client;
     if (injectedClient) { client = injectedClient; return client; }
     const { createClient } = await import(/* @vite-ignore */ SUPABASE_ESM);
     client = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, storageKey: 'contest-staff-session' },
+      auth: { persistSession: true, autoRefreshToken: true, storageKey: SESSION_KEY },
       realtime: { params: { eventsPerSecond: 20 } },
     });
     return client;
@@ -140,9 +151,27 @@ export function supabaseBackend(cfg, injectedClient = null) {
   const api = {
     mode: 'supabase',
 
-    async hasSession() {
-      const { data } = await (await getClient()).auth.getSession();
-      return Boolean(data.session);
+    /**
+     * The email of the account this browser is signed in as -- asked of
+     * the server, not read out of this browser's storage -- or null.
+     *
+     * getSession() only reads what the browser saved, and does not ask
+     * the server until the access token expires, up to an hour later. A
+     * session the server has already ended (a password change, a sign-out
+     * elsewhere) therefore looks alive to it, and so does an admin session
+     * left behind on a borrowed laptop. getUser() asks, and whatever the
+     * server does not recognise is thrown away here rather than trusted.
+     */
+    async verifiedEmail() {
+      const c = await getClient();
+      const { data } = await c.auth.getSession();
+      if (!data.session) return null;
+      const { data: who, error } = await c.auth.getUser();
+      if (error || !who?.user?.email) {
+        await api.signOut();
+        return null;
+      }
+      return who.user.email;
     },
     /**
      * Sign in as whichever account the password belongs to. An admin
@@ -158,11 +187,25 @@ export function supabaseBackend(cfg, injectedClient = null) {
       return { admin };
     },
 
-    async currentEmail() {
-      const { data } = await (await getClient()).auth.getSession();
-      return data.session?.user?.email ?? null;
+    /**
+     * End this browser's session, and only this browser's.
+     *
+     * supabase-js signs out *globally* unless told otherwise, which with a
+     * shared account means every scorer in the room: one person pressing
+     * Sign out, or being turned away at the door, would end twenty
+     * sessions. Local ends one.
+     *
+     * And it keeps the session if the server call fails for any reason
+     * other than 401, 403 or 404, returning the error rather than
+     * throwing it. So the stored session is removed here regardless: a
+     * sign-out that can leave you signed in is worse than none.
+     */
+    async signOut() {
+      try {
+        await (await getClient()).auth.signOut({ scope: 'local' });
+      } catch { /* cleared below either way */ }
+      clearStoredSession();
     },
-    async signOut() { await (await getClient()).auth.signOut(); },
 
     async load() {
       const c = await getClient();
@@ -602,10 +645,12 @@ function demoBackend(cfg) {
 
   return {
     mode: 'demo',
-    async hasSession() { return true; },
+    async verifiedEmail() {
+      const role = localStorage.getItem('contest-role');
+      return role === 'admin' ? cfg.ADMIN_EMAIL : role === 'scorer' ? cfg.STAFF_EMAIL : null;
+    },
     async signIn(password, { admin = false } = {}) { return { admin }; },
-    async currentEmail() { return null; },
-    async signOut() {},
+    async signOut() { localStorage.removeItem('contest-role'); },
     async load() { return read(); },
     patchLocal() { return read(); },
     onChange(cb) { listeners.add(cb); return () => listeners.delete(cb); },
