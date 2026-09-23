@@ -12,7 +12,7 @@ import {
   scoreGutsTeam, gutsStandings, combinedStandings, combinedMaxPoints, splitByDivision, dqTeams,
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
-  awardLine, nameAllowed, closestName, parseNameList, parseRoster, indexRoster,
+  awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
@@ -844,20 +844,6 @@ test('the awards list can carry its places, and a tie says so twice', () => {
 test('ordinals read the way a person says them', () => {
   assert.deepEqual([1, 2, 3, 4, 11, 12, 13, 21, 22, 23, 101].map(ordinal),
     ['1st', '2nd', '3rd', '4th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st']);
-});
-
-test('a near-miss on the scorer list is named, a stranger is not', () => {
-  // An enforced list turns every typo into a volunteer queueing for a
-  // director at the one moment every director is busy.
-  const list = 'Xu Shao\nCCMathClub\nThomas Ni\nMary-Jane Watson';
-  assert.equal(closestName(list, 'Xu Sha'), 'Xu Shao', 'one letter out');
-  assert.equal(closestName(list, 'Shao Xu'), 'Xu Shao', 'surname first');
-  assert.equal(closestName(list, 'Shao'), 'Xu Shao', 'half the name');
-  assert.equal(closestName(list, 'CC MathClub'), 'CCMathClub', 'a space that is not there');
-  assert.equal(closestName(list, 'Mary Jane Watson'), 'Mary-Jane Watson', 'a missing hyphen');
-  assert.equal(closestName(list, 'Zebedee Quux'), null, 'a stranger is told nothing');
-  assert.equal(closestName(list, ''), null);
-  assert.equal(closestName('', 'Anyone'), null, 'an empty list suggests nothing');
 });
 
 test('the roster index takes rows in either shape', () => {

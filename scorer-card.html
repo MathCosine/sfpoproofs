@@ -36,7 +36,7 @@ header{display:flex;justify-content:space-between;align-items:flex-end;
 /* Ruled, so it is obviously somewhere to write rather than a gap the
    layout left behind. print-color-adjust keeps the lines when a browser
    decides to drop backgrounds. */
-.notes .lines{height:26mm;
+.notes .lines{height:9mm;
   background-image:linear-gradient(to bottom,var(--rule) 1px,transparent 1px);
   background-size:100% 6.5mm;
   -webkit-print-color-adjust:exact;print-color-adjust:exact}
@@ -91,15 +91,18 @@ footer{border-top:1px solid var(--rule);margin-top:7px;padding-top:4px;
 
 <section>
   <h2><span class="n">1</span> Signing in</h2>
+  <p><b>Your name and the password are both keys.</b> Neither works without the
+     other, so write your name here exactly as the director has it:</p>
   <ol>
-    <li>Open the portal. Type <b>your own name</b>, spelled the way it is on the
-        scorer list — the portal records every sheet against it.</li>
-    <li>Type the staff password: <span class="fill"></span></li>
-    <li>If it says your name is not on the list, it will usually suggest the
-        right spelling. Take the suggestion.</li>
+    <li>Name: <span class="fill"></span></li>
+    <li>Password: <span class="fill"></span></li>
   </ol>
-  <p class="warn">Never sign in as somebody else. If two people share a name,
-     the second adds an initial.</p>
+  <p>Capitals and punctuation do not matter; a different spelling does. If the
+     list says <span class="k">Xu Shao</span>, then <span class="k">xu shao</span>
+     works and <span class="k">Shao Xu</span> does not.</p>
+  <p class="warn">Turned away? It will not say which half was wrong, on purpose.
+     Check both, then find a director. Never sign in as somebody else — every
+     sheet is recorded against the name you typed.</p>
 </section>
 
 <section>

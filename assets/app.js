@@ -11,7 +11,7 @@ import {
   indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
   competitionRanks,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
-  awardLine, nameAllowed, closestName, parseNameList, parseRoster, indexRoster,
+  awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
@@ -2444,13 +2444,27 @@ function checkVersion() {
   return false;
 }
 
+// The one thing the door ever says when it will not open.
+//
+// A wrong name and a wrong password give the same sentence, deliberately.
+// Told which half was wrong, somebody holding one of them can go looking
+// for the other -- and the name is the half that is easy to guess, since
+// the people scoring a contest are not a secret. Saying nothing makes the
+// pair the credential rather than the password alone.
+//
+// It costs a scorer who mistypes their own name the hint that it was the
+// name. That is the trade, and it is why the card tells them to have both
+// in front of them.
+const DOOR_CLOSED = 'That name and password were not accepted. '
+  + 'Both have to match what the director gave you.';
+
 /**
  * Is this name allowed under this role? Returns the message to show, or
  * null to let them in.
  *
- * This is a roster check, not a lock: whoever holds the password could
- * type a listed name. It stops the wrong person wandering in and keeps
- * the name on every sheet one of the names you expect.
+ * This is a roster check as well as a lock: with a list filled in, the
+ * name is the second half of getting through the door, so it stops
+ * whoever learned the password from grading under a name nobody knows.
  */
 async function nameRejected(name, admin) {
   let settings = null;
@@ -2464,15 +2478,7 @@ async function nameRejected(name, admin) {
   // An admin may also sit down and score, so an admin name passes either door.
   if (!admin && nameAllowed(settings?.admin_names, name)
       && parseNameList(settings?.admin_names).length) return null;
-  // Almost every rejection on the day will be a typo, and a typo that
-  // only a director can clear is a queue at the door. Name the closest
-  // match so most people can fix it where they stand.
-  const near = closestName(list, name);
-  const which = admin ? 'admin' : 'scorer';
-  return near
-    ? `“${name}” is not on the ${which} list. Did you mean “${near}”?`
-    : `“${name}” is not on the ${which} list. Check the spelling, `
-      + 'or ask a director to add you.';
+  return DOOR_CLOSED;
 }
 
 async function boot() {
@@ -2533,7 +2539,7 @@ async function boot() {
         localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
       } catch (err) {
         $('#gateError').textContent = /Invalid/.test(err.message ?? '')
-          ? 'That password was not accepted. Check with the contest director.'
+          ? DOOR_CLOSED
           : (err.message || 'Could not sign in.');
         $('#gateError').classList.add('field__hint--error');
         return;

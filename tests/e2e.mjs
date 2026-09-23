@@ -1399,9 +1399,13 @@ await shot.close();
   await visitor.fill('#graderName', 'Someone Random');
   await visitor.click('#gateEnter');
   await visitor.waitForTimeout(600);
+  const scorerRefusal = (await visitor.textContent('#gateError')).trim();
   check('a name that is not on the scorer list is turned away',
-    (await visitor.textContent('#gateError')).includes('not on the scorer list'),
-    await visitor.textContent('#gateError'));
+    scorerRefusal.includes('name and password were not accepted'), scorerRefusal);
+  check('without saying which half was wrong',
+    !/name|password/i.test(scorerRefusal.replace('name and password were not accepted', ''))
+    && !scorerRefusal.includes('Someone Random'),
+    'the refusal must not name the list, the name typed, or which half failed');
   check('and stays at the door', await visitor.isVisible('#gate'));
 
   await visitor.fill('#graderName', 'xu  shao');
@@ -1418,9 +1422,14 @@ await shot.close();
   await visitor.fill('#adminPassword', 'demo');
   await visitor.click('#gateEnter');
   await visitor.waitForTimeout(600);
+  const adminRefusal = (await visitor.textContent('#gateError')).trim();
   check('a scorer cannot walk in through the admin door',
-    (await visitor.textContent('#gateError')).includes('not on the admin list'),
-    await visitor.textContent('#gateError'));
+    adminRefusal.includes('name and password were not accepted'), adminRefusal);
+  // Both doors, and a wrong password, say one sentence. Anything that
+  // differs tells somebody holding half the credential which half they
+  // already have, and the names of the people scoring are not a secret.
+  check('and both doors close with the same words',
+    adminRefusal === scorerRefusal, `${scorerRefusal} / ${adminRefusal}`);
 
   await visitor.fill('#graderName', 'Ryan Wang');
   await visitor.fill('#adminPassword', 'demo');

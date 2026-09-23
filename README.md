@@ -110,13 +110,23 @@ Importing updates anyone already listed and leaves the rest alone. Export gives 
 whole list back as CSV, and **Remove every participant** empties the list and nothing
 else — answer sheets, scores, teams and the answer key are untouched.
 
-**Sign-in lists** say who may use each password. One name per line in Admin; a name
-must match what they type at the door, give or take case, spacing and punctuation. An
-admin name also works at the scorer door. **Leave a list empty and anyone with that
-password gets in**, which is the state to keep it in until you have everybody's name.
-This is a roster check, not a lock — whoever holds the password could type a listed
-name — so it keeps the wrong person out and keeps the name on every sheet one you
-recognise. Locked out by a typo? In the SQL Editor:
+**Sign-in lists** make the name the second half of the password. One name per line in
+Admin; a name must match what they type at the door, give or take case, spacing and
+punctuation. An admin name also works at the scorer door. **Leave a list empty and
+anyone with that password gets in**, which is the state to keep it in until you have
+everybody's name.
+
+With a list filled in, the pair is the credential: knowing the password is not enough
+without knowing a name on the list, and knowing a name is not enough without the
+password. So **the door gives one sentence for both failures** — *"That name and
+password were not accepted"* — and never says which half was wrong, never repeats the
+name typed, and never suggests a closer one. The names of people scoring a contest are
+not a secret; told which half they already have, somebody holding the other half knows
+exactly what to go looking for.
+
+That costs a scorer who mistypes their own name the hint that it was the name, which is
+why the printed card tells them to have both written down. Locked out by a typo in the
+list itself? In the SQL Editor:
 `update app_settings set admin_names = '' where id = 1;`
 
 **The scorer register** in Admin lists everyone who has signed in, whether they are here
