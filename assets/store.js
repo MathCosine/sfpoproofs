@@ -126,6 +126,17 @@ export function supabaseBackend(cfg, injectedClient = null) {
   /** The team as this tab last saw it, or undefined if it has never seen it. */
   const cachedTeam = (team) => cache.teams.find((t) => String(t.team) === String(team));
 
+  // No answer is not "no". A dropped connection comes back from supabase-js
+  // as AuthRetryableFetchError, status 0 (or a 502-504), a server that
+  // fell over as a 5xx, and one asking to be left alone for a moment as a
+  // 429. None of them says anything about the session, so none may end
+  // it -- that would send a scorer back to type the password every time
+  // the wifi blinked during a reload.
+  const noAnswer = (error) => error?.name === 'AuthRetryableFetchError'
+    || !error?.status || error.status === 429 || error.status >= 500;
+  const unreachable = () => Object.assign(new Error('Could not reach the server.'),
+    { unreachable: true });
+
   // Everything supabase-js keeps for this session, under the key it was
   // given plus the suffixes it adds.
   const SESSION_KEY = 'contest-staff-session';
@@ -164,9 +175,17 @@ export function supabaseBackend(cfg, injectedClient = null) {
      */
     async verifiedEmail() {
       const c = await getClient();
-      const { data } = await c.auth.getSession();
-      if (!data.session) return null;
+      const { data, error: loadError } = await c.auth.getSession();
+      if (!data.session) {
+        // An expired token it could not refresh for want of a connection:
+        // supabase-js keeps the session, and so do we.
+        if (loadError && noAnswer(loadError)) throw unreachable();
+        return null;
+      }
       const { data: who, error } = await c.auth.getUser();
+      // Only the server saying no ends the session. Silence throws, and
+      // the session stays for the next try.
+      if (error && noAnswer(error)) throw unreachable();
       if (error || !who?.user?.email) {
         await api.signOut();
         return null;
@@ -183,7 +202,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const email = admin ? cfg.ADMIN_EMAIL : cfg.STAFF_EMAIL;
       const { error } = await (await getClient()).auth
         .signInWithPassword({ email, password });
-      if (error) throw new Error(error.message);
+      if (error) throw noAnswer(error) ? unreachable() : new Error(error.message);
       return { admin };
     },
 

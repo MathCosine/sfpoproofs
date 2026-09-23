@@ -57,6 +57,7 @@ const sessions = new Map();          // session id -> email
 const refreshTokens = new Map();     // refresh token -> session id
 const lists = { admin_names: 'Thomas Ni\nRyan Wang\nLusen Yao', grader_names: 'Xu Shao\nCCMathClub' };
 let logoutBreaks = false;
+let unreachable = false;         // the wifi drops: every request fails to connect
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const issue = (email) => {
   const sid = randomUUID();
@@ -115,6 +116,7 @@ const fake = createServer(async (req, res) => {
     res.end(body == null ? '' : JSON.stringify(body));
   };
   const authError = (status, code, msg) => send(status, { code: status, error_code: code, msg });
+  if (unreachable) { req.socket.destroy(); return; }
   if (req.method === 'OPTIONS') return send(204, null);
 
   // ---- auth --------------------------------------------------------
@@ -377,6 +379,40 @@ const REFUSED = 'That name and password were not accepted';
   await reload(p);
   check('taken off the list, a reload puts them back at the door', (await place(p)) === 'door');
   lists.grader_names = kept;
+  await ctx.close();
+}
+
+// ---- 7. a dropped connection is not a verdict ---------------------------
+// Asking the server on every reload is what keeps a dead session out. But
+// a reload during a wifi blip gets no answer at all, and no answer is not
+// "no": signing the scorer out for it would send them back to the door to
+// type the password again, in a room where the wifi is never perfect.
+{
+  const ctx = await newContext();
+  const p = await open(ctx);
+  await signIn(p, { name: 'Xu Shao', staff: 'staff pass words' });
+  unreachable = true;
+  await reload(p);
+  const note = await p.evaluate(() => document.querySelector('#gateError').textContent.trim());
+  check('a reload with no connection waits at the door rather than guessing',
+    (await place(p)) === 'door');
+  check('and says it could not reach the server, not that the password was wrong',
+    /reach the server/i.test(note) && !note.includes(REFUSED), note || '(nothing said)');
+  check('without throwing the sign-in away', (await stored(p)) === true);
+  unreachable = false;
+  await reload(p);
+  check('so once the connection is back, a reload walks straight in — no password',
+    (await place(p)) === 'portal' && (await isAdmin(p)) === false);
+  await ctx.close();
+}
+{
+  const ctx = await newContext();
+  const p = await open(ctx);
+  unreachable = true;
+  const said = await signIn(p, { name: 'Xu Shao', staff: 'staff pass words' });
+  unreachable = false;
+  check('signing in with no connection says so, and does not blame the password',
+    /reach the server/i.test(said) && !said.includes(REFUSED), said);
   await ctx.close();
 }
 

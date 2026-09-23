@@ -2463,6 +2463,13 @@ function checkVersion() {
 const DOOR_CLOSED = 'That name and password were not accepted. '
   + 'Both have to match what the director gave you.';
 
+// And the one thing it says when it could not ask at all. Never the
+// sentence above: a scorer told their password is wrong when the wifi
+// dropped will start guessing at a password that was right.
+const NO_ANSWER_AT_DOOR = 'Could not reach the server. Check the connection and try again.';
+const NO_ANSWER_ON_RETURN = 'Could not reach the server to check your sign-in. '
+  + 'Check the connection and reload — you will not need the password again.';
+
 /**
  * Is this name allowed under this role? Returns the message to show, or
  * null to let them in.
@@ -2517,7 +2524,22 @@ async function boot() {
   // admin. Now the server says who this is, the name list is checked
   // again, and anything short of both is the sign-in screen.
   if (grader.name) {
-    const email = await store.verifiedEmail().catch(() => null);
+    const ask = async () => {
+      try { return { email: await store.verifiedEmail() }; }
+      catch (err) { return { email: null, unreachable: Boolean(err?.unreachable) }; }
+    };
+    // One second try covers the blink of a connection coming back; past
+    // that, say so and keep the session for the reload that follows.
+    let who = await ask();
+    if (who.unreachable) {
+      await new Promise((r) => setTimeout(r, 1500));
+      who = await ask();
+    }
+    if (who.unreachable) {
+      $('#gateError').textContent = NO_ANSWER_ON_RETURN;
+      $('#gateError').classList.add('field__hint--error');
+    }
+    const email = who.email;
     if (email) {
       isAdmin = email === cfg.ADMIN_EMAIL;
       if (!(await nameRejected(grader.name, isAdmin))) {
@@ -2557,9 +2579,9 @@ async function boot() {
         }
         localStorage.setItem('contest-role', isAdmin ? 'admin' : 'scorer');
       } catch (err) {
-        $('#gateError').textContent = /Invalid/.test(err.message ?? '')
-          ? DOOR_CLOSED
-          : (err.message || 'Could not sign in.');
+        $('#gateError').textContent = err?.unreachable ? NO_ANSWER_AT_DOOR
+          : /Invalid/.test(err.message ?? '') ? DOOR_CLOSED
+            : (err.message || 'Could not sign in.');
         $('#gateError').classList.add('field__hint--error');
         return;
       } finally { $('#gateEnter').disabled = false; }

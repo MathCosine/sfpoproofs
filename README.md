@@ -133,7 +133,11 @@ why the printed card tells them to have both written down.
 **A reload goes through the same door.** Coming back to a signed-in browser asks the
 server who this is — not the browser's own storage, which keeps a session looking alive
 for up to an hour after a password change has ended it — and checks the name list again.
-Anything short of both is the sign-in screen. **Sign out ends that browser's session and
+Anything short of both is the sign-in screen — but only when the server actually says no.
+A reload that cannot reach it at all, in a wifi blink, keeps the session, says it could not
+reach the server, and walks straight back in on the next reload without the password; and
+signing in with no connection says exactly that, never that the password was wrong.
+**Sign out ends that browser's session and
 nobody else's**: supabase-js signs out every session on the account by default, which on
 a shared account is the whole room, and keeps the session anyway if the server call
 fails, so the portal asks for a local sign-out and clears the browser itself regardless.
@@ -507,7 +511,7 @@ data. The bar reads **demo mode** in amber throughout.
 npm test               # 98 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 209 browser checks, including twenty scorers at once
 npm run test:db        # 26 checks: twenty connections racing a real Postgres, and the password change
-npm run test:auth      # 24 checks: the real Supabase sign-in path, with the real supabase-js
+npm run test:auth      # 29 checks: the real Supabase sign-in path, with the real supabase-js
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
