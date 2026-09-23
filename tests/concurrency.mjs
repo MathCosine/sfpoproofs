@@ -26,6 +26,9 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
+import { readFile, writeFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const run = promisify(execFile);
 const URL_ = process.env.DATABASE_URL;
@@ -453,6 +456,84 @@ const saveSheet = async (n, at, sheet = null) => {
   check('twenty scorers arriving at once all appear in the room',
     results.every((r) => r === 'SEEN') && seen === String(CREW),
     `${seen} present — ${[...new Set(results)].join(', ')}`);
+}
+
+// ---------------------------------------------------------------------
+// 10. Changing the passwords
+//
+// change-passwords.sql writes to auth.users, the one table where a
+// mistake locks the whole room out. So it is run here against the shape
+// Supabase gives that table: every refusal must leave both accounts
+// exactly as they were, and a real change must leave a hash the old
+// password no longer opens and the staff password cannot open the admin
+// door with.
+// ---------------------------------------------------------------------
+{
+  await sql(`create schema if not exists auth;
+    drop table if exists auth.refresh_tokens, auth.sessions, auth.users cascade;
+    create table auth.users (id uuid primary key default gen_random_uuid(),
+      email text unique, encrypted_password text, updated_at timestamptz default now());
+    create table auth.sessions (id uuid primary key default gen_random_uuid(),
+      user_id uuid not null references auth.users(id) on delete cascade);
+    create table auth.refresh_tokens (id bigserial primary key,
+      session_id uuid references auth.sessions(id) on delete cascade);
+    insert into auth.users (email, encrypted_password) values
+      ('staff@sfpo.local', crypt('old staff pass', gen_salt('bf', 10))),
+      ('admin@sfpo.local', crypt('old admin pass', gen_salt('bf', 10)));
+    with s as (insert into auth.sessions (user_id) select id from auth.users returning id)
+    insert into auth.refresh_tokens (session_id) select id from s;`);
+
+  const script = await readFile(new URL('../supabase/change-passwords.sql', import.meta.url), 'utf8');
+  const PLACEHOLDER = "values ('PUT-THE-NEW-STAFF-PASSWORD-HERE', 'PUT-THE-NEW-ADMIN-PASSWORD-HERE')";
+  check('the password script still carries its placeholder line', script.includes(PLACEHOLDER));
+  const tmp = join(tmpdir(), `change-passwords-${process.pid}.sql`);
+  const runWith = async (staff, admin) => {
+    const text = staff == null ? script
+      : script.replace(PLACEHOLDER, `values ('${staff}', '${admin}')`);
+    await writeFile(tmp, text);
+    try { return await psql(['-v', 'ON_ERROR_STOP=1', '-F', '|', '-f', tmp]); }
+    finally { await rm(tmp, { force: true }); }
+  };
+  const state = () => one(`select md5(string_agg(encrypted_password, '' order by email))
+                             || ':' || (select count(*) from auth.sessions) from auth.users`);
+
+  const refusals = [
+    ['run as shipped', null, null],
+    ['too short', 'tiny', 'also tiny'],
+    ['the same for both', 'correct horse battery', 'correct horse battery'],
+    ['a stray space', 'correct horse battery ', 'maple river lantern cup'],
+    ['one filled, one not', 'correct horse battery', 'PUT-THE-NEW-ADMIN-PASSWORD-HERE'],
+  ];
+  // Each against the state just before it, so a missing guard is named on
+  // its own rather than dragging every refusal after it down with it.
+  const touched = [];
+  for (const [label, staff, admin] of refusals) {
+    const before = await state();
+    const said = await runWith(staff, admin);
+    if ((await state()) !== before || !said.includes('not changed')) touched.push(label);
+  }
+  check('every refused password change leaves both accounts exactly as they were',
+    touched.length === 0,
+    touched.length ? `changed on: ${touched.join(', ')}` : 'five refusals, nothing touched');
+
+  const said = await runWith('maple river lantern cup', 'quiet orbit fennel stairs');
+  const verify = (email, pw) => one(`select crypt('${pw}', encrypted_password) = encrypted_password
+                                       from auth.users where email = '${email}'`);
+  check('a real change sets both passwords',
+    (said.match(/CHANGED/g) ?? []).length === 2
+    && (await verify('staff@sfpo.local', 'maple river lantern cup')) === 't'
+    && (await verify('admin@sfpo.local', 'quiet orbit fennel stairs')) === 't');
+  check('the old passwords stop working',
+    (await verify('staff@sfpo.local', 'old staff pass')) === 'f'
+    && (await verify('admin@sfpo.local', 'old admin pass')) === 'f');
+  check('and the staff password cannot open the admin door',
+    (await verify('admin@sfpo.local', 'maple river lantern cup')) === 'f');
+  check('everyone holding an old password is signed out',
+    (await one('select count(*) from auth.sessions')) === '0'
+    && (await one('select count(*) from auth.refresh_tokens')) === '0');
+  check('stored the way Supabase Auth stores them, bcrypt at cost 10',
+    (await one(`select bool_and(encrypted_password like '$2a$10$%') from auth.users`)) === 't');
+  await sql('drop schema auth cascade');
 }
 
 console.log(out.join('\n'));

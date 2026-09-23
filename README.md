@@ -4,7 +4,10 @@ Answer entry and live scoring for a two-round contest: a 20-problem individual
 round and a 7-set guts round, both auto-graded against an answer key you keep in
 the portal. Plus a public guts leaderboard for the projector.
 
-No accounts, no per-scorer logins, no monthly bill.
+Divisions A and B each sit **their own individual paper** but **the same guts paper**,
+so the key holds two individual answer sets and one guts set.
+
+Two shared passwords, no per-scorer accounts, no monthly bill.
 
 ![The entry console and per-contestant progress](docs/screenshot-portal.png)
 
@@ -255,11 +258,30 @@ Free tier. **SQL Editor → New query →** paste all of
 Both are typed on the sign-in screen — the staff password in the first box, the admin
 password in the second. Neither is in this repo.
 
-To **change a password**: Authentication → Users → the row → ⋯ → **Reset password**,
-or edit the user and set a new one. Nothing needs redeploying; everyone signs in again
-with the new one. Use something long — four or five unrelated words beats a short
-scramble, and it has to be read out to twenty people. The password is never in this
-repo, and changing it does not touch any data.
+To **change a password**, use [`supabase/change-passwords.sql`](supabase/change-passwords.sql)
+in the SQL Editor — **not** the dashboard's *Send password recovery*. Both accounts have
+made-up addresses, so that button emails an inbox that does not exist, and Studio has no
+box for typing a new password in directly. Put the two new passwords between the quotes
+on the one marked line, run it, and read the four rows it returns; then delete the
+snippet from the SQL Editor sidebar, because it now holds the passwords.
+
+It changes both or neither, and refuses — without touching anything — a password under
+12 characters, one with a space at either end (pasted, and then untypeable forever), or
+the same password for both accounts, which would let a scorer open Admin with the staff
+password. It signs out everyone holding an old password, so change them **before** the
+day, not during it. The checks are conditions rather than errors on purpose: a failed
+statement is copied into the database log with its text, passwords and all, and this one
+never fails. Postgres's own statistics record it as `values ($1, $2)`.
+
+Tested against Supabase's shape of the `auth` schema, and the hashes it writes were
+checked with `golang.org/x/crypto/bcrypt` — the library Supabase Auth itself signs you in
+with: new passwords accepted, old ones refused, the staff password refused at the admin
+door, all at bcrypt cost 10, the same cost Supabase Auth writes.
+
+Choose four or five unrelated words over a short scramble: it has to be written on twenty
+cards and typed by twenty people, so leave out anything that looks like something else
+in handwriting — `0` and `O`, `1`, `l` and `I`. Nothing needs redeploying, no data is
+touched, and the password is never in this repo.
 
 A database that is one schema run behind does not take the portal down. Reference data
 the schema adds later — the participant list — comes back empty with a banner naming the
@@ -471,7 +493,7 @@ data. The bar reads **demo mode** in amber throughout.
 ```bash
 npm test               # 98 unit tests: scoring, the clock, realtime patching, lock contention
 npm run test:e2e       # 209 browser checks, including twenty scorers at once
-npm run test:db        # 19 checks: twenty connections racing a real Postgres
+npm run test:db        # 26 checks: twenty connections racing a real Postgres, and the password change
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
@@ -493,7 +515,11 @@ claimed by twenty (exactly one wins, nineteen are told who has it), an abandoned
 sheet (taken over once, not twenty times), a sheet still being worked on (renews for
 its holder, blocks everyone else), twenty sheets at once (nobody waits), twenty
 saves landing together, twenty guts sets firing the public-board trigger at once
-(no deadlock), and twenty scorers arriving together.
+(no deadlock), and twenty scorers arriving together. It also runs
+`change-passwords.sql` against Supabase's shape of `auth.users`, because that is the one
+script where a mistake locks the whole room out: five kinds of bad input must each leave
+both accounts untouched, and a real change must refuse the old passwords and refuse the
+staff password at the admin door.
 
 It earned its keep immediately: twenty saves landing together deadlocked in the
 database roughly one storm in three, and a scorer whose save lost that coin toss got
