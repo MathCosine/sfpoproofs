@@ -78,9 +78,11 @@ insert into contest_state (id) values (1) on conflict (id) do nothing;
 --   round = 'individual' -> problems 1..20
 --   round = 'guts'       -> problems 1..28  (set n covers 4n-3 .. 4n)
 -- ---------------------------------------------------------------------
---   The two divisions sit different individual papers, so the individual
---   key is stored per division. Guts is one paper for everybody and uses
---   the division '*'.
+--   The two divisions sit different papers in both rounds, so every key
+--   row belongs to a division. A team's guts answers are marked against
+--   the guts key of the division its ID starts with: A01 against A, B01
+--   against B. The division '*' is what guts used when both divisions
+--   sat one paper; the block below turns any such rows into A and B.
 create table if not exists answer_key (
   round      text    not null check (round in ('individual','guts')),
   division   char(1) not null default '*' check (division in ('A','B','*')),
@@ -109,6 +111,18 @@ begin
         from answer_key where round = 'individual' and division = 'A';
   end if;
 end $$;
+
+-- Upgrading a database from when both divisions sat one guts paper. The
+-- shared key becomes the starting point for both divisions, so nothing
+-- typed so far is lost; each can then be changed on its own. A row a
+-- division already has is kept, because it can only be newer than the
+-- shared one it would be copied from.
+insert into answer_key (round, division, problem, answer, points)
+  select 'guts', d, k.problem, k.answer, k.points
+    from answer_key k, unnest(array['A','B']) d
+   where k.round = 'guts' and k.division = '*'
+on conflict (round, division, problem) do nothing;
+delete from answer_key where round = 'guts' and division = '*';
 
 -- ---------------------------------------------------------------------
 -- Teams. Division and name live here; the name is captured the first
@@ -291,7 +305,11 @@ begin
            count(*) filter (where ak.answer is not null and ga.answer = ak.answer) as solved,
            count(*) filter (where ga.answer is not null) as answered
       from guts_answers ga
-      left join answer_key ak on ak.round = 'guts' and ak.division = '*'
+      -- Each division sits its own guts paper: mark a team against the
+      -- key for its division, which its ID carries as the first letter.
+      join teams tm on tm.team = ga.team
+      left join answer_key ak on ak.round = 'guts'
+                            and ak.division = coalesce(tm.division, upper(left(ga.team, 1)))
                             and ak.problem = ga.problem
      group by ga.team
   ) sc on sc.team = t.team
@@ -529,7 +547,8 @@ select 'individual', d, g, null, 1
 on conflict (round, division, problem) do nothing;
 
 insert into answer_key (round, division, problem, answer, points)
-select 'guts', '*', g, null, ceil(g / 4.0) from generate_series(1, 28) g
+select 'guts', d, g, null, ceil(g / 4.0)
+  from generate_series(1, 28) g, unnest(array['A','B']) d
 on conflict (round, division, problem) do nothing;
 
 do $$

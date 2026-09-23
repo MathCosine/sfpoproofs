@@ -11,7 +11,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.23.2">
+<body data-app-version="2026.09.23.3">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -262,17 +262,31 @@
         <p class="field__hint" style="margin-bottom:14px">
           Non-negative integers. Leave a problem blank and it scores nothing for anyone —
           nobody is marked right or wrong against an answer you have not set yet.
-          Guts point values are set per set, right here.
+          Each division has its own individual and guts key; a team's guts sets are marked
+          against the key for the division its ID starts with.
         </p>
         <div class="chip-row" style="margin-bottom:12px">
-          <button class="tab" data-keydiv="A" aria-selected="true">Individual · Division A</button>
-          <button class="tab" data-keydiv="B" aria-selected="false">Individual · Division B</button>
+          <button class="tab" data-keydiv="A" aria-selected="true">Division A</button>
+          <button class="tab" data-keydiv="B" aria-selected="false">Division B</button>
           <span class="tag" id="keyDivState" style="margin-left:auto"></span>
         </div>
+        <h3 class="subhead">Individual — 20 problems</h3>
         <div class="answers" id="keyIndividualA"></div>
         <div class="answers hidden" id="keyIndividualB"></div>
-        <h3 class="subhead" style="margin-top:22px">Guts — 7 sets of 4</h3>
-        <div id="keyGuts"></div>
+        <div id="keyGutsPaneA">
+          <h3 class="subhead" style="margin-top:22px">Division A guts — 7 sets of 4
+            <span class="muted" id="keyGutsStateA"></span></h3>
+          <div id="keyGutsA"></div>
+        </div>
+        <div id="keyGutsPaneB" class="hidden">
+          <h3 class="subhead" style="margin-top:22px">Division B guts — 7 sets of 4
+            <span class="muted" id="keyGutsStateB"></span></h3>
+          <div id="keyGutsB"></div>
+        </div>
+        <p class="field__hint" style="margin-top:10px">
+          Guts point values are the same for both divisions: change a set's points on either
+          tab and the other follows.
+        </p>
         <div class="banner banner--info" id="keyReadOnly">
           <div>
             <b>You are signed in as a scorer</b>
@@ -314,10 +328,14 @@
         <div class="chip-row" style="margin-top:12px">
           <button class="btn btn--warn" id="freezeToggle">Freeze now</button>
           <a class="btn" id="publicLink" target="_blank" rel="noopener">Open public board ↗</a>
+          <a class="btn btn--ghost" id="publicLinkA" target="_blank" rel="noopener">Division A only ↗</a>
+          <a class="btn btn--ghost" id="publicLinkB" target="_blank" rel="noopener">Division B only ↗</a>
         </div>
         <p class="field__hint" style="margin-top:12px">
           The public board shows team names, guts scores and the clock — nothing else from this
-          portal, and never an answer or the key. Put it on the projector.
+          portal, and never an answer or the key. Put it on the projector. It ranks the two
+          divisions side by side, since each sits its own guts paper; with a projector per
+          division, open one of the single-division boards on each.
         </p>
       </div>
 
@@ -439,6 +457,41 @@
           <div id="rosterProblems"></div>
         </details>
 
+        <div class="panel__head" style="margin-top:28px"><h2>Teams</h2>
+          <span class="spacer"></span><span class="tag" id="teamListState">none</span></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          A team's name fills itself in at guts entry and shows on the leaderboards and the
+          projector. Every team on this list is on the public board from the start, at 0.
+          Scorers can still correct a name at guts entry; a change made either place shows
+          up everywhere.
+        </p>
+        <details id="teamImportBox" style="margin-bottom:14px">
+          <summary class="field__label" style="cursor:pointer">Import team names</summary>
+          <p class="field__hint" style="margin:10px 0">
+            One team per line. The team ID is found wherever it sits, so
+            <span class="mono">A01, Cowbell</span>, <span class="mono">Cowbell, A01</span>,
+            <span class="mono">A, 1, Cowbell</span> (division and number in their own
+            columns) and a spreadsheet pasted straight in with a header row all work.
+            Importing updates teams already listed and leaves the rest alone; a
+            disqualification is kept.
+          </p>
+          <textarea class="input mono" id="teamPaste" rows="6" spellcheck="false"
+                    placeholder="A01, Cowbell&#10;A02, Coconut Crew&#10;B01, Moo Point"></textarea>
+          <div class="chip-row" style="margin-top:10px">
+            <button class="btn btn--primary" id="teamImport">Import teams</button>
+          </div>
+          <div id="teamProblems"></div>
+        </details>
+        <div class="field">
+          <label class="field__label" for="teamSearch">Find a team</label>
+          <input class="input" id="teamSearch" placeholder="Team ID or name" autocomplete="off">
+        </div>
+        <div id="teamList"></div>
+        <div class="chip-row" style="margin-top:10px">
+          <button class="btn btn--ghost" id="teamExport">Export as CSV</button>
+          <span class="muted">A team can be removed only while nothing has been entered for it.</span>
+        </div>
+
         <div class="panel__head" style="margin-top:28px"><h2>Disqualifications</h2></div>
         <div class="grid-2">
           <div class="field">
@@ -481,11 +534,17 @@
 
         <div class="panel__head" style="margin-top:28px"><h2>Clear test data</h2></div>
         <p class="field__hint" style="margin-bottom:12px">
-          Deletes every answer sheet, guts answer, team and lock. The answer key and your
-          settings are kept. No undo — export first if you want a copy.
+          Deletes every answer sheet, guts answer and lock, and forgets who signed in. The
+          answer key, your settings and the participant list are kept. No undo — export first
+          if you want a copy.
         </p>
         <div class="danger">
           <p class="danger__counts mono" id="wipeCounts">Nothing to delete.</p>
+          <label class="check" style="margin:0 0 10px">
+            <input type="checkbox" id="wipeKeepTeams" checked>
+            <span>Keep the team names. Practice disqualifications are lifted, and a team
+            that never got a name goes; untick to delete every team as well.</span>
+          </label>
           <div class="danger__row">
             <input class="input" id="wipeConfirm" placeholder="Type ERASE to unlock"
                    autocomplete="off" spellcheck="false">
@@ -505,6 +564,30 @@
 </div>
 
 <div class="toasts" id="toasts"></div>
-<script type="module" src="assets/app.js?v=2026.09.23.2"></script>
+<script>
+  // A browser can hold a mix of old and new files for a few minutes after
+  // an update. If that mix stops the portal's script from starting at all,
+  // the door would sit there doing nothing when Enter is pressed. Say what
+  // is wrong instead. Plain script, so it runs even when the module cannot.
+  (function () {
+    function halfUpdated() {
+      if (window.__portalStarted || document.getElementById('bootFailed')) return;
+      var card = document.querySelector('.gate__card');
+      if (!card) return;
+      var b = document.createElement('div');
+      b.id = 'bootFailed';
+      b.className = 'banner banner--error';
+      b.innerHTML = '<div>⚠</div><div><b>This page is half-updated</b>'
+        + '<span>It could not start. Hard refresh to fix it: Cmd/Ctrl + Shift + R.</span></div>';
+      card.insertBefore(b, card.firstChild);
+    }
+    window.addEventListener('error', function (e) {
+      if (!window.__portalStarted && (!e.filename || /\/assets\//.test(e.filename)
+          || /module|export|import/i.test(String(e.message)))) halfUpdated();
+    });
+    window.addEventListener('load', function () { setTimeout(halfUpdated, 4000); });
+  })();
+</script>
+<script type="module" src="assets/app.js?v=2026.09.23.3"></script>
 </body>
 </html>

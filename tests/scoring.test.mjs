@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   parseIndividualId, parseAnswer, problemsInSet, setOfProblem, gutsProblemCount,
   indexKey, keyGaps, keyMaxPoints, scoreSheet, individualStandings, indexGutsAnswers,
-  individualKey, GUTS_DIVISION, teamKey, divisionOfTeam, teamNumberOf, isMemberNumber,
+  individualKey, gutsKey, LEGACY_GUTS_DIVISION, teamKey, divisionOfTeam, teamNumberOf, isMemberNumber,
   summarise, problemStats, scoreDistribution, divisionStatistics, awardLines,
   competitionRanks, ordinal,
   TEAM_COUNTING_MEMBERS,
@@ -13,7 +13,7 @@ import {
   liveClaims, claimRef, gutsRemaining, shouldFreeze, formatClock,
   individualMaxPoints, gutsMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
-  graderActivity, sinceLabel, rosterRows, filterRoster,
+  graderActivity, sinceLabel, rosterRows, filterRoster, parseTeamList, parseTeamKey,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
 import { parseCsv, toCsv } from '../assets/csv.js';
@@ -33,7 +33,7 @@ const cfg = {
  * Division A's individual problem n has answer n; Division B's has n+100
  * — deliberately disjoint, so a sheet marked against the wrong paper
  * scores zero rather than accidentally matching.
- * Guts problem n has answer n*2 and is the same paper for both.
+ * The guts papers differ too: A's problem n is n*2, B's is n*3.
  */
 const fullKey = () => {
   const rows = [];
@@ -42,7 +42,8 @@ const fullKey = () => {
     rows.push({ round: 'individual', division: 'B', problem: p, answer: p + 100, points: 1 });
   }
   for (let p = 1; p <= 28; p += 1) {
-    rows.push({ round: 'guts', division: '*', problem: p, answer: p * 2, points: Math.ceil(p / 4) });
+    rows.push({ round: 'guts', division: 'A', problem: p, answer: p * 2, points: Math.ceil(p / 4) });
+    rows.push({ round: 'guts', division: 'B', problem: p, answer: p * 3, points: Math.ceil(p / 4) });
   }
   return indexKey(rows);
 };
@@ -170,17 +171,17 @@ test('guts points rise with the set', () => {
   const key = fullKey();
   const answers = new Map();
   for (const p of problemsInSet(1, cfg)) answers.set(p, p * 2);   // set 1: 1 pt each
-  const first = scoreGutsTeam(answers, key, cfg);
+  const first = scoreGutsTeam(answers, key, cfg, 'A');
   assert.equal(first.score, 4);
 
   const late = new Map();
   for (const p of problemsInSet(7, cfg)) late.set(p, p * 2);      // set 7: 7 pts each
-  assert.equal(scoreGutsTeam(late, key, cfg).score, 28);
+  assert.equal(scoreGutsTeam(late, key, cfg, 'A').score, 28);
 });
 
 test('a guts set knows whether it is finished', () => {
   const answers = new Map([[1, 2], [2, 4]]);
-  const out = scoreGutsTeam(answers, fullKey(), cfg);
+  const out = scoreGutsTeam(answers, fullKey(), cfg, 'A');
   assert.equal(out.perSet[0].answered, 2);
   assert.equal(out.perSet[0].complete, false);
   assert.equal(out.perSet[1].answered, 0);
@@ -522,12 +523,103 @@ test('an abandoned claim can be taken over, a live one cannot', async () => {
 // The two divisions sit different individual papers
 // ---------------------------------------------------------------------
 
-test('each division has its own individual key, guts is shared', () => {
+test('each division has its own individual key and its own guts key', () => {
   const key = fullKey();
   assert.equal(individualKey(key, 'A').get(3).answer, 3);
   assert.equal(individualKey(key, 'B').get(3).answer, 103);
-  assert.equal(key.guts.get(3).answer, 6, 'guts is one paper for everybody');
+  assert.equal(gutsKey(key, 'A').get(3).answer, 6);
+  assert.equal(gutsKey(key, 'B').get(3).answer, 9, 'B sits its own guts paper');
   assert.equal(individualKey(key, 'Z').size, 0, 'an unknown division scores nothing');
+  assert.equal(gutsKey(key, null).size, 0, 'nor does a team whose division is unknown');
+});
+
+test('a guts set is marked against its own division’s key', () => {
+  const key = fullKey();
+  const aAnswers = new Map(problemsInSet(1, cfg).map((p) => [p, p * 2]));
+  assert.equal(scoreGutsTeam(aAnswers, key, cfg, 'A').score, 4);
+  assert.equal(scoreGutsTeam(aAnswers, key, cfg, 'B').score, 0,
+    'A’s answers on B’s paper score nothing');
+  const board = gutsStandings(
+    [{ team: 'A01', division: 'A' }, { team: 'B01', division: 'B' }, { team: 'B02' }],
+    indexGutsAnswers([
+      { team: 'A01', problem: 1, answer: 2 },
+      { team: 'B01', problem: 1, answer: 3 },
+      { team: 'B02', problem: 1, answer: 3 },   // no division stored: its ID says B
+    ]), key, cfg);
+  assert.deepEqual(Object.fromEntries(board.map((r) => [r.team, r.score])), { A01: 1, B01: 1, B02: 1 });
+});
+
+test('a key saved before the split still marks both divisions', () => {
+  // Until schema.sql is re-run, guts rows are stored once, under '*'.
+  const legacy = indexKey([
+    { round: 'guts', division: LEGACY_GUTS_DIVISION, problem: 1, answer: 7, points: 1 },
+    { round: 'guts', division: LEGACY_GUTS_DIVISION, problem: 2, answer: 8, points: 1 },
+    { round: 'guts', division: 'B', problem: 2, answer: 80, points: 1 },
+  ]);
+  assert.equal(gutsKey(legacy, 'A').get(1).answer, 7);
+  assert.equal(gutsKey(legacy, 'B').get(1).answer, 7, 'the shared row stands in for B');
+  assert.equal(gutsKey(legacy, 'B').get(2).answer, 80, 'but a row of B’s own wins');
+  assert.equal(gutsKey(legacy, 'A').get(2).answer, 8);
+});
+
+test('the guts ceiling and the gaps are per division', () => {
+  const key = indexKey([
+    { round: 'guts', division: 'A', problem: 1, answer: 1, points: 1 },
+    { round: 'guts', division: 'B', problem: 1, answer: null, points: 1 },
+    { round: 'guts', division: 'B', problem: 2, answer: 5, points: 1 },
+  ]);
+  assert.deepEqual(keyGaps(key, 'guts', 2, 'A'), [2]);
+  assert.deepEqual(keyGaps(key, 'guts', 2, 'B'), [1]);
+  assert.equal(gutsMaxPoints(key, { ...cfg, GUTS_SETS: 1, GUTS_PER_SET: 2 }, 'B'), 2);
+});
+
+// ---------------------------------------------------------------------
+// Team names, imported from whatever the list arrives as
+// ---------------------------------------------------------------------
+
+test('a team is read however a spreadsheet writes it', () => {
+  for (const raw of ['A01', 'a1', 'A-01', 'Team A01', '#A01', ' a 01 ']) {
+    assert.equal(parseTeamKey(raw)?.team, 'A01', raw);
+  }
+  assert.equal(parseTeamKey('B120')?.team, 'B120');
+  assert.equal(parseTeamKey('A00'), null, 'there is no team zero');
+  assert.equal(parseTeamKey('C01'), null);
+  assert.equal(parseTeamKey('Cowbell'), null);
+});
+
+test('a team list imports in any column order, with or without a header', () => {
+  const { rows, problems } = parseTeamList([
+    'Team ID, Team name',
+    'A01, Cowbell',
+    'Moo Point\tB02',
+    'A, 3, Udder Chaos',
+    '"B04", "Smith, Jones & Co"',
+  ].join('\n'));
+  assert.deepEqual(problems, []);
+  assert.deepEqual(rows, [
+    { team: 'A01', name: 'Cowbell', division: 'A' },
+    { team: 'B02', name: 'Moo Point', division: 'B' },
+    { team: 'A03', name: 'Udder Chaos', division: 'A' },
+    { team: 'B04', name: 'Smith, Jones & Co', division: 'B' },
+  ]);
+});
+
+test('a team list says which lines it could not use, and why', () => {
+  const { rows, problems } = parseTeamList([
+    'A01, Cowbell',
+    'A1, Cowbell Again',          // the same team, written differently
+    'A05',                        // no name
+    'A06, B, Wrong Division',     // a division column that disagrees
+    'A011, Ada Lovelace',         // a contestant, pasted into the wrong box
+    'nonsense',
+  ].join('\n'));
+  assert.deepEqual(rows.map((r) => r.team), ['A01']);
+  assert.equal(problems.length, 5);
+  assert.match(problems[0], /already on this list/);
+  assert.match(problems[1], /no team name/);
+  assert.match(problems[2], /says Division B/);
+  assert.match(problems[3], /contestant's ID/);
+  assert.equal(problems[4], 'nonsense');
 });
 
 test('a sheet is marked against its own division’s paper', () => {
@@ -1444,5 +1536,109 @@ test('opening the portal reads every table once, not twice', async () => {
   } finally {
     if (hadDocument) globalThis.document = realDocument;
     else delete globalThis.document;
+  }
+});
+
+// ---------------------------------------------------------------------
+// The team list, as the live store sends it
+// ---------------------------------------------------------------------
+
+/** Records every write with its payload, filters and options. */
+function recordingClient() {
+  const writes = [];
+  const table = (name) => {
+    const write = (op, payload, options) => {
+      const entry = { op, table: name, payload, options, filters: [] };
+      writes.push(entry);
+      const chain = {
+        eq(col, value) { entry.filters.push(`${col}=${value}`); return chain; },
+        not(col, how, value) { entry.filters.push(`${col} not ${how} ${value}`); return chain; },
+        select() { return chain; },
+        then: (r) => Promise.resolve({ data: [], error: null }).then(r),
+      };
+      return chain;
+    };
+    return {
+      upsert: (payload, options) => write('upsert', payload, options),
+      update: (payload) => write('update', payload),
+      delete: () => write('delete'),
+    };
+  };
+  return {
+    writes,
+    client: {
+      from: table,
+      channel: () => ({ on() { return this; }, subscribe() {} }),
+      auth: { getSession: async () => ({ data: { session: null } }) },
+    },
+  };
+}
+
+const liveStore = (client) => supabaseBackend(
+  { SUPABASE_URL: 'https://x.supabase.co', SUPABASE_ANON_KEY: 'k' }, client);
+
+test('importing teams sends the name and division and nothing else', async () => {
+  // An upsert writes the columns it is given. Sending a whole row would
+  // quietly reinstate a disqualified team every time the list is imported.
+  const { writes, client } = recordingClient();
+  await liveStore(client).saveTeams([
+    { team: 'A01', name: 'Cowbell', division: 'A', disqualified: false, extra: 1 },
+    { team: 'B02', name: 'Moo Point', division: 'B' },
+  ]);
+  assert.equal(writes.length, 1, 'one request, so the board rebuilds once');
+  assert.equal(writes[0].op, 'upsert');
+  assert.equal(writes[0].options.onConflict, 'team');
+  assert.deepEqual(writes[0].payload, [
+    { team: 'A01', name: 'Cowbell', division: 'A' },
+    { team: 'B02', name: 'Moo Point', division: 'B' },
+  ]);
+});
+
+test('clearing a rehearsal can keep the team names', async () => {
+  const kept = recordingClient();
+  await liveStore(kept.client).clearAll({ keepTeams: true });
+  const deleted = kept.writes.filter((w) => w.op === 'delete').map((w) => w.table);
+  assert.ok(!deleted.includes('teams') || kept.writes.some(
+    (w) => w.op === 'delete' && w.table === 'teams' && w.filters.includes('name=')),
+  'only unnamed teams are deleted');
+  const lift = kept.writes.find((w) => w.op === 'update' && w.table === 'teams');
+  assert.deepEqual(lift.payload, { disqualified: false, dq_reason: '', dq_by: '', dq_at: null },
+    'a practice disqualification is lifted');
+  for (const t of ['contestants', 'guts_answers', 'claims', 'graders']) {
+    assert.ok(deleted.includes(t), `${t} is still cleared`);
+  }
+
+  const all = recordingClient();
+  await liveStore(all.client).clearAll();
+  assert.ok(all.writes.some((w) => w.op === 'delete' && w.table === 'teams'
+    && !w.filters.includes('name=')), 'without it, every team goes');
+});
+
+// ---------------------------------------------------------------------
+// One version, everywhere a browser might cache
+// ---------------------------------------------------------------------
+
+test('every script and import carries the current version', async () => {
+  // GitHub Pages caches each file on its own for ten minutes. An import
+  // without the version can hand a fresh app.js a stale scoring.js, and
+  // when the fresh one asks for something the stale one does not export,
+  // the whole portal fails to start. The version in the URL is what makes
+  // an update arrive as one piece.
+  const { readFile } = await import('node:fs/promises');
+  const { APP_VERSION } = await import('../assets/config.js');
+  const root = new URL('../', import.meta.url);
+  const files = ['index.html', 'guts.html', 'assets/app.js', 'assets/store.js',
+    'assets/scoring.js', 'assets/csv.js', 'assets/config.js'];
+  for (const file of files) {
+    const text = await readFile(new URL(file, root), 'utf8');
+    for (const [, version] of text.matchAll(/\?v=([\w.]+)/g)) {
+      assert.equal(version, APP_VERSION, `${file} carries ?v=${version}`);
+    }
+    for (const [, version] of text.matchAll(/data-app-version="([^"]+)"/g)) {
+      assert.equal(version, APP_VERSION, `${file} says it is ${version}`);
+    }
+    for (const [spec] of text.matchAll(/from '(\.[^']+\.js[^']*)'/g)) {
+      assert.match(spec, /\?v=/, `${file} imports ${spec} without the version`);
+    }
   }
 });

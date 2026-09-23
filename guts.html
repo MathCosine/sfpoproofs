@@ -39,6 +39,7 @@
   --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 }
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 html,body{height:100%;margin:0;overflow:hidden}
 body{
   background:var(--paper); color:var(--ink); font-family:var(--sans);
@@ -70,7 +71,7 @@ header{display:flex;align-items:flex-end;gap:24px;flex:none;
 
 /* ---------- columns ---------- */
 .cols{flex:1;display:grid;grid-template-columns:1.5fr 1fr;gap:34px;min-height:0}
-@media (max-width:980px){.cols{grid-template-columns:1fr}.rest{display:none}}
+@media (max-width:980px){.cols:not(.cols--split){grid-template-columns:1fr}.rest{display:none}}
 .colhead{display:flex;align-items:baseline;gap:10px;margin-bottom:12px;
   font-size:11px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint)}
 .colhead .count{margin-left:auto;font-family:var(--mono);font-weight:400}
@@ -146,9 +147,33 @@ footer .spacer{margin-left:auto}
   background:#fdf3e3;color:#8a5a12;border:1px solid #e8d5ae;
   font-size:11px;font-weight:600;letter-spacing:.04em}
 @media (prefers-reduced-motion:reduce){.resttrack{transition:none!important}}
+
+/* ---------- both divisions at once ----------
+   The two divisions sit different guts papers, so they are ranked apart
+   and shown side by side: a column each, its leaders as cards and the
+   rest creeping upward beneath them. */
+.cols--split{grid-template-columns:1fr 1fr;gap:30px}
+.divcol{display:flex;flex-direction:column;min-height:0}
+.divcol .colhead{font-size:13px;color:var(--ink-soft)}
+.divcol .colhead .divname{font-size:clamp(15px,1.5vw,20px);font-weight:700;letter-spacing:.08em;
+  color:var(--ink)}
+.divcol .leadlist{flex:none}
+.divcol .card{flex:none;height:clamp(46px,7.4vh,78px);gap:14px;padding:0 14px}
+.divcol .restview{margin-top:10px}
+.divcol .empty{height:auto}
+/* On a phone there is no room for two columns or for either to scroll
+   inside itself, so the page scrolls instead: A, then B, every team. */
+@media (max-width:980px){
+  html.split,html.split body{height:auto;overflow:auto}
+  html.split .wrap{height:auto}
+  .cols--split{grid-template-columns:1fr;gap:26px}
+  .cols--split .sets{display:none}
+  .cols--split .restview{overflow:visible}
+  .cols--split .resttrack{position:static;transform:none!important}
+}
 </style>
 </head>
-<body data-app-version="2026.09.23.2">
+<body data-app-version="2026.09.23.3">
 <div class="wrap">
   <header>
     <div class="brand">
@@ -159,25 +184,16 @@ footer .spacer{margin-left:auto}
       <div class="frozen" id="frozenFlag" hidden>Frozen</div>
       <div class="stat"><span class="stat__label">Teams</span>
         <span class="stat__value" id="teamCount">—</span></div>
-      <div class="stat"><span class="stat__label">Leader</span>
+      <div class="stat" id="leadStat"><span class="stat__label">Leader</span>
         <span class="stat__value" id="leadScore">—</span></div>
       <div class="stat clock" id="clock"><span class="stat__label">Time left</span>
         <span class="stat__value" id="clockTime">--:--</span></div>
     </div>
   </header>
 
-  <div class="cols">
-    <section class="lead">
-      <div class="colhead"><span>Leaders</span><span class="count" id="leadCount"></span></div>
-      <div class="leadlist" id="leadList">
-        <div class="empty">Waiting for the first set to be scored.</div>
-      </div>
-    </section>
-    <section class="rest">
-      <div class="colhead"><span>Standings</span><span class="count" id="restCount"></span></div>
-      <div class="restview"><div class="resttrack" id="restTrack"></div></div>
-    </section>
-  </div>
+  <main class="cols" id="cols">
+    <div class="empty">Waiting for the first set to be scored.</div>
+  </main>
 
   <footer>
     <span class="pulse" id="pulse"></span><span id="liveLabel">Live</span>
@@ -188,9 +204,9 @@ footer .spacer{margin-left:auto}
 </div>
 
 <script type="module">
-import { resolvedConfig } from './assets/config.js?v=2026.09.23.2';
-import { createPublicStore } from './assets/store.js?v=2026.09.23.2';
-import { gutsRemaining, formatClock, competitionRanks } from './assets/scoring.js?v=2026.09.23.2';
+import { resolvedConfig } from './assets/config.js?v=2026.09.23.3';
+import { createPublicStore } from './assets/store.js?v=2026.09.23.3';
+import { gutsRemaining, formatClock, competitionRanks } from './assets/scoring.js?v=2026.09.23.3';
 
 // The board has no password to give away, so it may still be pointed at a
 // project from the address bar — that is how a projector machine is set
@@ -241,94 +257,187 @@ function setLabel(mask) {
   return `Set ${next}`;
 }
 
+// Both divisions sit their own guts paper, so they are ranked apart. The
+// board shows them side by side; ?division=A (or B) gives one division the
+// whole screen, for a room that has a projector each.
+const DIVISIONS = ['A', 'B'];
+const ONLY = (() => {
+  const params = new URLSearchParams(location.search);
+  const d = String(params.get('division') ?? params.get('div') ?? '').trim().toUpperCase();
+  return DIVISIONS.includes(d) ? d : null;
+})();
+if (ONLY) {
+  document.querySelector('.brand__round').textContent = `Guts Round · Division ${ONLY}`;
+  document.title = `${document.title} · Division ${ONLY}`;
+}
+
+/** The division a board row belongs to; its team ID carries it too. */
+function divisionOf(row) {
+  const d = String(row.division || String(row.team ?? '').charAt(0)).toUpperCase();
+  return DIVISIONS.includes(d) ? d : null;
+}
+
+/**
+ * One division's standings, best first, with competition places: two
+ * teams on the same score are both in that place, and the place after
+ * them is the one their position gives it. A projector counting 1, 2, 3
+ * down the rows would show a shared lead as a lead and a second, in
+ * front of the room it is wrong in front of.
+ *
+ * A team still on 0 has no place. With the whole team list on the board
+ * from the start, every team is on 0 before the first set is marked, and
+ * forty teams all "tied for first" in gold says nothing true.
+ */
+function ranked(rows) {
+  const sorted = [...rows].sort(
+    (a, b) => Number(b.score) - Number(a.score)
+      || String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
+  const places = competitionRanks(sorted, (r) => Number(r.score));
+  return sorted.map((row, i) => ({ row, place: Number(row.score) > 0 ? places[i] : null }));
+}
+
+function leaderCard({ row, place }, { showDivision }) {
+  const card = el('div', `card${place && place <= 3 ? ` card--${place}` : ''}`);
+  const who = el('div', 'who');
+  who.appendChild(el('div', 'name', row.name || `Team ${row.team}`));
+  const sub = el('div', 'sub');
+  sub.append(el('span', 'num', `#${row.team}`));
+  if (showDivision && row.division) sub.append(el('span', 'div', `Div ${row.division}`));
+  sub.append(el('span', 'num', `${row.solved} correct`));
+  who.appendChild(sub);
+
+  const sets = el('div', 'sets');
+  sets.append(segments(row.set_mask ?? 0), el('span', 'onset', setLabel(row.set_mask ?? 0)));
+
+  card.append(el('div', 'place', place ? String(place) : '–'), who, sets,
+    el('div', 'score', String(Number(row.score))));
+  return card;
+}
+
+function restRow({ row, place }) {
+  const line = el('div', 'rrow');
+  line.append(
+    el('div', 'place', place ? String(place) : '–'),
+    el('div', 'name', row.name || `Team ${row.team}`),
+    el('div', 'onset', setLabel(row.set_mask ?? 0)),
+    el('div', 'score', String(Number(row.score))),
+  );
+  return line;
+}
+
+const topLabel = (list, n) => {
+  const cut = list.slice(0, n).filter((r) => r.place);
+  return cut.length ? `Top ${cut[cut.length - 1].place}` : '';
+};
+
+/** One division given the whole screen: leaders left, everyone else right. */
+function renderWhole(host, list) {
+  const lead = el('section', 'lead');
+  const head = el('div', 'colhead');
+  head.append(el('span', null, 'Leaders'), el('span', 'count', topLabel(list, 10)));
+  head.lastChild.id = 'leadCount';
+  const leadList = el('div', 'leadlist');
+  leadList.id = 'leadList';
+  if (!list.length) leadList.appendChild(el('div', 'empty', 'Waiting for the first set to be scored.'));
+  list.slice(0, 10).forEach((entry) => leadList.appendChild(leaderCard(entry, { showDivision: !ONLY })));
+  lead.append(head, leadList);
+
+  const restList = list.slice(10);
+  const rest = el('section', 'rest');
+  const restHead = el('div', 'colhead');
+  restHead.append(el('span', null, 'Standings'),
+    el('span', 'count', restList.length ? `${restList.length} more` : ''));
+  const view = el('div', 'restview');
+  const track = el('div', 'resttrack');
+  track.id = 'restTrack';
+  if (!restList.length) track.appendChild(el('div', 'empty', 'Every team is in the top ten.'));
+  restList.forEach((entry) => track.appendChild(restRow(entry)));
+  view.appendChild(track);
+  rest.append(restHead, view);
+  host.append(lead, rest);
+}
+
+/** A column per division, each ranked on its own. */
+const SPLIT_LEADERS = 5;
+function renderSplit(host, byDivision) {
+  for (const d of DIVISIONS) {
+    const list = byDivision[d];
+    const col = el('section', 'divcol');
+    col.dataset.division = d;
+    const head = el('div', 'colhead');
+    head.append(el('span', 'divname', `Division ${d}`),
+      el('span', 'count', list.length ? `${list.length} team${list.length === 1 ? '' : 's'}` : ''));
+    const leadList = el('div', 'leadlist');
+    if (!list.length) leadList.appendChild(el('div', 'empty', 'No teams yet.'));
+    list.slice(0, SPLIT_LEADERS).forEach((entry) => leadList.appendChild(leaderCard(entry, {})));
+    col.append(head, leadList);
+    const restList = list.slice(SPLIT_LEADERS);
+    if (restList.length) {
+      const view = el('div', 'restview');
+      const track = el('div', 'resttrack');
+      restList.forEach((entry) => track.appendChild(restRow(entry)));
+      view.appendChild(track);
+      col.appendChild(view);
+    }
+    host.appendChild(col);
+  }
+}
+
 function render() {
   // A disqualified team comes off the board completely — that is what the
   // portal tells whoever disqualifies it, and a projector in front of an
   // audience is no place to publish the accusation.
-  const ranked = [...board].filter((r) => !r.disqualified).sort(
-    (a, b) => Number(b.score) - Number(a.score)
-      || String(a.team).localeCompare(String(b.team), undefined, { numeric: true }));
-  const live = ranked;
-  // Two teams on the same score are both in that place, and the place
-  // after them is the one their position gives it. A projector counting
-  // 1, 2, 3 down the rows would show a shared lead as a lead and a
-  // second, in front of the room it is wrong in front of.
-  const places = competitionRanks(ranked, (r) => Number(r.score));
+  const live = board.filter((r) => !r.disqualified);
+  const shown = ONLY ? live.filter((r) => divisionOf(r) === ONLY) : live;
 
   $('#contestName').textContent = state?.contest_name ?? cfg.CONTEST_NAME;
-  $('#teamCount').textContent = live.length || '—';
-  $('#leadScore').textContent = live.length ? Number(live[0].score) : '—';
-  $('#leadCount').textContent = live.length
-    ? `Top ${places[Math.min(10, live.length) - 1]}` : '';
+  $('#teamCount').textContent = shown.length || '—';
   $('#frozenFlag').hidden = !state?.guts_frozen;
 
-  // ---- leaders: a card each, with their set progress ----------------
-  const lead = $('#leadList');
-  lead.replaceChildren();
-  if (!live.length) {
-    lead.appendChild(el('div', 'empty', 'Waiting for the first set to be scored.'));
+  const host = $('#cols');
+  host.replaceChildren();
+  if (ONLY) {
+    const list = ranked(shown);
+    host.className = 'cols';
+    document.documentElement.classList.remove('split');
+    $('#leadStat').hidden = false;
+    $('#leadScore').textContent = list.length ? Number(list[0].row.score) : '—';
+    renderWhole(host, list);
+  } else {
+    // Each column shows its own leader, and one "leader" across two
+    // different papers would compare scores that cannot be compared.
+    host.className = 'cols cols--split';
+    document.documentElement.classList.add('split');
+    $('#leadStat').hidden = true;
+    renderSplit(host, Object.fromEntries(
+      DIVISIONS.map((d) => [d, ranked(shown.filter((r) => divisionOf(r) === d))])));
   }
-  live.slice(0, 10).forEach((row, i) => {
-    const place = places[i];
-    const card = el('div', `card${place <= 3 ? ` card--${place}` : ''}`);
-
-    const who = el('div', 'who');
-    who.appendChild(el('div', 'name', row.name || `Team ${row.team}`));
-    const sub = el('div', 'sub');
-    sub.append(el('span', 'num', `#${row.team}`));
-    if (row.division) sub.append(el('span', 'div', `Div ${row.division}`));
-    sub.append(el('span', 'num', `${row.solved} correct`));
-    who.appendChild(sub);
-
-    const sets = el('div', 'sets');
-    sets.append(segments(row.set_mask ?? 0), el('span', 'onset', setLabel(row.set_mask ?? 0)));
-
-    card.append(el('div', 'place', String(place)), who, sets,
-      el('div', 'score', String(Number(row.score))));
-    lead.appendChild(card);
-  });
-
-  // ---- everyone else: compact rows, set as a number -----------------
-  const rest = ranked.slice(10);
-  $('#restCount').textContent = rest.length ? `${rest.length} more` : '';
-  const track = $('#restTrack');
-  track.replaceChildren();
-  if (!rest.length) {
-    track.appendChild(el('div', 'empty', 'Every team is in the top ten.'));
-  }
-  rest.forEach((row, i) => {
-    const line = el('div', 'rrow');
-    line.append(
-      el('div', 'place', String(places[i + 10])),
-      el('div', 'name', row.name || `Team ${row.team}`),
-      el('div', 'onset', setLabel(row.set_mask ?? 0)),
-      el('div', 'score', String(Number(row.score))),
-    );
-    track.appendChild(line);
-  });
   startScroll();
   renderClock();
 }
 
 /**
- * The overflow column creeps upward and wraps, so a room can read every
- * team without anyone touching the machine. It only moves when there is
- * genuinely more than fits.
+ * The overflow lists creep upward and wrap, so a room can read every team
+ * without anyone touching the machine. Each only moves when there is
+ * genuinely more than fits, and each at its own pace.
  */
-let scrollTimer = null;
+let scrollTimers = [];
 function startScroll() {
-  clearInterval(scrollTimer);
-  const view = $('.restview');
-  const track = $('#restTrack');
-  track.style.transform = 'translateY(0)';
-  const overflow = track.scrollHeight - view.clientHeight;
-  if (overflow <= 8) return;
-  let y = -10;
-  scrollTimer = setInterval(() => {
-    y += 0.35;
-    if (y > overflow + 30) y = -10;
-    track.style.transform = `translateY(${-Math.max(0, y)}px)`;
-  }, 40);
+  scrollTimers.forEach(clearInterval);
+  scrollTimers = [];
+  for (const view of document.querySelectorAll('.restview')) {
+    const track = view.querySelector('.resttrack');
+    if (!track) continue;
+    track.style.transform = 'translateY(0)';
+    const overflow = track.scrollHeight - view.clientHeight;
+    if (overflow <= 8) continue;
+    let y = -10;
+    scrollTimers.push(setInterval(() => {
+      y += 0.35;
+      if (y > overflow + 30) y = -10;
+      track.style.transform = `translateY(${-Math.max(0, y)}px)`;
+    }, 40));
+  }
 }
 
 function renderClock() {

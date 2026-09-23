@@ -112,13 +112,17 @@ check('there is a separate grid per division',
   (await page.locator('#keyIndividualB .ans input').count()) === 20);
 check('only the selected division’s grid is shown',
   await page.isVisible('#keyIndividualA') && !(await page.isVisible('#keyIndividualB')));
-const gutsSets = await page.locator('#keyGuts .keyset').count();
+const gutsSets = await page.locator('#keyGutsA .keyset').count();
 check('the guts key is grouped into 7 sets', gutsSets === 7, String(gutsSets));
-const gutsBoxes = await page.locator('#keyGuts .ans input').count();
+const gutsBoxes = await page.locator('#keyGutsA .ans input').count();
 check('7 sets of 4 is 28 guts boxes', gutsBoxes === 28, String(gutsBoxes));
+check('each division has its own guts key too',
+  (await page.locator('#keyGutsB .ans input').count()) === 28
+  && await page.isVisible('#keyGutsA') && !(await page.isVisible('#keyGutsB')));
 
 // Fill the key: individual problem n -> n, guts problem n -> n*2.
 // Division A answers n, Division B answers n+100 — disjoint on purpose.
+// The guts papers differ too: A's answers are n*2, B's are n*3.
 await page.evaluate(() => {
   document.querySelectorAll('#keyIndividualA .ans input').forEach((input, i) => {
     input.value = String(i + 1);
@@ -128,8 +132,12 @@ await page.evaluate(() => {
     input.value = String(i + 101);
     input.dispatchEvent(new Event('input'));
   });
-  document.querySelectorAll('#keyGuts .ans input').forEach((input, i) => {
+  document.querySelectorAll('#keyGutsA .ans input').forEach((input, i) => {
     input.value = String((i + 1) * 2);
+    input.dispatchEvent(new Event('input'));
+  });
+  document.querySelectorAll('#keyGutsB .ans input').forEach((input, i) => {
+    input.value = String((i + 1) * 3);
     input.dispatchEvent(new Event('input'));
   });
 });
@@ -137,8 +145,16 @@ await page.click('.tab[data-keydiv="B"]');
 await page.waitForTimeout(150);
 check('switching division shows the other grid',
   await page.isVisible('#keyIndividualB') && !(await page.isVisible('#keyIndividualA')));
+check('and the other division’s guts key with it',
+  await page.isVisible('#keyGutsB') && !(await page.isVisible('#keyGutsA')));
+// Points are one number per set for both papers: typing it on B's tab
+// has to land on A's as well, or the two could quietly score differently.
+await page.fill('#keyGutsB .keyset__points input >> nth=0', '3');
+check('a set’s points typed on one division’s tab show on the other',
+  (await page.locator('#keyGutsA .keyset__points input').first().inputValue()) === '3');
+await page.fill('#keyGutsB .keyset__points input >> nth=0', '1');
 await page.click('.tab[data-keydiv="A"]');
-const setPoints = await page.locator('#keyGuts .keyset__points input').nth(6).inputValue();
+const setPoints = await page.locator('#keyGutsA .keyset__points input').nth(6).inputValue();
 check('set 7 defaults to 7 points each', setPoints === '7', setPoints);
 await page.click('#saveKey');
 await page.waitForTimeout(500);
@@ -183,10 +199,10 @@ check('and it says what will happen',
   (await page.textContent('#clearKeyHint')).includes('both divisions'));
 await page.click('#clearKey');
 await page.waitForTimeout(600);
-check('the second click empties all 68 answers (20 + 20 + 28)',
-  (await page.textContent('#keyState')) === '68 unset', await page.textContent('#keyState'));
+check('the second click empties all 96 answers (20 + 20 + 28 + 28)',
+  (await page.textContent('#keyState')) === '96 unset', await page.textContent('#keyState'));
 check('guts point values survive a clear',
-  (await page.locator('#keyGuts .keyset__points input').nth(6).inputValue()) === '7');
+  (await page.locator('#keyGutsA .keyset__points input').nth(6).inputValue()) === '7');
 
 // Put the key back for the rest of the run.
 await page.evaluate(() => {
@@ -196,8 +212,11 @@ await page.evaluate(() => {
   document.querySelectorAll('#keyIndividualB .ans input').forEach((input, i) => {
     input.value = String(i + 101); input.dispatchEvent(new Event('input'));
   });
-  document.querySelectorAll('#keyGuts .ans input').forEach((input, i) => {
+  document.querySelectorAll('#keyGutsA .ans input').forEach((input, i) => {
     input.value = String((i + 1) * 2); input.dispatchEvent(new Event('input'));
+  });
+  document.querySelectorAll('#keyGutsB .ans input').forEach((input, i) => {
+    input.value = String((i + 1) * 3); input.dispatchEvent(new Event('input'));
   });
 });
 await page.click('#saveKey');
@@ -399,6 +418,49 @@ check('guts points rise by set: 4 x 1 + 4 x 7 = 32',
   gutsRow.includes('32'), gutsRow.trim());
 check('the team name reaches the leaderboard', gutsRow.includes('Cowbell'), gutsRow.trim());
 
+// ---- each division is marked against its own guts paper -------------
+// Division B's key is n*3 and A's is n*2. The same four answers must
+// score for the team whose paper they are the key to, and nothing for
+// the other: a B team is marked against B's key because its ID says B.
+{
+  const keyGutsSet = async (division, team, name, answers) => {
+    await page.selectOption('#gutsDivision', division);
+    await page.fill('#gutsTeam', String(team));
+    await page.selectOption('#gutsSet', '1');
+    await page.waitForTimeout(250);
+    await page.fill('#gutsTeamName', name);
+    await page.evaluate((vals) => {
+      document.querySelectorAll('#gutsGrid .ans input').forEach((input, i) => {
+        input.value = String(vals[i]);
+        input.dispatchEvent(new Event('input'));
+      });
+    }, answers);
+    await page.click('#saveGuts');
+    await page.waitForTimeout(500);
+  };
+  await page.selectOption('#gutsDivision', 'B');
+  await page.waitForTimeout(200);
+  check('the guts tab reports the key it is about to mark against',
+    (await page.textContent('#gutsState')).includes('Division B'),
+    await page.textContent('#gutsState'));
+  await keyGutsSet('B', 31, 'Right Paper', [3, 6, 9, 12]);
+  await keyGutsSet('B', 32, 'Other Paper', [2, 4, 6, 8]);
+  await page.click('.tab[data-tab="leaderboard"]');
+  await page.click('.tab[data-board="guts"]');
+  await page.waitForTimeout(400);
+  const scoreOf = async (team) => (await page.locator('#boards table tbody tr', { hasText: team })
+    .first().locator('td').nth(3).textContent()).trim();
+  check('a B team is marked against the B guts key', (await scoreOf('B31')) === '4',
+    await scoreOf('B31'));
+  check('and the A key’s answers score nothing on the B paper', (await scoreOf('B32')) === '0',
+    await scoreOf('B32'));
+  // Put the entry panel back where the next section expects it.
+  await page.selectOption('#gutsDivision', 'A');
+  await page.fill('#gutsTeam', '12');
+  await page.selectOption('#gutsSet', '1');
+  await page.waitForTimeout(300);
+}
+
 // ---- a background refresh must not eat what you are typing ----------
 // The bug: refreshGutsContext() reloaded the boxes from the database on
 // every render, so any other scorer saving anything wiped your entry.
@@ -533,9 +595,7 @@ check('freezing is reflected in the portal',
   check('the board says it is frozen', await frozen.locator('#frozenFlag').isVisible());
   // The standings themselves, not the top score — the set keyed below
   // moves one team without necessarily changing who is leading.
-  const standings = () => frozen.evaluate(
-    () => `${document.querySelector('#leadList').innerText}
-${document.querySelector('#restTrack').innerText}`);
+  const standings = () => frozen.evaluate(() => document.querySelector('#cols').innerText);
   const before = await standings();
 
   // Key a whole extra set while the board is frozen.
@@ -1054,6 +1114,18 @@ check('the wipe panel shows what would go',
   /\d+ sheets · \d+ guts answers/.test(await page.textContent('#wipeCounts')),
   await page.textContent('#wipeCounts'));
 check('the wipe starts locked', await page.isDisabled('#wipeAll'));
+// A practice disqualification, and a team row nobody named (made by
+// keying a sheet), so the wipe has both to deal with.
+await page.evaluate(() => {
+  const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+  const named = db.teams.find((t) => t.name);
+  named.disqualified = true;
+  named.dq_reason = 'practice';
+  db.teams.push({ team: 'B88', name: '', division: 'B', disqualified: false });
+  localStorage.setItem('contest-demo-db', JSON.stringify(db));
+  window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+});
+check('keeping the team names is the default', await page.isChecked('#wipeKeepTeams'));
 await page.fill('#wipeConfirm', 'erase');
 check('typing ERASE unlocks it', !(await page.isDisabled('#wipeAll')));
 await page.click('#wipeAll');
@@ -1063,6 +1135,24 @@ await page.click('.tab[data-tab="key"]');
 await page.waitForTimeout(300);
 check('the answer key survives the wipe',
   (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
+{
+  const kept = await page.evaluate(() => {
+    const { teams } = JSON.parse(localStorage.getItem('contest-demo-db'));
+    return { n: teams.length, named: teams.every((t) => t.name),
+      dq: teams.filter((t) => t.disqualified).length, b88: teams.some((t) => t.team === 'B88') };
+  });
+  check('the team names survive the wipe', kept.n > 0 && kept.named, JSON.stringify(kept));
+  check('with practice disqualifications lifted and unnamed rows gone',
+    kept.dq === 0 && !kept.b88, JSON.stringify(kept));
+  await page.click('.tab[data-tab="setup"]');
+  await page.uncheck('#wipeKeepTeams');
+  await page.fill('#wipeConfirm', 'ERASE');
+  await page.click('#wipeAll');
+  await page.waitForTimeout(700);
+  check('unticked, the wipe takes the teams as well',
+    (await page.evaluate(() => JSON.parse(localStorage.getItem('contest-demo-db')).teams.length)) === 0);
+  await page.check('#wipeKeepTeams');
+}
 
 // ---- theme + screenshots --------------------------------------------
 await page.click('.tab[data-tab="setup"]');
@@ -1171,10 +1261,35 @@ await shot.close();
   await stale.click('.tab[data-tab="key"]');
   await stale.waitForTimeout(300);
   check('a missing grid does not take the rest of the tab with it',
-    survived && (await stale.locator('#keyGuts .ans input').count()) === 28,
-    `${await stale.locator('#keyGuts .ans input').count()} guts boxes still built`);
+    survived && (await stale.locator('#keyGutsA .ans input').count()) === 28,
+    `${await stale.locator('#keyGutsA .ans input').count()} guts boxes still built`);
   check('and it does not throw', staleErrors.length === 0, staleErrors[0] ?? '');
   await stale.close();
+}
+
+// The worse half-update: a fresh app.js handed an old scoring.js that
+// lacks something the new one imports. The module never starts, so none
+// of the portal's own code can say anything -- the plain script in the
+// page has to, or the door just sits there doing nothing.
+{
+  const broken = await ctx.newPage();
+  await broken.route(/assets\/scoring\.js/, async (route) => {
+    const res = await route.fetch();
+    const body = (await res.text()).replace('export function gutsKey', 'function gutsKey');
+    await route.fulfill({ response: res, body });
+  });
+  await broken.goto(BASE, { waitUntil: 'load' });
+  await broken.waitForTimeout(600);
+  const said = await broken.textContent('#bootFailed').catch(() => '');
+  check('a page too half-updated to start says so', said.includes('Hard refresh'), said.trim());
+  await broken.close();
+
+  const fine = await ctx.newPage();
+  await fine.goto(BASE, { waitUntil: 'load' });
+  await fine.waitForTimeout(4500);
+  check('and a page that started says nothing of the kind',
+    (await fine.locator('#bootFailed').count()) === 0);
+  await fine.close();
 }
 
 // ---- participants, sign-in lists, and one contestant out -------------
@@ -1211,7 +1326,7 @@ await shot.close();
     (await page.textContent('#rosterProblems')).trim().slice(0, 120));
   // Names live in input boxes, so read the values, not the text.
   check('a name with a comma in it survives the quotes',
-    (await page.locator('.roster-row input').evaluateAll(
+    (await page.locator('#rosterList .roster-row input').evaluateAll(
       (els) => els.map((e) => e.value))).includes('Johnson, Katherine'));
   check('and an ID written after the name is still found',
     (await page.textContent('#rosterList')).includes('B2004'));
@@ -1233,7 +1348,7 @@ await shot.close();
   await page.waitForTimeout(300);
 
   // Editing one person by hand.
-  const row = page.locator('.roster-row', { hasText: 'A902' }).first();
+  const row = page.locator('#rosterList .roster-row', { hasText: 'A902' }).first();
   await row.locator('input').fill('Grace B Hopper');
   await row.locator('input').press('Enter');
   await page.waitForTimeout(700);
@@ -1254,30 +1369,30 @@ await shot.close();
   await page.fill('#rosterSearch', 'coleman');
   await page.waitForTimeout(300);
   check('and the search finds them by name',
-    (await page.locator('.roster-row').count()) === 1,
-    `${await page.locator('.roster-row').count()} rows`);
+    (await page.locator('#rosterList .roster-row').count()) === 1,
+    `${await page.locator('#rosterList .roster-row').count()} rows`);
   await page.fill('#rosterSearch', 'A90');
   await page.waitForTimeout(300);
-  check('or by team', (await page.locator('.roster-row').count()) >= 3,
-    `${await page.locator('.roster-row').count()} rows`);
+  check('or by team', (await page.locator('#rosterList .roster-row').count()) >= 3,
+    `${await page.locator('#rosterList .roster-row').count()} rows`);
 
   // Correcting several in a row must not take the cursor away between
   // them: the list rebuilds on structure, and a name is not structure.
   await page.fill('#rosterSearch', '');
   await page.waitForTimeout(300);
-  await page.locator('.roster-row input').first().evaluate((e) => { e.dataset.mark = 'kept'; });
-  await page.locator('.roster-row input').first().fill('Renamed Once');
-  await page.locator('.roster-row input').first().press('Enter');
+  await page.locator('#rosterList .roster-row input').first().evaluate((e) => { e.dataset.mark = 'kept'; });
+  await page.locator('#rosterList .roster-row input').first().fill('Renamed Once');
+  await page.locator('#rosterList .roster-row input').first().press('Enter');
   await page.waitForTimeout(700);
   check('correcting a name leaves the list standing, cursor and all',
-    (await page.locator('.roster-row input').first()
+    (await page.locator('#rosterList .roster-row input').first()
       .evaluate((e) => e.dataset.mark ?? '')) === 'kept',
     'the row was thrown away and rebuilt');
 
   // Removing one.
   await page.fill('#rosterSearch', 'A904');
   await page.waitForTimeout(300);
-  await page.locator('.roster-row').first().locator('button', { hasText: 'Remove' }).click();
+  await page.locator('#rosterList .roster-row').first().locator('button', { hasText: 'Remove' }).click();
   await page.waitForTimeout(700);
   check('and one can be removed',
     (await page.textContent('#rosterState')).includes('4 participants'),
@@ -1437,6 +1552,124 @@ await shot.close();
   await visitor.waitForSelector('#app:not(.hidden)');
   check('and a listed admin does', (await visitor.textContent('#roleBadge')).trim() === 'admin');
   await visitor.close();
+}
+
+// ---- team names, imported ahead of the day ---------------------------
+{
+  await page.click('.tab[data-tab="setup"]');
+  await page.waitForTimeout(300);
+  const box = page.locator('#teamImportBox');
+  if (!(await box.evaluate((d) => d.open))) await page.click('#teamImportBox > summary');
+  await page.fill('#teamPaste', [
+    'Team, Team name',
+    'A40, Quokka Quorum',
+    'B 41\tNarwhal Nine',
+    'A, 42, Axolotl Axis',
+    '"Smith, Jones & Co", B43',
+    'A011, Ada Lovelace',
+    'A44',
+    'A45, B, Wrong Division',
+  ].join('\n'));
+  await page.click('#teamImport');
+  await page.waitForTimeout(800);
+  const said = await page.locator('.toast').last().textContent();
+  check('a team list imports whatever shape it arrives in',
+    said.includes('Imported 4 teams (2 in A, 2 in B)'), said);
+  const skipped = (await page.textContent('#teamProblems')).trim();
+  check('and says which lines it could not read', skipped.includes('3 lines skipped'),
+    skipped.slice(0, 80));
+  check('including a contestant’s ID pasted in by mistake',
+    skipped.includes('A011 is a contestant'), skipped.slice(0, 160));
+  const teamNames = await page.locator('#teamList .roster-row input')
+    .evaluateAll((els) => els.map((e) => e.value));
+  check('the imported names are on the team list',
+    ['Quokka Quorum', 'Narwhal Nine', 'Axolotl Axis', 'Smith, Jones & Co'].every((n) => teamNames.includes(n)),
+    teamNames.slice(0, 8).join(' | '));
+  check('a team with work entered cannot be removed from the list',
+    (await page.locator('#teamList .roster-row', { hasText: 'A12' }).first()
+      .locator('button', { hasText: 'Remove' }).count()) === 0);
+
+  // The point of the list: the name is already there when a scorer
+  // picks the team, on both entry screens.
+  await page.click('.tab[data-entry="guts"]');
+  await page.selectOption('#gutsDivision', 'A');
+  await page.fill('#gutsTeam', '42');
+  await page.selectOption('#gutsSet', '1');
+  await page.waitForTimeout(300);
+  check('picking an imported team fills its name in at guts entry',
+    (await page.inputValue('#gutsTeamName')) === 'Axolotl Axis', await page.inputValue('#gutsTeamName'));
+  check('and it is not asked for again',
+    (await page.textContent('#gutsNameHint')).includes('Recorded already'));
+  await page.fill('#gutsTeam', '77');
+  await page.waitForTimeout(300);
+  check('a team number not on the list is flagged before it is saved',
+    (await page.textContent('#gutsBanner')).includes('A77 is not on the team list'),
+    (await page.textContent('#gutsBanner')).trim().slice(0, 80));
+  await page.fill('#gutsTeam', '12');
+  await page.waitForTimeout(200);
+  await page.click('.tab[data-entry="individual"]');
+  await page.fill('#individualId', 'A421');
+  await page.waitForTimeout(250);
+  check('typing a contestant’s ID names their team',
+    (await page.textContent('#idEcho')).includes('Axolotl Axis'), await page.textContent('#idEcho'));
+  await page.click('#clearSheet').catch(() => {});
+  await page.fill('#individualId', '');
+
+  // A correction made on the list reaches guts entry.
+  await page.click('.tab[data-tab="setup"]');
+  const a42 = page.locator('#teamList .roster-row', { hasText: 'A42' }).first().locator('input');
+  await a42.fill('Axolotl Axis II');
+  await a42.press('Enter');
+  await page.waitForTimeout(500);
+  check('renaming a team on the list saves it',
+    (await page.evaluate(() => JSON.parse(localStorage.getItem('contest-demo-db'))
+      .teams.find((t) => t.team === 'A42')?.name)) === 'Axolotl Axis II');
+
+  // Every imported team is on the projector from the start, at 0, and
+  // with no place: before a set is marked nobody has placed at all.
+  const fresh = await ctx.newPage();
+  watch(fresh, 'teams-board');
+  await fresh.goto(BOARD_URL, { waitUntil: 'domcontentloaded' });
+  await fresh.waitForTimeout(1200);
+  const colA = (await fresh.locator('.divcol[data-division="A"]').innerText()).replace(/\s+/g, ' ');
+  const colB = (await fresh.locator('.divcol[data-division="B"]').innerText()).replace(/\s+/g, ' ');
+  check('the projector ranks the two divisions side by side',
+    (await fresh.locator('.divcol').count()) === 2, `${await fresh.locator('.divcol').count()} columns`);
+  check('an imported team is on the board before it has scored',
+    /Axolotl Axis II/.test(colA) && /Narwhal Nine/.test(colB), `${colA.slice(0, 60)} / ${colB.slice(0, 60)}`);
+  check('and each division’s teams are only in its own column',
+    !/Narwhal Nine/.test(colA) && !/Axolotl Axis/.test(colB));
+  const zeroPlace = await fresh.locator('.divcol[data-division="B"] .rrow, .divcol[data-division="B"] .card',
+    { hasText: 'Narwhal Nine' }).first().locator('.place').textContent();
+  check('a team still on 0 has no place yet', zeroPlace.trim() === '–', zeroPlace);
+  const firstA = await fresh.locator('.divcol[data-division="A"] .card').first().locator('.place').textContent();
+  check('while the division leader is first', firstA.trim() === '1', firstA);
+  check('each column shows its own leader, so the shared one is gone',
+    await fresh.locator('#leadStat').isHidden());
+  await fresh.close();
+
+  const onlyB = await ctx.newPage();
+  watch(onlyB, 'board-b');
+  await onlyB.goto(`${BOARD_URL}&division=B`, { waitUntil: 'domcontentloaded' });
+  await onlyB.waitForTimeout(1200);
+  const bText = await onlyB.innerText('#cols');
+  check('a single-division board shows only that division',
+    /Narwhal Nine/.test(bText) && !/Axolotl|Quokka/.test(bText), bText.replace(/\s+/g, ' ').slice(0, 90));
+  check('and says which one it is',
+    (await onlyB.textContent('.brand__round')).includes('Division B'));
+  check('and brings the leader figure back',
+    await onlyB.locator('#leadStat').isVisible());
+  await onlyB.close();
+  check('the portal links to each single-division board',
+    (await page.getAttribute('#publicLinkB', 'href')).includes('division=B'));
+
+  // Nothing entered, so it can go.
+  await page.locator('#teamList .roster-row', { hasText: 'A40' }).first()
+    .locator('button', { hasText: 'Remove' }).click();
+  await page.waitForTimeout(500);
+  check('a team with nothing entered can be removed',
+    !(await page.evaluate(() => JSON.parse(localStorage.getItem('contest-demo-db'))
+      .teams.some((t) => t.team === 'A40'))));
 }
 
 // ---- correcting a scorer's name, and clearing the register -----------

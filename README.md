@@ -4,8 +4,9 @@ Answer entry and live scoring for a two-round contest: a 20-problem individual
 round and a 7-set guts round, both auto-graded against an answer key you keep in
 the portal. Plus a public guts leaderboard for the projector.
 
-Divisions A and B each sit **their own individual paper** but **the same guts paper**,
-so the key holds two individual answer sets and one guts set.
+Divisions A and B each sit **their own individual paper and their own guts paper**,
+so the key holds four answer sets. A team's guts sets are marked against the key of the
+division its ID starts with — `A01` against A's, `B01` against B's.
 
 Two shared passwords, no per-scorer accounts, no monthly bill.
 
@@ -31,10 +32,13 @@ in the top bar, so a grader can hand the laptop over or sign back in as an admin
 without hunting for it.
 
 **The two divisions sit different papers.** Division A and Division B each have their
-own 20-problem individual key, edited on their own tab. Guts is one paper for
-everybody. A sheet is always marked against the division you picked for it, and
-switching the dropdown re-marks it — so a sheet keyed against the wrong paper shows
-up as a wall of red rather than a plausible score.
+own 20-problem individual key and their own 28-answer guts key, both on that division's
+tab of the answer key. The guts **point values are shared**: a set's points box appears
+on both tabs and typing in one fills in the other, so the two papers can never score a
+set differently by accident. A sheet is always marked against the division you picked
+for it, and switching the dropdown re-marks it — so a sheet keyed against the wrong
+paper shows up as a wall of red rather than a plausible score. A guts set is marked
+against the division in its team's ID, and the Guts tab says which key it is using.
 
 **Type a sheet, not a score.** Key the ID, optionally a name, then the 20 answers.
 Boxes turn green or red against the answer key as you type, so a mis-keyed digit is
@@ -45,8 +49,11 @@ backspace on an empty box steps back, and pasting a row of numbers spreads it ac
 the grid. Non-negative integers only; anything else is refused at the box.
 
 **Guts, a set at a time.** Pick a team and a set, key its four answers. Point values
-rise by set and are edited in the same place as the key. The first time a team is
-scored you give it a name — that is what the public board shows.
+rise by set and are edited in the same place as the key. A team on the imported team
+list arrives with its name filled in; any other team is asked for one the first time it
+is scored — that is what the public board shows. Once the list is in, a team number that
+is not on it is flagged before it is saved, since it is far more likely a misread sheet
+than a new team.
 
 **Progress is person by person.** The right-hand panel lists teams with a chip per
 contestant and their score, plus seven pips for that team's guts sets. Twenty boxes
@@ -58,10 +65,15 @@ who lands there is told who has it, and it drops out of their queue.
 
 **Three leaderboards**, split by division: individual, guts, and a combined score.
 
-**A public guts board on its own URL** (`guts.html`) — the top ten as cards on the
-left with a seven-segment bar showing which sets each team has turned in and which
-one they are on, everyone else scrolling on the right, a live clock, and nothing
-whatsoever from the staff portal.
+**A public guts board on its own URL** (`guts.html`) — **Division A and Division B side
+by side**, each ranked on its own because each sat its own paper: the top five as cards
+with a seven-segment bar showing which sets each team has turned in and which one they
+are on, everyone else scrolling beneath, a live clock, and nothing whatsoever from the
+staff portal. A team still on 0 shows a dash rather than a place, so a board full of
+imported teams before the round does not claim they are all tied for first.
+`guts.html?division=A` (or `B`) gives one division the whole screen — top ten on the
+left, the rest on the right — for a room with a projector per division; the Run tab
+links to both. On a phone the two divisions stack and the page scrolls.
 
 ![The public guts board](docs/screenshot-guts-board.png)
 
@@ -87,6 +99,16 @@ and comes off the public board entirely — a projector in front of the room is 
 to publish the accusation. A disqualified contestant stops ranking, drops off the award
 lines and the statistics, and stops counting towards their team's best three; the rest
 of their team is untouched. Both are reversible from Admin.
+
+**A team list** does for teams what the participant list does for people. Paste it
+under Setup → **Teams** — `A01, Cowbell` a line, in any column order, with or without a
+header row, or with the division and number in columns of their own (`A, 1, Cowbell`).
+Every team on it is on the public board from the start, at 0, and its name fills in at
+guts entry and next to the team when a contestant's ID is typed. Names can be corrected
+on the list or, by a scorer, at guts entry. A contestant's ID pasted into the team box by
+mistake (`A011`) is refused rather than read as team 11, a team with people on the
+participant list but no name is called out, and a team can be removed while nothing has
+been entered for it. Importing again updates names and leaves disqualifications alone.
 
 **A participant list** fills the name in as an ID is typed. Anyone not on the list simply
 leaves the name blank, and a sheet that has already been saved keeps whatever name it was
@@ -156,7 +178,9 @@ next check-in would write the old spelling straight back. Removing somebody forg
 row and releases anything they were holding; it never touches their work. One button
 forgets everyone who has been quiet for ten minutes.
 
-**Clear test data** wipes a dry run while keeping your key and settings.
+**Clear test data** wipes a dry run while keeping your key, settings and participant
+list — and, unless you untick the box, the team names. Keeping them lifts any practice
+disqualification and drops team rows that never got a name.
 
 ---
 
@@ -197,19 +221,22 @@ re-run `schema.sql`, which migrates in place.
 ### Ready for the day?
 
 [`supabase/preflight.sql`](supabase/preflight.sql) is the one to run the week before and
-again on the morning. Read-only, twenty rows, and every row says **GO**, **FIX**, **LOOK**
-or **INFO**. It checks the schema is current and the deadlock fix is in; that sign-up is
+again on the morning. Read-only, about twenty rows, and every row says **GO**, **FIX**, **LOOK**
+or **INFO**. It checks the schema is current, the deadlock fix is in, and each division's guts is
+marked against its own key; that sign-up is
 off, the published key reaches only the public board, and only a director can change the
-answer key; that the key is actually filled in and the participant list loaded, with
-every ID readable and every team a sensible size; that the clock is parked and no
+answer key; that the key is actually filled in and the participant and team lists
+loaded, with every ID readable, every team a sensible size and every team named; that the clock is parked and no
 rehearsal data or stale locks are lying about; and it estimates the day's realtime
 messages and egress against the free-tier allowances from the row counts it finds.
 
 ```
-Schema is complete                              GO    all ten tables and all six functions are here
-The answer key is filled in                     FIX   40 still unset (individual A 20, individual B 20)
-The participant list is loaded                  GO    176 on the list — A: 88 in 22 teams, B: 88 in 22 teams
-Realtime messages, estimated for the day        INFO  about 296,000 of the 2,000,000 a month (15%)
+Schema is complete                                   GO    all ten tables and all six functions are here
+Each division's guts is marked against its own key   GO    28 guts rows for A, 28 for B
+The answer key is filled in                          FIX   40 still unset (guts B 28, individual B 12)
+The participant list is loaded                       GO    176 on the list — A: 88 in 22 teams, B: 88 in 22 teams
+The team names are loaded                            GO    A: 22 of 22 named, B: 22 of 22 named
+Realtime messages, estimated for the day             INFO  about 296,000 of the 2,000,000 a month (15%)
 ```
 
 ### Not sure what has been run in there?
@@ -353,11 +380,21 @@ half a megabyte of new binaries into git history every time.
 
 ## When a deploy looks half-broken
 
-GitHub Pages caches each file separately, so a browser can end up holding a new
-`index.html` with a stale script. `APP_VERSION` in `config.js` and `data-app-version`
-in the two HTML files are compared at boot; a mismatch shows a banner saying to hard
-refresh, rather than leaving a panel with its controls quietly missing. Bump both
-together on any deploy that changes markup and script at once.
+GitHub Pages caches each file separately for ten minutes, so a browser can end up
+holding a new `index.html` with a stale script. Three things stop that biting:
+
+- **Every script URL carries the version** — the page's own `<script>`, and every
+  `import` between the scripts (`./scoring.js?v=…`). A new version is a new URL, so an
+  update arrives as one piece rather than as whichever files happened to expire first.
+  A unit test fails if any of them disagrees with `APP_VERSION`, so bump the version
+  everywhere at once: `index.html`, `guts.html`, `assets/config.js`, and the imports
+  in `assets/app.js` and `assets/store.js`.
+- `APP_VERSION` and `data-app-version` in the HTML are compared at boot; a mismatch
+  shows a banner saying to hard refresh, rather than leaving a panel with its controls
+  quietly missing.
+- If the script cannot start at all, a few lines of plain script in `index.html` say
+  the page is half-updated, instead of leaving a door that does nothing when Enter is
+  pressed.
 
 ## Security
 
@@ -508,9 +545,9 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 98 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 209 browser checks, including twenty scorers at once
-npm run test:db        # 26 checks: twenty connections racing a real Postgres, and the password change
+npm test               # 109 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 248 browser checks, including twenty scorers at once
+npm run test:db        # 28 checks: twenty connections racing a real Postgres, and the password change
 npm run test:auth      # 29 checks: the real Supabase sign-in path, with the real supabase-js
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```

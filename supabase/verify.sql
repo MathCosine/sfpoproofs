@@ -45,11 +45,21 @@ union all
 select 4, 'Answer key rows seeded',
   case when (select count(*) from answer_key where round='individual' and division='A') >= 20
         and (select count(*) from answer_key where round='individual' and division='B') >= 20
-        and (select count(*) from answer_key where round='guts' and division='*') >= 28
+        and (select count(*) from answer_key where round='guts' and division='A') >= 28
+        and (select count(*) from answer_key where round='guts' and division='B') >= 28
     then 'OK' else 'FAIL' end,
   (select count(*) filter (where round='individual' and division='A') || ' A, '
         || count(*) filter (where round='individual' and division='B') || ' B, '
-        || count(*) filter (where round='guts') || ' guts' from answer_key)
+        || count(*) filter (where round='guts' and division='A') || ' guts A, '
+        || count(*) filter (where round='guts' and division='B') || ' guts B' from answer_key)
+
+union all
+select 4.5, 'Guts is marked per division',
+  case when (select prosrc from pg_proc where proname = 'refresh_guts_public'
+               and pronamespace = 'public'::regnamespace) like '%tm.division%'
+        and not exists (select 1 from answer_key where round='guts' and division='*')
+    then 'OK' else 'FAIL' end,
+  'Each division sits its own guts paper; a team is marked against its own division''s key'
 
 -- 3. the public board carries set progress -----------------------------
 union all

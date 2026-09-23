@@ -93,8 +93,8 @@ const TABLES = {
   answer_key: () => [
     ...['A', 'B'].flatMap((d) => Array.from({ length: 20 }, (_, i) =>
       ({ round: 'individual', division: d, problem: i + 1, answer: null, points: 1 }))),
-    ...Array.from({ length: 28 }, (_, i) =>
-      ({ round: 'guts', division: '*', problem: i + 1, answer: null, points: Math.ceil((i + 1) / 4) })),
+    ...['A', 'B'].flatMap((d) => Array.from({ length: 28 }, (_, i) =>
+      ({ round: 'guts', division: d, problem: i + 1, answer: null, points: Math.ceil((i + 1) / 4) }))),
   ],
 };
 

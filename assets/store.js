@@ -4,7 +4,7 @@
 //    demo     — localStorage + BroadcastChannel, for ?demo=1 and tests
 // =====================================================================
 
-import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js';
+import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.23.3';
 
 const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
 const TABLES = ['app_settings', 'contest_state', 'answer_key', 'teams',
@@ -391,6 +391,28 @@ export function supabaseBackend(cfg, injectedClient = null) {
       if (error) throw new Error(error.message);
     },
 
+    /**
+     * The imported team list. Only the name and division are sent, so a
+     * team already out on a disqualification stays out: an upsert writes
+     * the columns it is given and leaves the rest of the row alone. One
+     * statement, so the public board is rebuilt once, not once a team.
+     */
+    async saveTeams(rows) {
+      const c = await getClient();
+      for (let i = 0; i < rows.length; i += 200) {
+        const block = rows.slice(i, i + 200)
+          .map(({ team, name, division }) => ({ team, name, division }));
+        const { error } = await c.from('teams').upsert(block, { onConflict: 'team' });
+        if (error) throw new Error(error.message);
+      }
+    },
+
+    async removeTeam(team) {
+      const c = await getClient();
+      const { error } = await c.from('teams').delete().eq('team', team);
+      if (error) throw new Error(error.message);
+    },
+
     /** Change a few fields on one contestant without touching their answers. */
     async setContestant(individualId, patch) {
       const c = await getClient();
@@ -516,14 +538,30 @@ export function supabaseBackend(cfg, injectedClient = null) {
       return data?.length ?? 0;
     },
 
-    async clearAll() {
+    /**
+     * Clear a rehearsal out. `keepTeams` keeps the imported team names --
+     * reference data, like the participant list -- and resets everything
+     * else a team row carries: a practice disqualification is lifted, and
+     * a row that never got a name (made by keying a sheet) goes.
+     */
+    async clearAll({ keepTeams = false } = {}) {
       const c = await getClient();
       const counts = {};
-      for (const [table, col] of [['contestants', 'individual_id'], ['guts_answers', 'team'],
-        ['claims', 'ref'], ['teams', 'team'], ['graders', 'grader_id']]) {
+      const tables = [['contestants', 'individual_id'], ['guts_answers', 'team'],
+        ['claims', 'ref'], ['graders', 'grader_id']];
+      if (!keepTeams) tables.push(['teams', 'team']);
+      for (const [table, col] of tables) {
         const { data, error } = await c.from(table).delete().not(col, 'is', null).select(col);
         if (error) throw new Error(`${table}: ${error.message}`);
         counts[table] = data?.length ?? 0;
+      }
+      if (keepTeams) {
+        const { error: dropError } = await c.from('teams').delete().eq('name', '');
+        if (dropError) throw new Error(`teams: ${dropError.message}`);
+        const { error } = await c.from('teams')
+          .update({ disqualified: false, dq_reason: '', dq_by: '', dq_at: null })
+          .eq('disqualified', true);
+        if (error) throw new Error(`teams: ${error.message}`);
       }
       return counts;
     },
@@ -551,11 +589,13 @@ function demoBackend(cfg) {
         });
       }
     }
-    for (let p = 1; p <= cfg.GUTS_SETS * cfg.GUTS_PER_SET; p += 1) {
-      rows.push({
-        round: 'guts', division: '*', problem: p, answer: null,
-        points: Math.ceil(p / cfg.GUTS_PER_SET),
-      });
+    for (const division of cfg.DIVISIONS) {
+      for (let p = 1; p <= cfg.GUTS_SETS * cfg.GUTS_PER_SET; p += 1) {
+        rows.push({
+          round: 'guts', division, problem: p, answer: null,
+          points: Math.ceil(p / cfg.GUTS_PER_SET),
+        });
+      }
     }
     return rows;
   };
@@ -613,13 +653,14 @@ function demoBackend(cfg) {
     const byTeam = indexGutsAnswers(db.gutsAnswers ?? []);
     db.gutsPublic = (db.teams ?? []).map((t) => {
       const team = String(t.team);
-      const r = scoreGutsTeam(byTeam.get(team), key, cfg);
+      const division = t.division ?? divisionOfTeamKey(team);
+      const r = scoreGutsTeam(byTeam.get(team), key, cfg, division);
       let mask = 0;
       r.perSet.forEach((set, i) => { if (set.complete) mask |= 1 << i; });
       return {
         team,
         name: t.name ?? '',
-        division: t.division ?? divisionOfTeamKey(team),
+        division,
         score: r.score,
         solved: r.correct,
         answered: r.answered,
@@ -713,6 +754,16 @@ function demoBackend(cfg) {
 
     async setTeam(team, patch) { await mutate((db) => upsertTeam(db, team, patch)); },
 
+    async saveTeams(rows) {
+      await mutate((db) => {
+        for (const { team, name, division } of rows) upsertTeam(db, team, { name, division });
+      });
+    },
+
+    async removeTeam(team) {
+      await mutate((db) => { db.teams = db.teams.filter((t) => String(t.team) !== String(team)); });
+    },
+
     async setContestant(individualId, patch) {
       await mutate((db) => {
         const i = db.contestants.findIndex((c) => c.individual_id === individualId);
@@ -799,12 +850,18 @@ function demoBackend(cfg) {
       });
     },
 
-    async clearAll() {
+    async clearAll({ keepTeams = false } = {}) {
       return mutate((db) => {
         const counts = {};
-        for (const t of ['contestants', 'gutsAnswers', 'claims', 'teams', 'graders']) {
+        const tables = ['contestants', 'gutsAnswers', 'claims', 'graders'];
+        if (!keepTeams) tables.push('teams');
+        for (const t of tables) {
           counts[t] = db[t].length;
           db[t] = [];
+        }
+        if (keepTeams) {
+          db.teams = db.teams.filter((t) => t.name)
+            .map((t) => ({ ...t, disqualified: false, dq_reason: '', dq_by: '', dq_at: null }));
         }
         return counts;
       });

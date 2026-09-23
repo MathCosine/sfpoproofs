@@ -88,24 +88,41 @@ export function gutsProblemCount(cfg) {
 // ---------------------------------------------------------------------
 
 /**
- * The two divisions sit different individual papers, so there are two
- * individual keys. Guts is one paper for everybody and is stored under
- * the division '*'.
+ * The two divisions sit different papers in both rounds, so there are
+ * four keys: an individual and a guts key for each. A team's guts set is
+ * marked against the key of the division its ID starts with.
  *
- *   { individual: { A: Map, B: Map }, guts: Map }
+ *   { individual: { A: Map, B: Map }, guts: { A: Map, B: Map } }
+ *
+ * Guts used to be one paper for everybody, stored under the division
+ * '*'. A row like that still reads, as the key for both divisions,
+ * wherever a division has no row of its own -- so a database that has
+ * not been upgraded yet keeps marking exactly as it did.
  */
-export const GUTS_DIVISION = '*';
+export const LEGACY_GUTS_DIVISION = '*';
 
 export function indexKey(rows) {
-  const key = { individual: { A: new Map(), B: new Map() }, guts: new Map() };
+  const key = {
+    individual: { A: new Map(), B: new Map() },
+    guts: { A: new Map(), B: new Map() },
+  };
+  const shared = [];
   for (const row of rows) {
     const problem = Number(row.problem);
     const entry = {
       answer: row.answer == null ? null : Number(row.answer),
       points: Number(row.points ?? 1),
     };
-    if (row.round === 'guts') key.guts.set(problem, entry);
-    else if (key.individual[row.division]) key.individual[row.division].set(problem, entry);
+    const table = key[row.round === 'guts' ? 'guts' : 'individual'];
+    if (table[row.division]) table[row.division].set(problem, entry);
+    else if (row.round === 'guts' && row.division === LEGACY_GUTS_DIVISION) {
+      shared.push([problem, entry]);
+    }
+  }
+  for (const [problem, entry] of shared) {
+    for (const table of Object.values(key.guts)) {
+      if (!table.has(problem)) table.set(problem, entry);
+    }
   }
   return key;
 }
@@ -116,18 +133,28 @@ export function individualKey(key, division) {
 }
 
 /**
- * Problems still missing an answer. `division` picks the individual
- * paper; pass GUTS_DIVISION for the guts key.
+ * The guts key for one division. A team whose division is unknown is
+ * marked against nothing rather than against a guess, and the boards
+ * already say out loud when a team has no division.
  */
+export function gutsKey(key, division) {
+  return key.guts[division] ?? new Map();
+}
+
+function keyTable(key, round, division) {
+  return round === 'guts' ? gutsKey(key, division) : individualKey(key, division);
+}
+
+/** Problems still missing an answer, for one round of one division. */
 export function keyGaps(key, round, count, division = 'A') {
-  const table = round === 'guts' ? key.guts : individualKey(key, division);
+  const table = keyTable(key, round, division);
   const missing = [];
   for (let p = 1; p <= count; p += 1) if (table.get(p)?.answer == null) missing.push(p);
   return missing;
 }
 
 export function keyMaxPoints(key, round, count, division = 'A') {
-  const table = round === 'guts' ? key.guts : individualKey(key, division);
+  const table = keyTable(key, round, division);
   let total = 0;
   for (let p = 1; p <= count; p += 1) total += table.get(p)?.points ?? 0;
   return total;
@@ -203,7 +230,9 @@ export function indexGutsAnswers(rows) {
   return byTeam;
 }
 
-export function scoreGutsTeam(answersByProblem, key, cfg) {
+/** One team's guts round, marked against its own division's key. */
+export function scoreGutsTeam(answersByProblem, key, cfg, division) {
+  const table = gutsKey(key, division);
   let score = 0;
   let correct = 0;
   let answered = 0;
@@ -213,7 +242,7 @@ export function scoreGutsTeam(answersByProblem, key, cfg) {
     let setAnswered = 0;
     for (const p of problemsInSet(set, cfg)) {
       const given = answersByProblem?.get(p) ?? null;
-      const entry = key.guts.get(p);
+      const entry = table.get(p);
       if (given != null) { answered += 1; setAnswered += 1; }
       if (given != null && entry?.answer != null && given === entry.answer) {
         score += entry.points;
@@ -229,11 +258,12 @@ export function scoreGutsTeam(answersByProblem, key, cfg) {
 export function gutsStandings(teams, gutsByTeam, key, cfg, dq = new Set()) {
   return teams
     .map((t) => {
-      const result = scoreGutsTeam(gutsByTeam.get(String(t.team)), key, cfg);
+      const division = t.division ?? divisionOfTeam(t.team);
+      const result = scoreGutsTeam(gutsByTeam.get(String(t.team)), key, cfg, division);
       return {
         team: String(t.team),
         name: t.name ?? '',
-        division: t.division ?? divisionOfTeam(t.team),
+        division,
         disqualified: t.disqualified || dq.has(String(t.team)),
         ...result,
       };
@@ -256,8 +286,8 @@ export function individualMaxPoints(key, cfg, division = 'A') {
     * TEAM_COUNTING_MEMBERS;
 }
 
-export function gutsMaxPoints(key, cfg) {
-  return keyMaxPoints(key, 'guts', gutsProblemCount(cfg), GUTS_DIVISION);
+export function gutsMaxPoints(key, cfg, division = 'A') {
+  return keyMaxPoints(key, 'guts', gutsProblemCount(cfg), division);
 }
 
 /**
@@ -276,14 +306,13 @@ export function individualMultiplier(cfg) {
 /** The most a team can score: its best three papers, tripled, plus guts. */
 export function combinedMaxPoints(key, cfg, division = 'A') {
   return individualMaxPoints(key, cfg, division) * individualMultiplier(cfg)
-    + gutsMaxPoints(key, cfg);
+    + gutsMaxPoints(key, cfg, division);
 }
 
 export function combinedStandings(individuals, guts, key, cfg, teams = []) {
   const meta = new Map(teams.map((t) => [String(t.team), t]));
   const gutsByTeam = new Map(guts.map((g) => [g.team, g]));
 
-  const gutsMax = gutsMaxPoints(key, cfg);
   const mult = individualMultiplier(cfg);
 
   const rows = new Map();
@@ -330,9 +359,10 @@ export function combinedStandings(individuals, guts, key, cfg, teams = []) {
       r.members = r.members
         .map((m) => ({ ...m, counted: counting.has(m.individualId) }))
         .sort((a, b) => a.member.localeCompare(b.member));
-      // Each division sits its own paper, so a team is measured against
-      // the maximum of the paper it actually took.
+      // Each division sits its own papers, so a team is measured against
+      // the maximum of the papers it actually took.
       const indMax = individualMaxPoints(key, cfg, r.division);
+      const gutsMax = gutsMaxPoints(key, cfg, r.division);
       const total = r.individual * mult + (r.guts ?? 0);
       return {
         ...r,
@@ -695,6 +725,97 @@ export function parseRoster(text) {
     };
     seen.set(parsed.id, row);
     rows.push(row);
+  }
+  return { rows, problems };
+}
+
+/**
+ * A team written any of the ways a spreadsheet writes one: A01, A1,
+ * a-01, "Team A01". Returns the canonical key, or null.
+ */
+const TEAM_CELL_RE = /^(?:TEAM)?([AB])(\d{1,3})$/;
+const CONTESTANT_LOOKALIKE_RE = /^(?:TEAM)?[AB](?:0[1-9]|[1-9]\d)[1-9]$/;
+export function parseTeamKey(raw) {
+  const m = TEAM_CELL_RE.exec(String(raw ?? '').toUpperCase().replace(/[\s\-_.#]/g, ''));
+  if (!m || Number(m[2]) < 1) return null;
+  return { team: teamKey(m[1], Number(m[2])), division: m[1], teamNo: Number(m[2]) };
+}
+
+/**
+ * Team names, from whatever shape the list arrives in.
+ *
+ * Like the participant list, the team is found by trying each cell rather
+ * than by trusting a column order, so "A01, Cowbell", "Cowbell, A01" and a
+ * spreadsheet with a header row all read the same. A sheet that keeps the
+ * division and the team number in separate columns -- "A, 1, Cowbell" --
+ * works too. Everything that is not the team is the name.
+ */
+export function parseTeamList(text) {
+  const rows = [];
+  const seen = new Set();
+  const problems = [];
+
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    if (!raw.trim()) continue;
+    const cells = splitRosterLine(raw).filter((c) => c !== '');
+    if (!cells.length) continue;
+
+    // A participant's ID pasted in here would otherwise read as a team:
+    // A011 is team 11 written with three digits. Teams are numbered with
+    // two, so a letter and three digits that make a valid contestant ID is
+    // a contestant, and it is said so rather than quietly creating A11.
+    const contestant = cells.find((c) => CONTESTANT_LOOKALIKE_RE.test(
+      c.toUpperCase().replace(/[\s\-_.#]/g, '')));
+    if (contestant) {
+      problems.push(`${raw.trim()} (${contestant.trim()} is a contestant's ID — a team is written like A01)`);
+      continue;
+    }
+
+    let parsed = null;
+    let used = new Set();
+    for (let i = 0; i < cells.length && !parsed; i += 1) {
+      const attempt = parseTeamKey(cells[i]);
+      if (attempt) { parsed = attempt; used = new Set([i]); }
+    }
+    if (!parsed) {
+      // Division and number in columns of their own.
+      const d = cells.findIndex((c) => /^[AB]$/i.test(c.trim()));
+      const n = cells.findIndex((c) => /^\d{1,3}$/.test(c.trim()));
+      if (d >= 0 && n >= 0) {
+        parsed = parseTeamKey(`${cells[d]}${cells[n]}`);
+        if (parsed) used = new Set([d, n]);
+      }
+    }
+    if (!parsed) {
+      if (!cells.some((c) => HEADER_WORDS.test(c))) problems.push(raw.trim());
+      continue;
+    }
+
+    let mismatch = null;
+    const nameParts = [];
+    cells.forEach((cell, i) => {
+      if (used.has(i)) return;
+      if (/^[AB]$/i.test(cell)) {
+        if (cell.toUpperCase() !== parsed.division) mismatch = cell.toUpperCase();
+        return;                                   // a division column
+      }
+      nameParts.push(cell);
+    });
+    if (mismatch) {
+      problems.push(`${raw.trim()} (says Division ${mismatch}, but ${parsed.team} is in ${parsed.division})`);
+      continue;
+    }
+    const name = nameParts.join(' ').trim();
+    if (!name) {
+      problems.push(`${raw.trim()} (no team name)`);
+      continue;
+    }
+    if (seen.has(parsed.team)) {
+      problems.push(`${raw.trim()} (${parsed.team} is already on this list)`);
+      continue;
+    }
+    seen.add(parsed.team);
+    rows.push({ team: parsed.team, name, division: parsed.division });
   }
   return { rows, problems };
 }

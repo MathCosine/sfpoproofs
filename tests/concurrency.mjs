@@ -365,7 +365,7 @@ const saveSheet = async (n, at, sheet = null) => {
 {
   await sql('truncate contestants, guts_answers, guts_public, teams');
   await sql(`insert into answer_key (round, division, problem, answer, points)
-             select 'guts', '*', g, 1, 1 from generate_series(1, 28) g
+             select 'guts', 'A', g, 1, 1 from generate_series(1, 28) g
              on conflict (round, division, problem) do update
                set answer = excluded.answer, points = excluded.points`);
   await sql(`insert into teams (team, name, division)
@@ -401,6 +401,43 @@ const saveSheet = async (n, at, sheet = null) => {
     `${answers} answers, ${deadlocks} deadlock(s) — ${[...new Set(results)].join(', ')}`);
   check('and the public board has every team scored',
     scored === String(CREW), `${scored}/${CREW} teams`);
+}
+
+// ---------------------------------------------------------------------
+// 7b. Each division sits its own guts paper
+//
+// A team is marked against the guts key of the division its ID starts
+// with. The same answer is right on one paper and wrong on the other, so
+// a board that marked everyone against one key would get half the room
+// wrong -- quietly, because every number would still look plausible.
+// ---------------------------------------------------------------------
+{
+  await sql('truncate guts_answers, guts_public, teams');
+  await sql(`update answer_key set answer = case division when 'A' then 1 else 2 end, points = 1
+              where round = 'guts'`);
+  // B02 has no division stored, as a team created mid-save briefly does;
+  // its ID still says B.
+  await sql(`insert into teams (team, name, division)
+             values ('A01', 'a', 'A'), ('B01', 'b', 'B'), ('B02', 'c', null)`);
+  await sql(`insert into guts_answers (team, problem, answer)
+             values ('A01', 1, 1), ('A01', 2, 2), ('B01', 1, 2), ('B01', 2, 1), ('B02', 1, 2)`);
+  const got = await one(`select string_agg(team || '=' || score, ' ' order by team) from guts_public`);
+  check('each division\'s guts is marked against its own key', got === 'A01=1 B01=1 B02=1', got);
+
+  // A database from before the split keeps its guts key as one shared
+  // set of rows. Running schema.sql over it has to hand that key to both
+  // divisions -- answers and point values -- rather than start them blank.
+  await sql(`delete from answer_key where round = 'guts'`);
+  await sql(`insert into answer_key (round, division, problem, answer, points)
+             select 'guts', '*', g, g * 5, 9 from generate_series(1, 28) g`);
+  await psql(['-v', 'ON_ERROR_STOP=1', '-f', SCHEMA]);
+  const split = await one(`select count(*) filter (where division = 'A' and answer = problem * 5 and points = 9)
+                               || '/' || count(*) filter (where division = 'B' and answer = problem * 5 and points = 9)
+                               || '/' || count(*) filter (where division = '*')
+                             from answer_key where round = 'guts'`);
+  check('an old shared guts key is handed to both divisions when the schema is re-run',
+    split === '28/28/0', `A/B/shared = ${split}`);
+  await sql(`update answer_key set answer = 1, points = 1 where round = 'guts'`);
 }
 
 // ---------------------------------------------------------------------

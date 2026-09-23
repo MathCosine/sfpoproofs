@@ -82,6 +82,38 @@ select 11, 'Two scorers saving at once cannot deadlock',
          || ' deadlock and one scorer loses the save — re-run schema.sql' end
 
 union all
+select 11.5, 'Each division''s guts is marked against its own key',
+  -- The two divisions sit different guts papers. An older schema marks
+  -- every team against one shared key, so B's teams would be scored
+  -- against A's answers (or the other way round) without a word.
+  case when to_regclass('public.answer_key') is null then 'FIX'
+       when coalesce((select prosrc from pg_proc
+                       where proname = 'refresh_guts_public'
+                         and pronamespace = 'public'::regnamespace), '') not like '%tm.division%'
+         then 'FIX'
+       when (xpath('/table/row/c/text()', query_to_xml(
+              $q$select (count(*) filter (where division = 'A') >= 28
+                     and count(*) filter (where division = 'B') >= 28
+                     and count(*) filter (where division = '*') = 0)::int as c
+                   from public.answer_key where round = 'guts'$q$,
+              false, false, '')))[1]::text = '1' then 'GO'
+       else 'FIX' end,
+  case when to_regclass('public.answer_key') is null then 'there is no answer key table'
+       when coalesce((select prosrc from pg_proc
+                       where proname = 'refresh_guts_public'
+                         and pronamespace = 'public'::regnamespace), '') not like '%tm.division%'
+         then 'the public board still marks every team against one guts key — re-run schema.sql'
+       else coalesce((xpath('/table/row/s/text()', query_to_xml(
+         $q$select count(*) filter (where division = 'A') || ' guts rows for A, '
+                || count(*) filter (where division = 'B') || ' for B'
+                || case when count(*) filter (where division = '*') > 0
+                        then ', and ' || count(*) filter (where division = '*')
+                             || ' old shared rows — re-run schema.sql to split them'
+                        else '' end as s
+              from public.answer_key where round = 'guts'$q$,
+         false, false, '')))[1]::text, 'no guts key rows — re-run schema.sql') end
+
+union all
 select 12, 'Row level security is on everywhere',
   case when (select count(*) from pg_class c
                join pg_namespace ns on ns.oid = c.relnamespace
@@ -190,8 +222,7 @@ select 30, 'The answer key is filled in',
                    || '). Nothing scores until they are in — and entering them later'
                    || ' re-scores every sheet already marked, so a gap found mid-contest'
                    || ' is not a disaster' end as s
-         from (select case when round = 'guts' then 'guts'
-                           else 'individual ' || division end as lbl,
+         from (select round || ' ' || division as lbl,
                       count(*) filter (where answer is null) as gaps
                  from public.answer_key group by 1) k
         having true$q$, false, false, '')))[1]::text, 'no answer key rows') end
@@ -249,6 +280,41 @@ select 33, 'Every ID on the list can be read',
             'every ID reads as division, team and member') as s
          from public.roster where individual_id !~ '^[AB][0-9]{1,3}[1-9]$'$q$,
     false, false, '')))[1]::text, 'no list to check') end
+
+union all
+select 34, 'The team names are loaded',
+  -- A team with no name shows on the projector as "Team A07" until a
+  -- scorer types one in at guts entry. The list fixes that ahead of time.
+  case when to_regclass('public.teams') is null then 'FIX'
+       when (xpath('/table/row/c/text()', query_to_xml(
+              $q$select count(*) as c from public.teams where name <> ''$q$,
+              false, false, '')))[1]::text::int = 0 then 'LOOK'
+       when to_regclass('public.roster') is not null
+        and (xpath('/table/row/c/text()', query_to_xml(
+              $q$select count(distinct r.team) as c from public.roster r
+                  where not exists (select 1 from public.teams t
+                                     where t.team = r.team and t.name <> '')$q$,
+              false, false, '')))[1]::text::int > 0 then 'LOOK'
+       else 'GO' end,
+  case when to_regclass('public.teams') is null then 'there is no teams table — re-run schema.sql'
+    else coalesce((xpath('/table/row/s/text()', query_to_xml(
+      $q$select case when coalesce(sum(named), 0) = 0
+                  then 'none yet — import them under Setup → Teams, or scorers type each'
+                       || ' one in at guts entry and the board shows "Team A01" until then'
+                  else string_agg(d || ': ' || named || ' of ' || total || ' named', ', '
+                                  order by d) end as s
+           from (select coalesce(division, left(team, 1)) as d,
+                        count(*) filter (where name <> '') as named, count(*) as total
+                   from public.teams group by 1) x
+          having true$q$, false, false, '')))[1]::text, '')
+      || coalesce(case when to_regclass('public.roster') is null then null
+         else (xpath('/table/row/s/text()', query_to_xml(
+      $q$select '; on the participant list with no team name: '
+              || string_agg(team, ', ' order by team) as s
+           from (select distinct r.team from public.roster r
+                  where not exists (select 1 from public.teams t
+                                     where t.team = r.team and t.name <> '')) x
+          having count(*) > 0$q$, false, false, '')))[1]::text end, '') end
 
 -- ---- 4. the clock and the settings -------------------------------------
 union all

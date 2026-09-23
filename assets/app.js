@@ -2,21 +2,25 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js';
-import { createStore } from './store.js';
-import { toCsv, downloadCsv } from './csv.js';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.23.3';
+import { createStore } from './store.js?v=2026.09.23.3';
+import { toCsv, downloadCsv } from './csv.js?v=2026.09.23.3';
 import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
-  indexKey, keyGaps, individualKey, GUTS_DIVISION, divisionStatistics, awardLines,
+  indexKey, keyGaps, individualKey, gutsKey, divisionStatistics, awardLines,
   competitionRanks,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
-  graderActivity, sinceLabel, rosterRows, filterRoster,
+  graderActivity, sinceLabel, rosterRows, filterRoster, parseTeamList,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
-} from './scoring.js';
+} from './scoring.js?v=2026.09.23.3';
+
+// Every import above resolved, so the script is running; the fallback in
+// index.html that reports a page too half-updated to start stands down.
+window.__portalStarted = true;
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -89,7 +93,8 @@ function recompute() {
     byId: new Map(individuals.map((p) => [p.individualId, p])),
     keyGapsIndividual: Object.fromEntries(cfg.DIVISIONS.map(
       (d) => [d, keyGaps(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, d)])),
-    keyGapsGuts: keyGaps(key, 'guts', GUTS_N, GUTS_DIVISION),
+    keyGapsGuts: Object.fromEntries(cfg.DIVISIONS.map(
+      (d) => [d, keyGaps(key, 'guts', GUTS_N, d)])),
     teamsByNo: new Map(data.teams.map((t) => [String(t.team), t])),
     rosterNames: indexRoster(data.roster),
     queue: buildQueue(claims, dq, gutsByTeam),
@@ -254,8 +259,9 @@ function onIdTyped() {
     $('#divisionPick').value = parsed.division;
     $('#teamNo').value = parsed.teamNo;
     $('#memberLetter').value = parsed.member;
-    echo.textContent = `Division ${parsed.division}, team ${String(parsed.teamNo).padStart(2, '0')}, `
-      + `member ${parsed.member}. All three stay editable.`;
+    const teamName = derived?.teamsByNo.get(parsed.team)?.name;
+    echo.textContent = `Division ${parsed.division}, team ${String(parsed.teamNo).padStart(2, '0')}`
+      + `${teamName ? ` (${teamName})` : ''}, member ${parsed.member}. All three stay editable.`;
     loadExistingSheet();
     claimCurrent();
   } else if (parsed.partial) {
@@ -483,13 +489,23 @@ function refreshGutsContext({ keepUnsaved = false, picked = false } = {}) {
   const host = $('#gutsBanner');
   host.replaceChildren();
   const current = currentGuts();
-  const gaps = derived?.keyGapsGuts ?? [];
-  $('#gutsState').textContent = gaps.length ? `${gaps.length} guts answers unkeyed` : 'key complete';
+  // Each division has its own guts key, so report the one this set is
+  // about to be marked against -- or both, before a division is picked.
+  const division = $('#gutsDivision').value;
+  const gapsOf = (d) => derived?.keyGapsGuts?.[d]?.length ?? 0;
+  if (division) {
+    $('#gutsState').textContent = gapsOf(division)
+      ? `Division ${division} guts key: ${gapsOf(division)} unkeyed` : `Division ${division} key complete`;
+  } else {
+    const open = cfg.DIVISIONS.filter((d) => gapsOf(d));
+    $('#gutsState').textContent = open.length
+      ? open.map((d) => `${d}: ${gapsOf(d)} unkeyed`).join(' · ') : 'key complete';
+  }
 
   if (!current) { $('#gutsPointsHint').textContent = ''; $('#gutsProgress').textContent = ''; return; }
 
   const problems = problemsInSet(current.set, cfg);
-  const points = derived.key.guts.get(problems[0])?.points ?? 1;
+  const points = gutsKey(derived.key, current.division).get(problems[0])?.points ?? 1;
   $('#gutsPointsHint').textContent =
     `— problems ${problems[0]}–${problems[problems.length - 1]}, ${points} point(s) each`;
 
@@ -514,7 +530,7 @@ function refreshGutsContext({ keepUnsaved = false, picked = false } = {}) {
     if (stored.some((v) => v != null) || !keepUnsaved) fillGrid(gutsInputs, stored);
   }
 
-  const result = scoreGutsTeam(answers, derived.key, cfg);
+  const result = scoreGutsTeam(answers, derived.key, cfg, current.division);
   $('#gutsProgress').textContent =
     `${result.perSet.filter((s) => s.complete).length}/${cfg.GUTS_SETS} sets · ${result.score} pts`;
 
@@ -525,6 +541,20 @@ function refreshGutsContext({ keepUnsaved = false, picked = false } = {}) {
     d.append(el('b', null, `${claim.grader_name} is entering this set right now`),
       el('span', null, 'Pick a different team or set.'));
     b.append(el('div', null, '✋'), d);
+    host.appendChild(b);
+  }
+  // Once the team list is in, a number that is not on it is far more
+  // likely a misread sheet than a new team -- and saving it would put a
+  // phantom team on the projector. Say so; it can still be saved.
+  const listed = data.teams.some(
+    (t) => t.name && (t.division ?? divisionOfTeam(t.team)) === current.division);
+  if (listed && !team?.name) {
+    const b = el('div', 'banner banner--warn');
+    const d = el('div');
+    d.append(el('b', null, `Team ${current.team} is not on the team list`),
+      el('span', null, 'Check the team number on the sheet. If it really is a team the list '
+        + 'missed, give it a name below and save.'));
+    b.append(el('div', null, '⚠'), d);
     host.appendChild(b);
   }
   if (derived.dq.has(current.team)) {
@@ -794,7 +824,8 @@ function paintProgress(teams) {
     division.hidden = !team?.division;
     dq.hidden = !team?.disqualified;
 
-    const result = scoreGutsTeam(derived.gutsByTeam.get(teamNo), derived.key, cfg);
+    const result = scoreGutsTeam(derived.gutsByTeam.get(teamNo), derived.key, cfg,
+      team?.division ?? divisionOfTeam(teamNo));
     for (const set of result.perSet) {
       const pip = progressPips.get(`${teamNo}:${set.set}`);
       if (!pip) continue;
@@ -964,7 +995,7 @@ function renderBoards() {
       + 'The individual total is the best three of four members. A perfect team scores '
       + cfg.DIVISIONS.map((d) => `${combinedMaxPoints(derived.key, cfg, d)} in ${d}`).join(' and ')
       + ` — ${individualMaxPoints(derived.key, cfg, 'A') * mult} from the individual round `
-      + `and ${gutsMaxPoints(derived.key, cfg)} from guts.`;
+      + `and ${gutsMaxPoints(derived.key, cfg, 'A')} from guts.`;
   } else if (activeBoard === 'individual') {
     note.textContent = `One row per contestant, out of ${cfg.INDIVIDUAL_PROBLEMS}.`;
   } else {
@@ -1114,8 +1145,8 @@ function renderBoards() {
 // ---------------------------------------------------------------------
 
 const keyIndividualInputs = {};     // division -> inputs
-let keyGutsInputs = [];
-let keyPointInputs = [];
+const keyGutsInputs = {};           // division -> inputs
+const keyPointInputs = {};          // division -> one input per set
 let activeKeyDivision = 'A';
 let keyDirty = false;
 let keyLoadedSignature = null;
@@ -1134,32 +1165,46 @@ function buildKeyEditor() {
       $(`#keyIndividual${division}`), cfg.INDIVIDUAL_PROBLEMS);
   }
 
-  const host = $('#keyGuts');
-  host.replaceChildren();
-  keyGutsInputs = [];
-  keyPointInputs = [];
-  for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
-    const box = el('div', 'keyset');
-    const head = el('div', 'keyset__head');
-    const problems = problemsInSet(set, cfg);
-    head.append(el('b', null, `Set ${set}`),
-      el('span', 'muted', `problems ${problems[0]}–${problems[problems.length - 1]}`));
-    const pointsWrap = el('div', 'keyset__points');
-    const points = el('input', 'input');
-    points.type = 'number';
-    points.min = '0';
-    points.step = '1';
-    points.setAttribute('aria-label', `Points per problem in set ${set}`);
-    pointsWrap.append(el('span', null, 'points each'), points);
-    head.appendChild(pointsWrap);
-    box.appendChild(head);
-    keyPointInputs.push(points);
+  // Each division sits its own guts paper, so each has its own answers.
+  // The point values are the same for both, so a set's points box appears
+  // on both tabs and typing in one fills in the other: there is no way to
+  // leave the two divisions scoring a set differently by accident.
+  for (const division of cfg.DIVISIONS) {
+    const host = $(`#keyGuts${division}`);
+    keyGutsInputs[division] = [];
+    keyPointInputs[division] = [];
+    if (!host) continue;
+    host.replaceChildren();
+    for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
+      const box = el('div', 'keyset');
+      const head = el('div', 'keyset__head');
+      const problems = problemsInSet(set, cfg);
+      head.append(el('b', null, `Set ${set}`),
+        el('span', 'muted', `problems ${problems[0]}–${problems[problems.length - 1]}`));
+      const pointsWrap = el('div', 'keyset__points');
+      const points = el('input', 'input');
+      points.type = 'number';
+      points.min = '0';
+      points.step = '1';
+      points.dataset.set = String(set);
+      points.setAttribute('aria-label', `Points per problem in set ${set}, both divisions`);
+      points.addEventListener('input', () => {
+        for (const other of cfg.DIVISIONS) {
+          const twin = keyPointInputs[other]?.[set - 1];
+          if (twin && twin !== points) twin.value = points.value;
+        }
+      });
+      pointsWrap.append(el('span', null, 'points each · both divisions'), points);
+      head.appendChild(pointsWrap);
+      box.appendChild(head);
+      keyPointInputs[division].push(points);
 
-    const grid = el('div', 'answers answers--guts');
-    box.appendChild(grid);
-    keyGutsInputs.push(...buildAnswerGrid(grid, cfg.GUTS_PER_SET,
-      { offset: problems[0] - 1, columns: cfg.GUTS_PER_SET }));
-    host.appendChild(box);
+      const grid = el('div', 'answers answers--guts');
+      box.appendChild(grid);
+      keyGutsInputs[division].push(...buildAnswerGrid(grid, cfg.GUTS_PER_SET,
+        { offset: problems[0] - 1, columns: cfg.GUTS_PER_SET }));
+      host.appendChild(box);
+    }
   }
 }
 
@@ -1177,13 +1222,21 @@ function savedKeySignature() {
 
 function fillKeyEditor() {
   // The status line always reflects the saved key.
-  const perDivision = cfg.DIVISIONS.map((d) => derived.keyGapsIndividual[d].length);
-  const gaps = perDivision.reduce((a, b) => a + b, 0) + derived.keyGapsGuts.length;
+  const perDivision = cfg.DIVISIONS.map((d) => derived.keyGapsIndividual[d].length
+    + derived.keyGapsGuts[d].length);
+  const gaps = perDivision.reduce((a, b) => a + b, 0);
   $('#keyState').textContent = gaps ? `${gaps} unset` : 'complete';
   $('#keyState').className = gaps ? 'tag tag--flag' : 'tag tag--live';
   $('#keyDivState').textContent = cfg.DIVISIONS
     .map((d, i) => `${d}: ${perDivision[i] ? `${perDivision[i]} unset` : 'complete'}`)
     .join(' · ');
+  for (const d of cfg.DIVISIONS) {
+    const note = $(`#keyGutsState${d}`);
+    if (note) {
+      const n = derived.keyGapsGuts[d].length;
+      note.textContent = n ? `${n} of ${GUTS_N} unset` : 'complete';
+    }
+  }
 
   // Never overwrite unsaved edits. Focus is not enough of a guard: you
   // lose focus every time you click the other division's tab, or pause,
@@ -1202,14 +1255,25 @@ function fillKeyEditor() {
       input.dispatchEvent(new Event('input'));
     }
   }
-  for (let p = 1; p <= GUTS_N; p += 1) {
-    const input = keyGutsInputs[p - 1];
-    const value = derived.key.guts.get(p)?.answer;
-    input.value = value == null ? '' : String(value);
-    input.dispatchEvent(new Event('input'));
+  for (const division of cfg.DIVISIONS) {
+    const table = gutsKey(derived.key, division);
+    for (let p = 1; p <= GUTS_N; p += 1) {
+      const input = keyGutsInputs[division][p - 1];
+      if (!input) continue;
+      const value = table.get(p)?.answer;
+      input.value = value == null ? '' : String(value);
+      input.dispatchEvent(new Event('input'));
+    }
   }
+  // One value per set for both divisions. Division A's is the one shown;
+  // saving writes it to both, so the two can never drift apart.
+  const shared = gutsKey(derived.key, cfg.DIVISIONS[0]);
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
-    keyPointInputs[set - 1].value = derived.key.guts.get(problemsInSet(set, cfg)[0])?.points ?? 1;
+    const value = shared.get(problemsInSet(set, cfg)[0])?.points ?? set;
+    for (const division of cfg.DIVISIONS) {
+      const input = keyPointInputs[division]?.[set - 1];
+      if (input) input.value = value;
+    }
   }
 }
 
@@ -1238,20 +1302,27 @@ function buildKeyRows({ blank = false } = {}) {
     }
   }
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
-    // Point values are contest configuration, not answers, so a clear keeps them.
-    const points = Number(keyPointInputs[set - 1].value);
-    if (!Number.isFinite(points) || points < 0) {
-      toast(`Set ${set}: points must be zero or more.`, 'error');
+    // Point values are contest configuration, not answers, so a clear keeps
+    // them. They are shared: the same number goes on both divisions' rows.
+    const raw = keyPointInputs[cfg.DIVISIONS[0]]?.[set - 1]?.value ?? '';
+    const points = Number(raw);
+    if (raw === '' || !Number.isFinite(points) || points < 0) {
+      toast(`Guts set ${set}: points must be zero or more.`, 'error');
       return null;
     }
-    for (const p of problemsInSet(set, cfg)) {
-      let answer = null;
-      if (!blank) {
-        const parsed = parseAnswer(keyGutsInputs[p - 1].value);
-        if (!parsed.ok) { toast(`Guts problem ${p}: whole numbers only.`, 'error'); return null; }
-        answer = parsed.value;
+    for (const division of cfg.DIVISIONS) {
+      for (const p of problemsInSet(set, cfg)) {
+        let answer = null;
+        if (!blank) {
+          const parsed = parseAnswer(keyGutsInputs[division]?.[p - 1]?.value);
+          if (!parsed.ok) {
+            toast(`Division ${division} guts problem ${p}: whole numbers only.`, 'error');
+            return null;
+          }
+          answer = parsed.value;
+        }
+        rows.push({ round: 'guts', division, problem: p, answer, points });
       }
-      rows.push({ round: 'guts', division: GUTS_DIVISION, problem: p, answer, points });
     }
   }
   return rows;
@@ -1368,7 +1439,7 @@ function renderWeightPreview() {
       el('span', null, 'Use zero or more — three is the contest default.'));
   } else {
     const ind = individualMaxPoints(derived.key, cfg, 'A') * mult;
-    const guts = gutsMaxPoints(derived.key, cfg);
+    const guts = gutsMaxPoints(derived.key, cfg, 'A');
     host.className = 'banner banner--info';
     d.append(el('b', null, `A perfect team scores ${ind + guts}: ${ind} from the individual `
       + `round and ${guts} from guts.`),
@@ -1604,6 +1675,202 @@ function renderRoster() {
   }
 }
 
+/**
+ * The team list, built the same way as the participant list: rebuilt only
+ * when its shape changes, so a name being corrected is never wiped by a
+ * save landing from somewhere else.
+ */
+const TEAMS_SHOWN = 80;
+let teamListShape = null;
+const teamFields = new Map();       // team -> input
+
+const byTeamKey = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
+
+/** What the rows need to say about each team: who is on it, what is in. */
+function teamListRows() {
+  const onRoster = new Map();
+  for (const r of rosterRows(data.roster)) {
+    if (r.team) onRoster.set(r.team, (onRoster.get(r.team) ?? 0) + 1);
+  }
+  const entered = new Set([
+    ...data.contestants.map((c) => String(c.team)),
+    ...data.gutsAnswers.map((g) => String(g.team)),
+  ]);
+  return {
+    rows: [...data.teams]
+      .map((t) => ({
+        team: String(t.team),
+        name: t.name ?? '',
+        division: t.division ?? divisionOfTeam(t.team),
+        members: onRoster.get(String(t.team)) ?? 0,
+        entered: entered.has(String(t.team)),
+      }))
+      .sort((a, b) => byTeamKey(a.team, b.team)),
+    onRoster,
+  };
+}
+
+function renderTeamList() {
+  const host = $('#teamList');
+  if (!host) return;
+  const { rows: all, onRoster } = teamListRows();
+  const search = $('#teamSearch').value.trim().toLowerCase();
+  const matching = search
+    ? all.filter((t) => t.team.toLowerCase().includes(search) || t.name.toLowerCase().includes(search))
+    : all;
+  const shown = matching.slice(0, TEAMS_SHOWN);
+
+  const named = all.filter((t) => t.name);
+  $('#teamListState').textContent = all.length
+    ? cfg.DIVISIONS.map((d) => `${all.filter((t) => t.division === d).length} ${d}`).join(' · ')
+      + (named.length < all.length ? ` · ${all.length - named.length} unnamed` : '')
+    : 'none';
+  // Open the import box until there is something to import into.
+  if (!named.length && !$('#teamImportBox').dataset.touched) $('#teamImportBox').open = true;
+
+  // Same test as preflight.sql: a team with people on the participant list
+  // and no name, whether or not keying a sheet has made a row for it yet.
+  const namedTeams = new Set(named.map((t) => t.team));
+  const missing = [...onRoster.keys()].filter((t) => !namedTeams.has(t)).sort(byTeamKey);
+
+  const shape = `${search}|${all.length}|${shown.map((t) => `${t.team}${t.entered ? '+' : ''}`
+    + `${t.members}`).join(',')}|${missing.join(',')}`;
+  if (shape !== teamListShape) {
+    teamListShape = shape;
+    teamFields.clear();
+    host.replaceChildren();
+
+    // A team with people on the participant list but no name here shows
+    // on the projector as "Team A07". Say so before the room sees it.
+    if (named.length && missing.length) {
+      const warn = el('div', 'banner banner--warn');
+      const d = el('div');
+      d.append(el('b', null, `${missing.length} team${missing.length === 1 ? '' : 's'} on the `
+        + 'participant list with no name here'),
+        el('span', null, `${missing.slice(0, 12).join(', ')}${missing.length > 12 ? '…' : ''}`
+          + ' — add them to the list you import, or they show as "Team A07".'));
+      warn.append(el('div', null, '⚠'), d);
+      host.appendChild(warn);
+    }
+
+    if (!all.length) {
+      host.appendChild(el('p', 'field__hint', 'No teams yet. Import a list above.'));
+      return;
+    }
+    if (!shown.length) {
+      host.appendChild(el('p', 'field__hint', `No team matches “${search}”.`));
+      return;
+    }
+
+    const rosterLoaded = onRoster.size > 0;
+    const list = el('div', 'roster-list');
+    for (const t of shown) {
+      const row = el('div', 'roster-row');
+      const field = el('input', 'input');
+      field.value = t.name;
+      field.placeholder = 'no name';
+      field.setAttribute('aria-label', `Name for team ${t.team}`);
+      teamFields.set(t.team, field);
+
+      const save = async () => {
+        const next = field.value.trim();
+        const current = data.teams.find((x) => String(x.team) === t.team);
+        if (!current || next === (current.name ?? '')) return;
+        if (!next) {
+          field.value = current.name ?? '';
+          toast('A team needs a name — it is what the public board shows.', 'error');
+          return;
+        }
+        try {
+          await store.setTeam(t.team, { name: next });
+          applyWrite([['teams', { ...current, name: next }]]);
+        } catch (err) {
+          toast(err.message || 'Could not save that name.', 'error');
+        }
+      };
+      field.addEventListener('change', save);
+      field.addEventListener('keydown', (e) => { if (e.key === 'Enter') field.blur(); });
+
+      const note = el('span', 'roster-row__note', rosterLoaded
+        ? `${t.members} on the list` : '');
+      // Imported but nobody on the participant list belongs to it: most
+      // often a mistyped number on one of the two lists.
+      if (rosterLoaded && !t.members) {
+        note.className += ' roster-row__note--flag';
+        note.textContent = 'nobody on the participant list';
+      }
+
+      row.append(el('span', 'roster-row__id', t.team), field, note);
+      if (!t.entered) {
+        const drop = el('button', 'btn btn--ghost', 'Remove');
+        drop.type = 'button';
+        drop.addEventListener('click', async () => {
+          drop.disabled = true;
+          try {
+            await store.removeTeam(t.team);
+            teamListShape = null;
+            applyWrite([['teams', { team: t.team }, 'DELETE']]);
+            toast(`Team ${t.team} removed.`, 'info');
+          } catch (err) {
+            drop.disabled = false;
+            toast(err.message || 'Could not remove that team.', 'error');
+          }
+        });
+        row.appendChild(drop);
+      }
+      list.appendChild(row);
+    }
+    host.appendChild(list);
+    if (matching.length > TEAMS_SHOWN) {
+      host.appendChild(el('p', 'roster-more',
+        `Showing ${TEAMS_SHOWN} of ${matching.length}. Search to narrow it down.`));
+    }
+  }
+
+  for (const t of shown) {
+    const field = teamFields.get(t.team);
+    if (field && field !== document.activeElement && field.value !== t.name) field.value = t.name;
+  }
+}
+
+async function importTeams() {
+  const { rows, problems } = parseTeamList($('#teamPaste').value);
+  const host = $('#teamProblems');
+  host.replaceChildren();
+  if (!rows.length && !problems.length) {
+    toast('Nothing to import — paste a list first.', 'error');
+    return;
+  }
+  const button = $('#teamImport');
+  button.disabled = true;
+  try {
+    if (rows.length) await store.saveTeams(rows);
+    $('#teamPaste').value = '';
+    teamListShape = null;
+    await refresh();
+    const byDivision = cfg.DIVISIONS
+      .map((d) => [d, rows.filter((r) => r.division === d).length])
+      .filter(([, n]) => n)
+      .map(([d, n]) => `${n} in ${d}`);
+    toast(rows.length
+      ? `Imported ${rows.length} team${rows.length === 1 ? '' : 's'} (${byDivision.join(', ')}).`
+      : 'Nothing on that list could be read.', rows.length ? 'ok' : 'error');
+    if (problems.length) {
+      const warn = el('div', 'banner banner--warn');
+      const d = el('div');
+      d.append(el('b', null, `${problems.length} line${problems.length === 1 ? '' : 's'} skipped`),
+        el('span', null, problems.slice(0, 8).join(' · ')
+          + (problems.length > 8 ? ` · and ${problems.length - 8} more` : '')));
+      warn.append(el('div', null, '⚠'), d);
+      host.appendChild(warn);
+    }
+  } catch (err) {
+    toast(err.message || 'Could not import that list.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
 /** Say how many names each list holds, and that empty means everybody. */
 function renderStaffCounts() {
   for (const [which, label] of [['admin', 'admin'], ['grader', 'staff']]) {
@@ -1810,6 +2077,7 @@ function render() {
   adoptRename();
   renderGraders();
   renderRoster();
+  renderTeamList();
   renderDqList();
   applyRole();
 
@@ -2004,7 +2272,7 @@ function wire() {
       $('#clearKey').textContent = 'Click again to clear';
       $('#clearKey').className = 'btn btn--warn is-pressed';
       $('#clearKeyHint').textContent =
-        'Every answer in both divisions and guts is emptied. Guts point values are kept.';
+        'Every answer in both divisions, individual and guts, is emptied. Guts point values are kept.';
       return;
     }
     disarmClear();
@@ -2025,7 +2293,9 @@ function wire() {
         b.setAttribute('aria-selected', String(b === btn));
       }
       for (const division of cfg.DIVISIONS) {
-        $(`#keyIndividual${division}`).classList.toggle('hidden', division !== activeKeyDivision);
+        for (const id of [`#keyIndividual${division}`, `#keyGutsPane${division}`]) {
+          $(id)?.classList.toggle('hidden', division !== activeKeyDivision);
+        }
       }
     });
   }
@@ -2054,6 +2324,9 @@ function wire() {
     await refresh();
   });
   $('#publicLink').href = forceDemo ? 'guts.html?demo=1' : 'guts.html';
+  for (const d of cfg.DIVISIONS) {
+    $(`#publicLink${d}`).href = `guts.html?${forceDemo ? 'demo=1&' : ''}division=${d}`;
+  }
 
   for (const id of ['#teamCount', '#individualMultiplier', '#adminNames', '#graderNames',
     '#durationMinutes', '#freezeMinutes']) {
@@ -2199,6 +2472,15 @@ function wire() {
     }
   });
 
+  $('#teamImport').addEventListener('click', importTeams);
+  $('#teamSearch').addEventListener('input', renderTeamList);
+  $('#teamImportBox').addEventListener('toggle', () => { $('#teamImportBox').dataset.touched = '1'; });
+  $('#teamExport').addEventListener('click', () => {
+    downloadCsv('cowconuts-2026-teams.csv', toCsv(
+      ['team', 'division', 'name'],
+      teamListRows().rows.map((t) => [t.team, t.division ?? '', t.name])));
+  });
+
   $('#rosterClear').addEventListener('click', async () => {
     const button = $('#rosterClear');
     if (button.dataset.armed !== '1') {
@@ -2277,7 +2559,7 @@ function wire() {
       // The public board's refresh is a no-op while frozen, so a wipe
       // during a freeze would leave deleted teams on the screen.
       if (data.state?.guts_frozen) await store.setFrozen(false).catch(() => {});
-      const counts = await store.clearAll();
+      const counts = await store.clearAll({ keepTeams: $('#wipeKeepTeams').checked });
       confirmInput.value = '';
       clearSheet();
       await refresh();
@@ -2335,11 +2617,13 @@ async function seedDemo() {
       });
     }
   }
-  for (let p = 1; p <= GUTS_N; p += 1) {
-    keyRows.push({
-      round: 'guts', division: GUTS_DIVISION, problem: p,
-      answer: (p * 13) % 50, points: Math.ceil(p / cfg.GUTS_PER_SET),
-    });
+  for (const division of cfg.DIVISIONS) {
+    for (let p = 1; p <= GUTS_N; p += 1) {
+      keyRows.push({
+        round: 'guts', division, problem: p,
+        answer: (p * (division === 'A' ? 13 : 17)) % 50, points: Math.ceil(p / cfg.GUTS_PER_SET),
+      });
+    }
   }
   await store.saveKey(keyRows);
 
@@ -2360,9 +2644,11 @@ async function seedDemo() {
         });
       }
       const gutsSkill = 1 + ((n * 5) % 4);
+      const gutsMult = division === 'A' ? 13 : 17;
       for (let set = 1; set <= 4 + (n % 4); set += 1) {
         await store.saveGutsSet(team, problemsInSet(set, cfg).map((p) => ({
-          problem: p, answer: (p * n) % 5 < gutsSkill ? (p * 13) % 50 : (p * 13 + 1) % 50,
+          problem: p,
+          answer: (p * n) % 5 < gutsSkill ? (p * gutsMult) % 50 : (p * gutsMult + 1) % 50,
         })), 'demo', 'Demo', `${names[n % names.length]} ${division}${n}`);
       }
       await store.setTeam(team, { division });

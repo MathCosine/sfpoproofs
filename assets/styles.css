@@ -618,3 +618,14 @@ tbody tr:hover .rowcopy, .rowcopy:focus-visible { opacity: 1; }
 .roster-row input.input { flex: 1; padding: 6px 10px; min-width: 120px; }
 .roster-row .btn { padding: 5px 10px; font-size: 12px; }
 .roster-more { font-size: 12px; font-weight: 700; color: var(--muted); padding: 6px 2px; }
+.roster-row__note { font-size: 11px; font-weight: 700; color: var(--muted); white-space: nowrap; }
+.roster-row__note--flag { color: var(--ink); background: var(--amber); border-radius: 6px; padding: 1px 6px; }
+@media (max-width: 560px) {
+  .roster-row { flex-wrap: wrap; }
+  .roster-row__note { order: 5; }
+}
+
+/* A single tick box with its explanation beside it. */
+.check { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; font-weight: 600;
+  line-height: 1.45; cursor: pointer; }
+.check input { width: 17px; height: 17px; margin: 1px 0 0; flex: none; accent-color: var(--ink); }
