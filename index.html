@@ -7,11 +7,14 @@
 <title>Cowconuts 2026 — Staff Portal</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- Not render-blocking: on a network that silently drops Google, a blocking
+     stylesheet would hold the whole page blank until the request gave up. -->
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.23.3">
+<body data-app-version="2026.09.25.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -588,6 +591,6 @@
     window.addEventListener('load', function () { setTimeout(halfUpdated, 4000); });
   })();
 </script>
-<script type="module" src="assets/app.js?v=2026.09.23.3"></script>
+<script type="module" src="assets/app.js?v=2026.09.25.1"></script>
 </body>
 </html>

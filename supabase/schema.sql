@@ -313,15 +313,15 @@ begin
                             and ak.problem = ga.problem
      group by ga.team
   ) sc on sc.team = t.team
-  -- Which sets a team has fully turned in, as a bitmask: bit 0 is set 1.
-  -- A set counts as done only when all four of its answers are in, so a
-  -- team that skipped one is not shown as further along than it is.
+  -- Which sets a team has turned in, as a bitmask: bit 0 is set 1. A set
+  -- is in once all four of its rows are saved -- blanks included, because
+  -- a blank is the team's answer. Counting only filled-in answers left a
+  -- team that skipped one problem shown as stuck on that set all round.
   left join (
     select team, sum(bit)::int as set_mask
       from (
         select team, (1 << ((problem - 1) / 4)) as bit
           from guts_answers
-         where answer is not null
          group by team, (problem - 1) / 4
         having count(*) = 4
       ) per_set

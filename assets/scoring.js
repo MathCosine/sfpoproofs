@@ -230,7 +230,15 @@ export function indexGutsAnswers(rows) {
   return byTeam;
 }
 
-/** One team's guts round, marked against its own division's key. */
+/**
+ * One team's guts round, marked against its own division's key.
+ *
+ * A set is entered once its four rows are saved, blanks included. Teams
+ * leave guts answers blank all the time; counting only the filled-in ones
+ * left a set with one blank "unfinished" forever -- stuck at the front of
+ * the queue, amber on the progress panel, and the team shown on the
+ * projector as still working on it.
+ */
 export function scoreGutsTeam(answersByProblem, key, cfg, division) {
   const table = gutsKey(key, division);
   let score = 0;
@@ -240,9 +248,11 @@ export function scoreGutsTeam(answersByProblem, key, cfg, division) {
   for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
     let setScore = 0;
     let setAnswered = 0;
+    let setEntered = 0;
     for (const p of problemsInSet(set, cfg)) {
       const given = answersByProblem?.get(p) ?? null;
       const entry = table.get(p);
+      if (answersByProblem?.has(p)) setEntered += 1;
       if (given != null) { answered += 1; setAnswered += 1; }
       if (given != null && entry?.answer != null && given === entry.answer) {
         score += entry.points;
@@ -250,7 +260,10 @@ export function scoreGutsTeam(answersByProblem, key, cfg, division) {
         correct += 1;
       }
     }
-    perSet.push({ set, score: setScore, answered: setAnswered, complete: setAnswered === cfg.GUTS_PER_SET });
+    perSet.push({
+      set, score: setScore, answered: setAnswered, entered: setEntered,
+      complete: setEntered === cfg.GUTS_PER_SET,
+    });
   }
   return { score, correct, answered, perSet };
 }

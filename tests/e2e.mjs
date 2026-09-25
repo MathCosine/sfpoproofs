@@ -161,6 +161,50 @@ await page.waitForTimeout(500);
 check('the key saves and reports complete',
   (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
 
+// ---- two directors keying the answer key at once --------------------
+// The morning's split: one director types Division A, another Division B.
+// Neither editor reloads under unsaved work, so each holds the other's
+// half as it was when they started. Saving used to write every box, which
+// put that stale half back over what the other had just saved.
+{
+  const second = await ctx.newPage();
+  watch(second, 'director2');
+  await second.goto(BASE, { waitUntil: 'networkidle' });
+  await second.waitForSelector('#app:not(.hidden)');
+  await second.click('.tab[data-tab="key"]');
+  await page.click('.tab[data-keydiv="A"]');
+  await page.fill('#keyIndividualA .ans input >> nth=0', '901');
+  await second.click('.tab[data-keydiv="B"]');
+  await second.fill('#keyIndividualB .ans input >> nth=0', '902');
+  await second.click('#saveKey');
+  await second.waitForTimeout(500);
+  await page.click('#saveKey');
+  await page.waitForTimeout(600);
+  const both = await page.evaluate(() => {
+    const { key } = JSON.parse(localStorage.getItem('contest-demo-db'));
+    const at = (d) => key.find((k) => k.round === 'individual' && k.division === d
+      && Number(k.problem) === 1)?.answer;
+    return `${at('A')}/${at('B')}`;
+  });
+  check('two directors saving the key at once keep both sets of changes',
+    both === '901/902', `A1/B1 = ${both}`);
+  check('and the later one is told the other’s changes were kept',
+    (await page.locator('.toast').last().textContent()).includes('Someone else saved'),
+    await page.locator('.toast').last().textContent());
+  check('the other division’s change is on screen afterwards',
+    (await page.inputValue('#keyIndividualB .ans input >> nth=0')) === '902');
+  // Put the key back.
+  await page.fill('#keyIndividualA .ans input >> nth=0', '1');
+  await page.click('.tab[data-keydiv="B"]');
+  await page.fill('#keyIndividualB .ans input >> nth=0', '101');
+  await page.click('.tab[data-keydiv="A"]');
+  await page.click('#saveKey');
+  await page.waitForTimeout(500);
+  check('and the key is complete again',
+    (await page.textContent('#keyState')) === 'complete', await page.textContent('#keyState'));
+  await second.close();
+}
+
 // ---- the key editor must not be eaten either -------------------------
 // Same bug as the guts grid: focus alone was not enough of a guard, so
 // clicking the other division's tab or simply pausing let a background
@@ -1480,9 +1524,17 @@ await shot.close();
   await page.click('#dqList button');
   await page.waitForTimeout(600);
 
-  // Sign-in lists. Saved here, checked at the door.
+  // Sign-in lists. Saved here, checked at the door. An admin list without
+  // the admin saving it would shut them out of Admin on their next load,
+  // so that one is refused.
   await page.fill('#adminNames', 'Thomas Ni\nRyan Wang');
   await page.fill('#graderNames', 'Xu Shao\nCCMathClub');
+  await page.click('#saveStaff');
+  await page.waitForTimeout(500);
+  check('an admin list that leaves out the admin saving it is refused',
+    (await page.locator('.toast').last().textContent()).includes('not on the admin list'),
+    await page.locator('.toast').last().textContent());
+  await page.fill('#adminNames', 'Thomas Ni\nRyan Wang\nPriya Raman');
   await page.click('#saveStaff');
   await page.waitForTimeout(600);
   check('the sign-in lists count what you typed',
@@ -1498,7 +1550,7 @@ await shot.close();
   await page.waitForTimeout(500);
   check('and still count it after the panel is rebuilt',
     (await page.textContent('#graderNamesCount')).includes('2 names')
-    && (await page.textContent('#adminNamesCount')).includes('2 names'),
+    && (await page.textContent('#adminNamesCount')).includes('3 names'),
     `${await page.textContent('#adminNamesCount')} / ${await page.textContent('#graderNamesCount')}`);
 }
 
@@ -1751,6 +1803,17 @@ await shot.close();
   const before = await page.locator('.grader-row').count();
   const target = page.locator('.grader-row', { hasText: 'Xu Shao' }).first();
   await target.locator('button', { hasText: 'Remove' }).click();
+  // Somebody else saves a sheet while the admin's finger is on the button.
+  // That used to rebuild the whole register and quietly disarm it.
+  await page.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    db.contestants[0].entered_by = `elsewhere-${Date.now()}`;
+    localStorage.setItem('contest-demo-db', JSON.stringify(db));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+  });
+  await page.waitForTimeout(400);
+  check('an armed Remove survives another scorer saving a sheet',
+    (await target.locator('button', { hasText: 'Click again' }).count()) === 1);
   await target.locator('button', { hasText: 'Click again' }).click();
   await page.waitForTimeout(900);
   check('removing a scorer takes two clicks and then drops them',
@@ -1988,6 +2051,41 @@ await shot.close();
   check('the exported file places the tie the same way',
     ranks.join(',') === '1,1,3', ranks.join(',') || 'no csv');
   await tied.close();
+}
+
+// ---- a half-typed sheet is not lost to a stray reload ------------------
+{
+  const own = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  await own.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+  const enter = async () => {
+    const p = await own.newPage();
+    watch(p, 'unsaved');
+    await p.goto(BASE, { waitUntil: 'networkidle' });
+    if (await p.isVisible('#graderName')) {
+      await p.fill('#graderName', 'Guard Test');
+      await p.click('#gateEnter');
+    }
+    await p.waitForSelector('#app:not(.hidden)');
+    return p;
+  };
+  const idle = await enter();
+  const dialogs = [];
+  idle.on('dialog', (d) => { dialogs.push(d.type()); d.dismiss().catch(() => {}); });
+  await idle.close({ runBeforeUnload: true });
+  await new Promise((r) => setTimeout(r, 400));
+  check('closing with nothing typed asks nothing', dialogs.length === 0, dialogs.join(','));
+
+  const typing = await enter();
+  await typing.fill('#individualId', 'A977');
+  await typing.click('#answerGrid .ans input >> nth=0');
+  await typing.keyboard.type('12');
+  const asked = [];
+  typing.on('dialog', (d) => { asked.push(d.type()); d.accept().catch(() => {}); });
+  await typing.close({ runBeforeUnload: true });
+  await new Promise((r) => setTimeout(r, 600));
+  check('closing with an unsaved sheet asks first', asked.includes('beforeunload'),
+    asked.join(',') || 'no dialog');
+  await own.close();
 }
 
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 3).join(' | '));

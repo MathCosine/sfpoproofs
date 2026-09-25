@@ -4,9 +4,51 @@
 //    demo     — localStorage + BroadcastChannel, for ?demo=1 and tests
 // =====================================================================
 
-import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.23.3';
+import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.25.1';
 
-const SUPABASE_ESM = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/+esm';
+// supabase-js, served from this site rather than a CDN. Contest day then
+// depends on two services -- GitHub Pages and Supabase -- not three, and a
+// venue network that blocks or stalls a CDN cannot stop anyone signing in.
+// It is the browser build, which sets a global, so it goes in by <script>
+// tag; importing it as a module would leave its chunk loader guessing
+// where it was served from.
+const SUPABASE_JS = new URL('./vendor/supabase-js-2.45.4/supabase.js', import.meta.url).href;
+let supabaseLib = null;
+function loadSupabase() {
+  if (globalThis.supabase?.createClient) return Promise.resolve(globalThis.supabase);
+  if (!supabaseLib) {
+    supabaseLib = new Promise((resolve, reject) => {
+      const tag = document.createElement('script');
+      tag.src = SUPABASE_JS;
+      tag.onload = () => (globalThis.supabase?.createClient
+        ? resolve(globalThis.supabase)
+        : reject(new Error('The Supabase library loaded but did not start.')));
+      tag.onerror = () => {
+        supabaseLib = null;           // let the next attempt try again
+        tag.remove();
+        reject(Object.assign(new Error('Could not reach the server.'), { unreachable: true }));
+      };
+      document.head.appendChild(tag);
+    });
+  }
+  return supabaseLib;
+}
+
+/**
+ * An error a person can act on. A write that failed for want of a
+ * connection comes back from supabase-js as "TypeError: Failed to fetch"
+ * -- the browser's words, not a scorer's -- and a scorer told that stares
+ * at it. Everything else passes through, code and all, so a missing
+ * table can still be told apart from a real failure.
+ */
+export function failure(error) {
+  const message = String(error?.message ?? error ?? '');
+  if (/failed to fetch|networkerror|load failed|network request failed|fetch failed/i.test(message)) {
+    return Object.assign(new Error('No connection — that did not go through. Nothing on screen '
+      + 'is lost; try again in a moment.'), { unreachable: true });
+  }
+  return Object.assign(new Error(message || 'Something went wrong.'), { code: error?.code });
+}
 const TABLES = ['app_settings', 'contest_state', 'answer_key', 'teams',
   'contestants', 'guts_answers', 'claims', 'graders', 'roster'];
 
@@ -73,7 +115,22 @@ export function applyPatch(cache, table, payload) {
 }
 
 // ---------------------------------------------------------------------
-const RESYNC_MS = 5 * 60 * 1000;
+// A full reload behind realtime, in case it dropped something. Two
+// minutes, because on the free plan realtime does drop things: past 100
+// messages a second, averaged over a minute, Supabase skips database
+// changes without a word until the average comes back down. The end of
+// the guts round, every team handing in at once, is the moment that can
+// happen. A save that never hears its own change come back triggers an
+// earlier catch-up (see expectEcho), so this is the backstop for screens
+// that are only watching.
+const RESYNC_MS = 2 * 60 * 1000;
+// How long a save waits to hear its own change come back over realtime.
+const ECHO_WAIT_MS = 10 * 1000;
+// Supabase averages its message rate over the last minute, so a second
+// catch-up a little after that picks up whatever it skipped meanwhile.
+const CATCH_UP_MS = 70 * 1000;
+// Backoff for re-joining a channel the server closed.
+const REJOIN_MS = [2000, 5000, 15000, 30000, 60000];
 const PAGE_SIZE = 1000;
 
 /**
@@ -101,13 +158,9 @@ export async function fetchAllPages(makeQuery, pageSize = PAGE_SIZE) {
   const rows = [];
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await makeQuery().range(from, from + pageSize - 1);
-    if (error) {
-      // Keep the code on the way out: it is how a missing table is told
-      // apart from a real failure, and the message alone is not reliable.
-      const wrapped = new Error(error.message);
-      wrapped.code = error.code;
-      throw wrapped;
-    }
+    // failure() keeps the code: it is how a missing table is told apart
+    // from a real failure, and the message alone is not reliable.
+    if (error) throw failure(error);
     if (data?.length) rows.push(...data);
     if (!data || data.length < pageSize) return rows;
   }
@@ -122,6 +175,57 @@ export function supabaseBackend(cfg, injectedClient = null) {
   let lastLoadAt = 0;
   const listeners = new Set();
   let timer = null;
+  let started = false;
+  let disposed = false;
+  let joining = false;
+  let live = false;
+  let wasLive = false;          // has this screen been listening before?
+  let rejoins = 0;
+  let rejoinTimer = null;
+
+  const visible = () => typeof document === 'undefined' || document.visibilityState !== 'hidden';
+  const pull = () => api.load()
+    .then((fresh) => listeners.forEach((fn) => fn(fresh)))
+    .catch(() => {});
+
+  // ---- did realtime bring our own save back? -------------------------
+  //
+  // Past 100 messages a second, averaged over a minute, a free project's
+  // realtime skips database changes silently until the average falls --
+  // and the screens that missed them have no way to know. Except one: a
+  // screen that just saved something expects to hear that change come
+  // back. When it does not, changes are being dropped (or the socket is
+  // dead), and whatever other screens saved meanwhile was dropped too. So
+  // catch up now, and once more after Supabase's one-minute window has
+  // passed, to pick up anything skipped in between.
+  const expected = new Map();
+  let catchUp = null;
+  // Called before the write goes out, not after: the change can come back
+  // over the socket before the write's own reply does, and a listener set
+  // up after it would wait for something that has already been and gone.
+  // Returns a cancel, for a write that failed and so has nothing to hear.
+  function expectEcho(table, id) {
+    if (!live) return () => {};                // not listening: the rejoin reloads
+    const key = `${table}|${id}`;
+    clearTimeout(expected.get(key));
+    expected.set(key, setTimeout(() => {
+      expected.delete(key);
+      missedEcho();
+    }, cfg.ECHO_WAIT_MS ?? ECHO_WAIT_MS));
+    return () => { clearTimeout(expected.get(key)); expected.delete(key); };
+  }
+  function heard(table, row) {
+    if (!row || !expected.size) return;
+    const key = `${table}|${SHAPE[table]?.id?.(row)}`;
+    if (!expected.has(key)) return;
+    clearTimeout(expected.get(key));
+    expected.delete(key);
+  }
+  function missedEcho() {
+    pull();
+    if (catchUp) return;
+    catchUp = setTimeout(() => { catchUp = null; pull(); }, cfg.CATCH_UP_MS ?? CATCH_UP_MS);
+  }
 
   /** The team as this tab last saw it, or undefined if it has never seen it. */
   const cachedTeam = (team) => cache.teams.find((t) => String(t.team) === String(team));
@@ -151,7 +255,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
   async function getClient() {
     if (client) return client;
     if (injectedClient) { client = injectedClient; return client; }
-    const { createClient } = await import(/* @vite-ignore */ SUPABASE_ESM);
+    const { createClient } = await loadSupabase();
     client = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
       auth: { persistSession: true, autoRefreshToken: true, storageKey: SESSION_KEY },
       realtime: { params: { eventsPerSecond: 20 } },
@@ -202,6 +306,14 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const email = admin ? cfg.ADMIN_EMAIL : cfg.STAFF_EMAIL;
       const { error } = await (await getClient()).auth
         .signInWithPassword({ email, password });
+      // Sign-ins are limited per network address -- 30 at once, then one
+      // every two seconds -- and a whole venue shares one address. Say so
+      // plainly: "could not reach the server" would send people checking
+      // the wifi, and "wrong password" would send them guessing.
+      if (error?.status === 429) {
+        throw new Error('Too many sign-ins from this network just now. Wait a minute, then '
+          + 'try again — nothing is wrong with your name or password.');
+      }
       if (error) throw noAnswer(error) ? unreachable() : new Error(error.message);
       return { admin };
     },
@@ -260,10 +372,10 @@ export function supabaseBackend(cfg, injectedClient = null) {
         ]);
       const bad = [settings, state].find((r) => r.error);
       if (bad) {
-        throw new Error(isMissingTable(bad.error)
-          ? 'This database has not been set up yet. Run supabase/schema.sql in the '
-            + 'Supabase SQL Editor, then reload.'
-          : bad.error.message);
+        throw isMissingTable(bad.error)
+          ? new Error('This database has not been set up yet. Run supabase/schema.sql in the '
+            + 'Supabase SQL Editor, then reload.')
+          : failure(bad.error);
       }
       cache = {
         settings: settings.data ?? null,
@@ -295,42 +407,82 @@ export function supabaseBackend(cfg, injectedClient = null) {
 
     /**
      * Realtime events patch the cached snapshot in place; a full reload
-     * happens only on (re)subscribe and every RESYNC_MS as a safety net
-     * against a dropped event.
+     * happens on (re)subscribe, when a save's own change fails to come back
+     * (see expectEcho), and every RESYNC_MS as the backstop.
+     *
+     * `everyone: false` is for a scorer's screen: it hears its own row of
+     * the scorer register -- that is how an admin's correction to its name
+     * reaches it -- but not every other scorer's once-a-minute heartbeat,
+     * which only the admin's register shows. On a free project, where
+     * every message to every screen counts against 100 a second, that was
+     * the biggest steady cost there was.
      */
-    onChange(cb) {
+    onChange(cb, { graderId = null, everyone = true } = {}) {
       listeners.add(cb);
-      if (!channel) {
-        getClient().then((c) => {
-          channel = c.channel('contest-portal');
+      if (started) return () => listeners.delete(cb);
+      started = true;
+
+      const join = async () => {
+        if (disposed || joining) return;
+        joining = true;
+        try {
+          const c = await getClient();
+          const ch = c.channel('contest-portal');
+          channel = ch;
           for (const table of TABLES) {
-            channel.on('postgres_changes', { event: '*', schema: 'public', table }, (payload) => {
+            const only = table === 'graders' && !everyone && graderId
+              ? { filter: `grader_id=eq.${graderId}` } : {};
+            ch.on('postgres_changes', { event: '*', schema: 'public', table, ...only }, (payload) => {
+              heard(table, payload.new);
               cache = applyPatch(cache, table, payload);
               clearTimeout(timer);
               timer = setTimeout(() => listeners.forEach((fn) => fn(cache)), 120);
             });
           }
-          channel.subscribe((status) => {
-            if (status !== 'SUBSCRIBED') return;
-            // Close the gap between the snapshot we hold and the moment
-            // the socket started listening. On a reconnect that gap can
-            // be minutes and this matters; at startup the portal loaded a
-            // heartbeat ago, and reloading every table a second later
-            // doubled the cost of opening the page for no new data.
-            if (Date.now() - lastLoadAt < 5000) return;
-            api.load().then((fresh) => listeners.forEach((fn) => fn(fresh))).catch(() => {});
+          ch.subscribe((status) => {
+            if (ch !== channel) return;          // a replaced channel's last words
+            if (status === 'SUBSCRIBED') {
+              live = true;
+              rejoins = 0;
+              // Close the gap between the snapshot we hold and the moment
+              // the socket started listening. After a drop that gap is
+              // exactly what was missed, however short. At startup the
+              // portal loaded a moment ago, and reloading every table a
+              // second later doubled the cost of opening the page for no
+              // new data -- so only then is a fresh load good enough.
+              if (wasLive || Date.now() - lastLoadAt >= 5000) pull();
+              wasLive = true;
+            } else if (status === 'CLOSED') {
+              // The server ended the channel. supabase-js rejoins a channel
+              // that errored, but one the server closed it simply drops,
+              // and this screen would stop hearing anything until reloaded.
+              live = false;
+              channel = null;
+              if (disposed) return;
+              const delays = cfg.REJOIN_MS ?? REJOIN_MS;
+              const wait = delays[Math.min(rejoins, delays.length - 1)] * (0.75 + Math.random() / 2);
+              rejoins += 1;
+              clearTimeout(rejoinTimer);
+              rejoinTimer = setTimeout(() => { rejoinTimer = null; join().catch(() => {}); }, wait);
+            } else {
+              live = false;                      // CHANNEL_ERROR, TIMED_OUT: it rejoins itself
+            }
           });
-        });
-        // The safety net only has to run while somebody is looking. A tab
-        // left open on a side monitor overnight used to pull the whole
-        // contest twelve times an hour for nobody; now it waits, and
-        // catches up the moment it is brought back to the front.
-        const pull = () => api.load()
-          .then((fresh) => listeners.forEach((fn) => fn(fresh)))
-          .catch(() => {});
-        resync = setInterval(() => {
-          if (document.visibilityState !== 'hidden') pull();
-        }, RESYNC_MS);
+        } finally {
+          joining = false;
+        }
+      };
+      join().catch(() => { /* the resync below tries again */ });
+
+      // The safety net only has to run while somebody is looking. A tab
+      // left open on a side monitor overnight used to pull the whole
+      // contest twelve times an hour for nobody; now it waits, and
+      // catches up the moment it is brought back to the front.
+      resync = setInterval(() => {
+        if (!channel && !rejoinTimer) join().catch(() => {});
+        if (visible()) pull();
+      }, cfg.RESYNC_MS ?? RESYNC_MS);
+      if (typeof document !== 'undefined') {
         onVisible = () => { if (document.visibilityState === 'visible') pull(); };
         document.addEventListener('visibilitychange', onVisible);
       }
@@ -339,8 +491,9 @@ export function supabaseBackend(cfg, injectedClient = null) {
 
     async saveContestant(row) {
       const c = await getClient();
+      const cancelEcho = expectEcho('contestants', row.individual_id);
       const { error } = await c.from('contestants').upsert(row, { onConflict: 'individual_id' });
-      if (error) throw new Error(error.message);
+      if (error) { cancelEcho(); throw failure(error); }
 
       // Only touch the team when its division actually changes. Writing it
       // on every sheet bumps updated_at, fires the public-board trigger and
@@ -354,7 +507,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       if (cachedTeam(row.team)?.division === row.division) return;
       const { error: teamError } = await c.from('teams')
         .upsert({ team: row.team, division: row.division }, { onConflict: 'team' });
-      if (teamError) throw new Error(teamError.message);
+      if (teamError) throw failure(teamError);
     },
 
     async saveGutsSet(team, problems, graderId, graderName, teamName) {
@@ -362,7 +515,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       if (teamName != null) {
         const { error } = await c.from('teams')
           .upsert({ team, name: teamName }, { onConflict: 'team' });
-        if (error) throw new Error(error.message);
+        if (error) throw failure(error);
       } else if (!cachedTeam(team)) {
         // The row has to exist or the team never reaches the public board,
         // which rebuilds from `teams`. But if we already have it, saying so
@@ -373,22 +526,24 @@ export function supabaseBackend(cfg, injectedClient = null) {
         team, problem: p.problem, answer: p.answer,
         entered_by: graderId, entered_by_name: graderName,
       }));
+      const cancelEcho = payload.length
+        ? expectEcho('guts_answers', `${team}|${payload[0].problem}`) : () => {};
       const { error } = await c.from('guts_answers')
         .upsert(payload, { onConflict: 'team,problem' });
-      if (error) throw new Error(error.message);
+      if (error) { cancelEcho(); throw failure(error); }
     },
 
     async saveKey(rows) {
       const c = await getClient();
       const { error } = await c.from('answer_key')
         .upsert(rows, { onConflict: 'round,division,problem' });
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async setTeam(team, patch) {
       const c = await getClient();
       const { error } = await c.from('teams').upsert({ team, ...patch }, { onConflict: 'team' });
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     /**
@@ -403,14 +558,14 @@ export function supabaseBackend(cfg, injectedClient = null) {
         const block = rows.slice(i, i + 200)
           .map(({ team, name, division }) => ({ team, name, division }));
         const { error } = await c.from('teams').upsert(block, { onConflict: 'team' });
-        if (error) throw new Error(error.message);
+        if (error) throw failure(error);
       }
     },
 
     async removeTeam(team) {
       const c = await getClient();
       const { error } = await c.from('teams').delete().eq('team', team);
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     /** Change a few fields on one contestant without touching their answers. */
@@ -418,7 +573,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const c = await getClient();
       const { error } = await c.from('contestants')
         .update(patch).eq('individual_id', individualId);
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async saveRoster(rows) {
@@ -428,40 +583,40 @@ export function supabaseBackend(cfg, injectedClient = null) {
       for (let i = 0; i < rows.length; i += 200) {
         const { error } = await c.from('roster')
           .upsert(rows.slice(i, i + 200), { onConflict: 'individual_id' });
-        if (error) throw new Error(error.message);
+        if (error) throw failure(error);
       }
     },
 
     async clearRoster() {
       const c = await getClient();
       const { error } = await c.from('roster').delete().neq('individual_id', '');
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async removeRosterEntry(individualId) {
       const c = await getClient();
       const { error } = await c.from('roster').delete().eq('individual_id', individualId);
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async saveState(patch) {
       const c = await getClient();
       const { error } = await c.from('contest_state')
         .upsert({ id: 1, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'id' });
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async setFrozen(frozen) {
       const c = await getClient();
       const { error } = await c.rpc('set_guts_frozen', { frozen });
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async saveSettings(patch) {
       const c = await getClient();
       const { error } = await c.from('app_settings')
         .upsert({ id: 1, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'id' });
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     async claim(scope, ref, grader, ttlMs) {
@@ -473,7 +628,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
         scope, ref, grader_id: grader.id, grader_name: grader.name, claimed_at: now,
       }).select();
       if (!inserted.error) return { ok: true };
-      if (inserted.error.code !== '23505') throw new Error(inserted.error.message);
+      if (inserted.error.code !== '23505') throw failure(inserted.error);
 
       const patch = { grader_id: grader.id, grader_name: grader.name, claimed_at: now };
       const mine = await where(c.from('claims').update(patch)).eq('grader_id', grader.id).select();
@@ -516,7 +671,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       ]) {
         const { error } = await c.from(table)
           .update({ [nameColumn]: name }).eq(idColumn, graderId);
-        if (error) throw new Error(error.message);
+        if (error) throw failure(error);
       }
     },
 
@@ -525,7 +680,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const c = await getClient();
       await c.from('claims').delete().eq('grader_id', graderId);
       const { error } = await c.from('graders').delete().eq('grader_id', graderId);
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
     },
 
     /** Drop everyone who has not checked in for a while. */
@@ -534,7 +689,7 @@ export function supabaseBackend(cfg, injectedClient = null) {
       const cutoff = new Date(Date.now() - maxAgeSeconds * 1000).toISOString();
       const { data, error } = await c.from('graders')
         .delete().lt('last_seen', cutoff).select('grader_id');
-      if (error) throw new Error(error.message);
+      if (error) throw failure(error);
       return data?.length ?? 0;
     },
 
@@ -552,22 +707,27 @@ export function supabaseBackend(cfg, injectedClient = null) {
       if (!keepTeams) tables.push(['teams', 'team']);
       for (const [table, col] of tables) {
         const { data, error } = await c.from(table).delete().not(col, 'is', null).select(col);
-        if (error) throw new Error(`${table}: ${error.message}`);
+        if (error) throw failure(error);
         counts[table] = data?.length ?? 0;
       }
       if (keepTeams) {
         const { error: dropError } = await c.from('teams').delete().eq('name', '');
-        if (dropError) throw new Error(`teams: ${dropError.message}`);
+        if (dropError) throw failure(dropError);
         const { error } = await c.from('teams')
           .update({ disqualified: false, dq_reason: '', dq_by: '', dq_at: null })
           .eq('disqualified', true);
-        if (error) throw new Error(`teams: ${error.message}`);
+        if (error) throw failure(error);
       }
       return counts;
     },
 
     dispose() {
+      disposed = true;
       clearInterval(resync);
+      clearTimeout(rejoinTimer);
+      clearTimeout(catchUp);
+      for (const t of expected.values()) clearTimeout(t);
+      expected.clear();
       if (onVisible) document.removeEventListener('visibilitychange', onVisible);
     },
   };
@@ -880,18 +1040,18 @@ export function createStore(cfg, { forceDemo = false } = {}) {
  * nothing and can only see guts_public and contest_state, which hold
  * standings and a clock — never an answer and never the key.
  */
+const BOARD_POLL_MS = 5000;
+
 export function createPublicStore(cfg) {
   let client = null;
   let poll = null;
   const listeners = new Set();
-  let timer = null;
 
   async function getClient() {
     if (client) return client;
-    const { createClient } = await import(/* @vite-ignore */ SUPABASE_ESM);
+    const { createClient } = await loadSupabase();
     client = createClient(cfg.SUPABASE_URL, cfg.SUPABASE_ANON_KEY, {
       auth: { persistSession: false, autoRefreshToken: false },
-      realtime: { params: { eventsPerSecond: 10 } },
     });
     return client;
   }
@@ -906,33 +1066,28 @@ export function createPublicStore(cfg) {
       return { board, state: state.data ?? null };
     },
     /**
-     * Realtime when it is available, polling when it is not. Realtime is
-     * much the cheaper of the two for a room full of viewers — polling a
-     * hundred-row table every few seconds from many screens is what
-     * actually eats a free egress allowance — so polling only starts if
-     * the socket fails to come up.
+     * Polling, every few seconds while the page is on screen. No realtime.
+     *
+     * Every realtime connection counts against a free project's 200, and
+     * every message to it against 100 a second -- the same allowance the
+     * scorers' screens run on. A board link passed round the room would
+     * have spent both on phones, and the first thing to go would have been
+     * the scorers' live updates. A poll costs the board a few seconds of
+     * lag, which nobody watching a guts round can see, and costs the
+     * scorers nothing: two small reads through the REST API, the standings
+     * and the clock, about 2 KB compressed.
      */
     onChange(cb) {
       listeners.add(cb);
       const fire = () => listeners.forEach((fn) => fn());
-      getClient().then((c) => {
-        const channel = c.channel('public-board');
-        for (const table of ['guts_public', 'contest_state']) {
-          channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => {
-            clearTimeout(timer);
-            timer = setTimeout(fire, 200);
-          });
+      if (!poll) {
+        const onScreen = () => typeof document === 'undefined'
+          || document.visibilityState !== 'hidden';
+        poll = setInterval(() => { if (onScreen()) fire(); }, cfg.BOARD_POLL_MS ?? BOARD_POLL_MS);
+        if (typeof document !== 'undefined') {
+          document.addEventListener('visibilitychange', () => { if (onScreen()) fire(); });
         }
-        channel.subscribe((status) => {
-          if (status === 'SUBSCRIBED') {
-            clearInterval(poll);
-            poll = null;
-            fire();
-          } else if (!poll && (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT')) {
-            poll = setInterval(fire, 8000);
-          }
-        });
-      }).catch(() => { if (!poll) poll = setInterval(fire, 8000); });
+      }
       return () => listeners.delete(cb);
     },
   };

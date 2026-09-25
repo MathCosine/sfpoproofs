@@ -7,7 +7,10 @@
 <title>Cowconuts 2026 — Scorer's Card</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<!-- Not render-blocking: on a network that silently drops Google, a blocking
+     stylesheet would hold the whole page blank until the request gave up. -->
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet"></noscript>
 <style>
 /* Print first. This is a sheet of paper that happens to open in a
    browser, not a page that happens to print, so the screen styles are

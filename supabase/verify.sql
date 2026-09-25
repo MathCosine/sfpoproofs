@@ -63,6 +63,13 @@ select 4.5, 'Guts is marked per division',
 
 -- 3. the public board carries set progress -----------------------------
 union all
+select 4.6, 'A guts set with a blank counts as handed in',
+  case when (select prosrc from pg_proc where proname = 'refresh_guts_public'
+               and pronamespace = 'public'::regnamespace) !~ 'guts_answers\s+where answer is not null'
+    then 'OK' else 'FAIL' end,
+  'Otherwise a team that leaves one guts answer blank looks stuck on that set on the projector'
+
+union all
 select 5, 'Public board has set_mask',
   case when exists (select 1 from information_schema.columns
       where table_schema='public' and table_name='guts_public' and column_name='set_mask')

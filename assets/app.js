@@ -2,9 +2,9 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.23.3';
-import { createStore } from './store.js?v=2026.09.23.3';
-import { toCsv, downloadCsv } from './csv.js?v=2026.09.23.3';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.25.1';
+import { createStore } from './store.js?v=2026.09.25.1';
+import { toCsv, downloadCsv } from './csv.js?v=2026.09.25.1';
 import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
@@ -16,7 +16,7 @@ import {
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
-} from './scoring.js?v=2026.09.23.3';
+} from './scoring.js?v=2026.09.25.1';
 
 // Every import above resolved, so the script is running; the fallback in
 // index.html that reports a page too half-updated to start stands down.
@@ -126,7 +126,8 @@ function buildQueue(claims, dq, gutsByTeam) {
       const answers = gutsByTeam.get(String(t.team));
       for (let set = 1; set <= cfg.GUTS_SETS; set += 1) {
         const problems = problemsInSet(set, cfg);
-        const done = problems.every((p) => answers?.get(p) != null);
+        // Saved is done, blanks and all -- a blank is the team's answer.
+        const done = problems.every((p) => answers?.has(p));
         if (done) continue;
         if (claims.has(`guts|${t.team}:${set}`)) continue;
         out.push({
@@ -831,7 +832,7 @@ function paintProgress(teams) {
       if (!pip) continue;
       let cls = 'setpip';
       if (set.complete) cls += ' setpip--done';
-      else if (set.answered) cls += ' setpip--partial';
+      else if (set.entered) cls += ' setpip--partial';
       else if (derived.claims.has(`guts|${teamNo}:${set.set}`)) cls += ' setpip--claimed';
       if (pip.className !== cls) pip.className = cls;
       pip.title = `Guts set ${set.set} — ${set.answered}/${cfg.GUTS_PER_SET} entered, ${set.score} pts`;
@@ -845,8 +846,11 @@ function paintProgress(teams) {
       const claimed = derived.claims.get(`individual|${id}`);
       let cls = 'person';
       if (person?.disqualified) cls += ' person--out';
-      else if (person && person.answered === cfg.INDIVIDUAL_PROBLEMS) cls += ' person--done';
-      else if (person && person.answered > 0) cls += ' person--partial';
+      // A saved sheet is a finished one. The whole grid is saved at once,
+      // so there is no half-entered sheet; blanks are the contestant's.
+      // Counting answers instead showed most real papers as "partial" and
+      // a paper left entirely blank as never entered at all.
+      else if (person) cls += ' person--done';
       else if (claimed) cls += ' person--claimed';
       if (chip.className !== cls) chip.className = cls;
       const score = person ? String(person.score) : '';
@@ -1150,6 +1154,11 @@ const keyPointInputs = {};          // division -> one input per set
 let activeKeyDivision = 'A';
 let keyDirty = false;
 let keyLoadedSignature = null;
+// The key as it stood in the database when the editor last loaded it, so a
+// save can write only the boxes that were changed here.
+let keyBaseline = new Map();
+const keyRowId = (r) => `${r.round}|${r.division ?? '*'}|${r.problem}`;
+const keyRowValue = (r) => `${r.answer ?? ''}:${Number(r.points)}`;
 
 function markKeyDirty() { keyDirty = true; }
 
@@ -1245,6 +1254,7 @@ function fillKeyEditor() {
   const signature = savedKeySignature();
   if (keyDirty || signature === keyLoadedSignature) return;
   keyLoadedSignature = signature;
+  keyBaseline = new Map(data.key.map((r) => [keyRowId(r), keyRowValue(r)]));
 
   for (const division of cfg.DIVISIONS) {
     const table = individualKey(derived.key, division);
@@ -1331,11 +1341,27 @@ function buildKeyRows({ blank = false } = {}) {
 async function saveKey() {
   const rows = buildKeyRows();
   if (!rows) return;
+  // Only what was changed here since the key loaded. Two directors keying
+  // the two divisions at once each have the other's half on screen as it
+  // was when they started typing -- the editor never reloads under unsaved
+  // work -- and writing every box put that stale half straight back over
+  // what the other had just saved.
+  const changed = rows.filter((r) => keyBaseline.get(keyRowId(r)) !== keyRowValue(r));
+  if (!changed.length) {
+    settleKey();
+    render();
+    toast('Nothing to save — the key is exactly as it was loaded.', 'info');
+    return;
+  }
+  const movedMeanwhile = savedKeySignature() !== keyLoadedSignature;
   try {
-    await store.saveKey(rows);
+    await store.saveKey(changed);
     settleKey();
     await refresh();
-    toast('Answer key saved. Every score just recalculated.');
+    toast(movedMeanwhile
+      ? `Saved your ${changed.length} change${changed.length === 1 ? '' : 's'}. Someone else saved `
+        + 'the key while you were typing; their changes are kept too, and are on screen now.'
+      : 'Answer key saved. Every score just recalculated.');
   } catch (err) {
     toast(err.message || 'Could not save the key.', 'error');
   }
@@ -1479,17 +1505,41 @@ function adoptRename() {
  */
 let graderRowsSignature = null;
 
+/**
+ * The scorer register. Rebuilt only when somebody arrives, leaves or is
+ * renamed; everything that moves on its own -- sheet counts, "last seen" --
+ * is written into the rows in place. Rebuilding on every change threw away
+ * a half-typed rename and the armed "Click again" on Remove every time any
+ * scorer saved a sheet, which during the contest is every few seconds.
+ */
+const graderRowParts = new Map();    // grader_id -> { seen, did }
+
 function renderGraders() {
   const host = $('#graderList');
-  const rows = graderActivity(data.graders, data.contestants, data.gutsAnswers, cfg);
-  const signature = rows.map((r) => `${r.graderId}|${r.name}|${r.online}|${r.sheets}|${r.sets}`)
-    .join(',');
+  // Here-now first, then by name: an order that does not reshuffle every
+  // time a heartbeat lands.
+  const rows = graderActivity(data.graders, data.contestants, data.gutsAnswers, cfg)
+    .sort((a, b) => Number(b.online) - Number(a.online)
+      || a.name.localeCompare(b.name) || a.graderId.localeCompare(b.graderId));
+  const signature = rows.map((r) => `${r.graderId}|${r.name}|${r.online}`).join(',');
   const gone = rows.filter((r) => !r.online).length;
   $('#graderState').textContent = rows.length
     ? `${rows.length - gone} here, ${gone} gone.`
     : '';
-  if (signature === graderRowsSignature) return;
+  const paint = () => {
+    for (const person of rows) {
+      const parts = graderRowParts.get(person.graderId);
+      if (!parts) continue;
+      const seen = person.online ? 'here now' : `last seen ${sinceLabel(person.idleMs)}`;
+      if (parts.seen.textContent !== seen) parts.seen.textContent = seen;
+      const did = `${person.sheets} sheet${person.sheets === 1 ? '' : 's'} · `
+        + `${person.sets} set${person.sets === 1 ? '' : 's'}`;
+      if (parts.did.textContent !== did) parts.did.textContent = did;
+    }
+  };
+  if (signature === graderRowsSignature) { paint(); return; }
   graderRowsSignature = signature;
+  graderRowParts.clear();
   host.replaceChildren();
 
   if (!rows.length) {
@@ -1500,9 +1550,8 @@ function renderGraders() {
   for (const person of rows) {
     const row = el('div', `grader-row${person.online ? '' : ' grader-row--off'}`);
     const who = el('div', 'grader-row__who');
-    who.append(el('span', 'grader-row__name', person.name || '(no name)'),
-      el('span', 'grader-row__seen',
-        person.online ? 'here now' : `last seen ${sinceLabel(person.idleMs)}`));
+    const seenEl = el('span', 'grader-row__seen', '');
+    who.append(el('span', 'grader-row__name', person.name || '(no name)'), seenEl);
 
     const field = el('input', 'input');
     field.value = person.name;
@@ -1548,12 +1597,12 @@ function renderGraders() {
       }
     });
 
-    row.append(who, field, save, drop,
-      el('span', 'grader-row__did',
-        `${person.sheets} sheet${person.sheets === 1 ? '' : 's'} · `
-        + `${person.sets} set${person.sets === 1 ? '' : 's'}`));
+    const didEl = el('span', 'grader-row__did', '');
+    graderRowParts.set(person.graderId, { seen: seenEl, did: didEl });
+    row.append(who, field, save, drop, didEl);
     host.appendChild(row);
   }
+  paint();
 }
 
 /**
@@ -2084,8 +2133,11 @@ function render() {
   if (entryMode === 'individual') { markSheetAgainstKey(); refreshIndividualContext(); }
   else refreshGutsContext();
 
+  // An admin's screen hears every heartbeat; a scorer's hears only its
+  // own and sees the rest at each resync, so it counts a little wider.
+  const onlineWindow = isAdmin ? cfg.CLAIM_TTL_MS : 4 * 60 * 1000;
   const online = data.graders.filter(
-    (g) => Date.now() - new Date(g.last_seen).getTime() < cfg.CLAIM_TTL_MS);
+    (g) => Date.now() - new Date(g.last_seen).getTime() < onlineWindow);
   $('#onlineCount').textContent = String(Math.max(online.length, 1));
 
   $('#wipeCounts').textContent = data.contestants.length || data.gutsAnswers.length
@@ -2354,11 +2406,28 @@ function wire() {
   $('#saveStaff').addEventListener('click', async () => {
     const admins = $('#adminNames').value;
     const graders = $('#graderNames').value;
-    await store.saveSettings({ admin_names: admins, grader_names: graders });
-    for (const id of ['#adminNames', '#graderNames']) delete $(id).dataset.dirty;
-    await refresh();
-    const counted = (t) => parseNameList(t).length;
-    toast(`Sign-in lists saved — ${counted(admins)} admins, ${counted(graders)} scorers.`);
+    // Saving an admin list without yourself on it -- a typo in your own
+    // name is enough -- shuts you out of Admin the next time the page
+    // loads, and the way back in is the SQL Editor.
+    if (parseNameList(admins).length && !nameAllowed(admins, grader.name)) {
+      toast(`Your own name, “${grader.name}”, is not on the admin list. Add it exactly as you `
+        + 'sign in, or you will be shut out of Admin the next time this page loads.', 'error');
+      $('#adminNames').focus();
+      return;
+    }
+    const button = $('#saveStaff');
+    button.disabled = true;
+    try {
+      await store.saveSettings({ admin_names: admins, grader_names: graders });
+      for (const id of ['#adminNames', '#graderNames']) delete $(id).dataset.dirty;
+      await refresh();
+      const counted = (t) => parseNameList(t).length;
+      toast(`Sign-in lists saved — ${counted(admins)} admins, ${counted(graders)} scorers.`);
+    } catch (err) {
+      toast(err.message || 'Could not save the sign-in lists.', 'error');
+    } finally {
+      button.disabled = false;
+    }
   });
 
   $('#clearIdleGraders').addEventListener('click', async () => {
@@ -2677,7 +2746,7 @@ async function enterApp() {
 
   store.onChange((snapshot) => {
     if (snapshot) { data = snapshot; render(); } else refresh();
-  });
+  }, { graderId: grader.id, everyone: isAdmin });
   startClockTicker();
 
   // One tick, two cadences. Both of these writes fan out to every open
@@ -2712,7 +2781,32 @@ async function enterApp() {
   }
 
   addEventListener('pagehide', () => { releaseHeld(); });
+  // A reload, a closed tab or a stray swipe back used to drop a half-typed
+  // sheet without a word. The browser asks first now -- only when there is
+  // something on screen that is not what is saved.
+  addEventListener('beforeunload', (e) => {
+    if (!unsavedWork()) return;
+    e.preventDefault();
+    e.returnValue = '';
+  });
   $('#individualId').focus();
+}
+
+/** Is there typing in either grid that differs from what is saved? */
+function unsavedWork() {
+  const differs = (inputs, saved) => {
+    const { values } = readGrid(inputs);
+    if (!values.some((v) => v != null) && !inputs.some((i) => i.value.trim())) return false;
+    return values.some((v, i) => v !== (saved?.[i] ?? null))
+      || inputs.some((i) => i.value.trim() && !parseAnswer(i.value).ok);
+  };
+  const sheet = currentIndividualId();
+  const savedSheet = sheet && data.contestants.find((c) => c.individual_id === sheet.id);
+  if (differs(sheetInputs, savedSheet?.answers)) return true;
+  const set = currentGuts();
+  const stored = set && derived?.gutsByTeam.get(set.team);
+  const savedSet = set ? problemsInSet(set.set, cfg).map((p) => stored?.get(p) ?? null) : null;
+  return differs(gutsInputs, savedSet);
 }
 
 /**

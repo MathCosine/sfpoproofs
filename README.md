@@ -57,7 +57,10 @@ than a new team.
 
 **Progress is person by person.** The right-hand panel lists teams with a chip per
 contestant and their score, plus seven pips for that team's guts sets. Twenty boxes
-per contestant would be unreadable at contest scale; one chip is not.
+per contestant would be unreadable at contest scale; one chip is not. A saved sheet is
+done and a saved guts set is in, **blanks included** — a blank is the contestant's
+answer, and counting only filled-in boxes used to leave a guts set with one blank stuck
+at the front of the queue and its team shown on the projector as still working on it.
 
 **Nobody enters the same sheet twice.** Opening a sheet or a set takes a real lock —
 an atomic insert, taken over only by you or after two minutes of silence. Anyone else
@@ -92,6 +95,16 @@ rounds, and a score distribution.
 
 **Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
 the guts point values, which are configuration rather than answers.
+
+**Two directors can key the answer key at once** — one on each division, say. Saving
+writes only the boxes you changed since the key last loaded on your screen, so neither
+puts the other's half back the way it was; the later one is told the other's changes
+were kept and sees them straight away.
+
+**Nothing half-typed is lost to a stray reload.** Closing or reloading the tab with a
+sheet or a set on screen that is not what is saved asks first. And an admin cannot save
+an admin list that leaves themselves off — that would lock them out of Admin on their
+next load.
 
 **Disqualification** works on a whole team or on **one contestant**. Either way every
 answer is kept and the reason goes on the exports. A disqualified team stops ranking
@@ -454,7 +467,8 @@ are folded into the cached snapshot row by row, and a saved sheet folds in the r
 just sent rather than reloading. Refreshing after each write meant nine table reads and
 the whole contest coming back down after every save; that is what made the portal drag
 on a real database, where the demo store's localStorage had hidden it. A full reload now
-happens only on reconnect and every five minutes as a safety net. Refetching every table on every change is the obvious
+happens on reconnect, when a save does not hear itself come back (below), and every two
+minutes as a safety net. Refetching every table on every change is the obvious
 implementation and it does not survive contact with a real contest — twenty staff
 machines each pulling a couple of hundred kilobytes per keystroke-sized change runs
 to gigabytes of egress in an afternoon.
@@ -473,10 +487,41 @@ nothing on the client uses, which is 55% off it raw and a quarter off it compres
 with an `IS DISTINCT FROM` guard, so one guts entry moves one row instead of
 rewriting all hundred and emitting a realtime message per team per save.
 
-The public board prefers realtime and falls back to polling only if the socket fails
-— for a room of viewers realtime is much the cheaper of the two. Supabase's free tier
-allows 200 concurrent realtime connections; that is plenty for a projector and the
-scoring team, but it is not a link to post to every competitor at once.
+**The public board polls; it takes no realtime connection.** Two small reads every five
+seconds while it is on screen — the standings and the clock, about 2 KB compressed — and
+nothing while it is in a pocket. Every realtime connection counts against the free
+project's 200 and every message to one against 100 a second, the same allowance the
+scorers' screens live on, so a board link passed round a room of phones would have spent
+the scorers' budget first. Polling costs the board a few seconds of lag nobody watching a
+guts round can see, and each phone about 1.5 MB an hour of egress. Share the link freely.
+
+### The limit that matters on the day: 100 messages a second
+
+Supabase counts a realtime message once for **every screen it is delivered to**, and on
+the free plan allows 100 a second, **averaged over the last minute**. Past that it does
+not close anything — it silently skips database changes until the average comes back
+down (read from Supabase Realtime's source, not assumed). A screen that missed a change
+has no way to know. So:
+
+- **A save listens for itself.** A screen that saves a sheet or a guts set expects that
+  change back over realtime within ten seconds. When it does not come, changes are being
+  skipped (or the socket is dead), and whatever other screens saved meanwhile was skipped
+  too — so it reloads at once, and again seventy seconds later, after Supabase's window.
+- **Every screen reloads every two minutes** while it is on screen, for the ones that were
+  only watching.
+- **A channel the server closes is joined again.** supabase-js rejoins a channel that
+  errored but silently drops one the server closed; the portal rejoins with backoff and
+  reloads to cover the gap.
+- **Nothing is ever lost.** Saves go straight to the database over HTTP, and the lock on a
+  sheet is the database's primary key — realtime only carries the news.
+
+The one moment that can reach the limit is **time-up in the guts round**, when every team
+hands in the set it is on and every scorer keys them at once: a guts set is six changes
+(four answers, a lock let go, the next one taken), each heard by every portal. With 44
+teams and 20 scorers that is about 94 a second for a minute; with 12 on guts, about 55.
+`preflight.sql` works it out for your numbers. If it tips over, screens are a minute
+behind and then catch up by themselves. Keying guts with a dozen people rather than all
+twenty, or the Pro plan for the contest month (500 a second), takes it off the table.
 
 ### Twenty scorers, costed
 
@@ -488,8 +533,9 @@ row per subscribed client, which is what Supabase actually bills.
 | --- | --- | --- |
 | One full load of the whole contest | 157 KB raw · **9 KB gzipped** | 350 KB · **19 KB** |
 | Twenty tabs opening it | 0.2 MB | 0.4 MB |
-| The five-minute resync, twenty tabs, six hours | 13 MB | 26 MB |
-| **Against a 5 GB monthly allowance** | **well under 1%** | **well under 1%** |
+| The two-minute resync, twenty tabs, six hours | 32 MB | 68 MB |
+| The projector board polling every five seconds | 9 MB | 9 MB |
+| **Against a 5 GB monthly allowance** | **about 1%** | **about 2%** |
 
 Egress is not the binding limit — **realtime messages are**, and they are dominated by
 the two things every tab writes on a timer rather than by anything anyone types. Each
@@ -498,25 +544,40 @@ messages across a room of twenty scorers:
 
 | Per six-hour contest, twenty scorers | This contest | Full size |
 | --- | --- | --- |
-| Saying "still here" — every 60 s, not 20 | 144,000 | 144,000 |
-| Locks: claimed, released, and renewed at ⅔ of their life | 127,000 | 152,000 |
-| The saves themselves, row by row | 30,000 | 67,000 |
-| The public board following the standings | 7,000 | 16,000 |
-| **Against the two-million monthly allowance** | **~308,000 · 15%** | **~379,000 · 19%** |
+| Saying "still here" — heard only by yourself and the admins | 22,000 | 22,000 |
+| Locks renewed at ⅔ of their life, heard by every portal | 108,000 | 108,000 |
+| Sheets: the save, the lock let go, the next one taken | 11,000 | 24,000 |
+| Guts sets: four answers and the same two lock changes | 37,000 | 84,000 |
+| The public board | 0 — it polls | 0 |
+| **Against the two-million monthly allowance** | **~177,000 · 9%** | **~238,000 · 12%** |
 
-Note what that table says: **the contest could be three times the size and still fit**,
-because the two timers dominate and they scale with the number of scorers, not with the
-number of papers. An earlier version of this section put the full-size figure at
-277,000 by counting a four-row guts save as one message and leaving lock traffic out
-altogether; 379,000 is what it actually comes to.
+The monthly allowance is nowhere near the constraint; the per-second one above is. The
+presence heartbeat used to go to every screen — 144,000 messages on its own, the largest
+item in this table — for a scorer count only an admin's screen shows. A scorer's screen
+now hears only its own row, which is still how an admin's correction to their name
+reaches them.
 
 On the old cadence — both timers firing every twenty seconds — the same contest came to
 about 890,000, or 45% of the month's allowance in one afternoon. Nothing about the lock
 changed: it still lasts two minutes and still frees a walked-away sheet on its own. It
 is simply not rewritten four times inside each of those two minutes.
 
-Concurrent connections land near 25 against 200. **Nothing here needs a paid plan.** The
-resync also pauses entirely in a tab nobody is looking at.
+Concurrent connections land near 25 against 200 — one per portal, none for any board.
+**Nothing here needs a paid plan**; see the per-second limit above for the one case where
+the Pro plan buys something. The resync also pauses entirely in a tab nobody is looking at.
+
+**Sign-ins are limited per network address**: 30 at once, then one every two seconds
+(Supabase Auth, `/token`, shared with token refreshes). A venue is one address, so twenty
+people signing in together fits, with room for typos; a burst beyond it gets "too many
+sign-ins from this network — wait a minute", not a wrong-password message. It can be
+raised under Authentication → Rate Limits. Reloads do not count: checking a session
+(`GET /auth/v1/user`) is not rate limited at all.
+
+**GitHub Pages** is not a constraint either: 100 GB a month of bandwidth against a few
+hundred kilobytes per laptop, and a soft limit of 10 builds an hour — so do not push
+changes on the morning. **supabase-js is served from this site**
+(`assets/vendor/`), not a CDN, and the fonts no longer block the page from drawing: a
+venue network that blocks either a CDN or Google cannot stop anyone signing in.
 
 The one free-tier limit that has nothing to do with size: **a free project pauses after
 about a week with nothing touching it**, and waking it is a manual restore that takes a
@@ -545,10 +606,10 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 109 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 248 browser checks, including twenty scorers at once
-npm run test:db        # 28 checks: twenty connections racing a real Postgres, and the password change
-npm run test:auth      # 29 checks: the real Supabase sign-in path, with the real supabase-js
+npm test               # 110 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 256 browser checks, including twenty scorers at once
+npm run test:db        # 29 checks: twenty connections racing a real Postgres, and the password change
+npm run test:auth      # 42 checks: the real sign-in path and live updates, with the real supabase-js
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/
 ```
 
@@ -602,6 +663,19 @@ entry flow, the public board, and the locking, and asserts it never contacts a l
 Supabase project.
 
 ## On the day
+
+- **Hard refresh every laptop once** after the last deploy, and do not push anything on
+  the morning: a deploy mid-contest leaves some laptops on the old version for up to ten
+  minutes.
+- **One portal tab per laptop.** A second tab is a second listener on every change and the
+  same scorer twice as far as locks are concerned.
+- **Let the laptops set their clocks automatically**, the projector's and the one that
+  starts the guts clock especially: the countdown is worked out from the end time on each
+  screen's own clock.
+- **The board link is safe to share.** It polls and uses none of the scorers' realtime
+  allowance.
+- If GitHub Pages is down, `npm run serve` from a copy of this repository on any laptop
+  serves the same portal against the same database.
 
 [`scorer-card.html`](scorer-card.html) is a one-page reference to print for each of the
 twenty people scoring: how to sign in, how to read a contestant ID, what to do about a

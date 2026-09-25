@@ -1642,3 +1642,16 @@ test('every script and import carries the current version', async () => {
     }
   }
 });
+
+test('a guts set saved with a blank is entered, and the blank scores nothing', () => {
+  // Teams leave guts answers blank all the time. A set is saved as four
+  // rows either way; counting only the filled ones kept it "unfinished"
+  // for the rest of the round.
+  const answers = new Map([[1, 2], [2, null], [3, 6], [4, 8]]);
+  const out = scoreGutsTeam(answers, fullKey(), cfg, 'A');
+  assert.equal(out.perSet[0].complete, true);
+  assert.equal(out.perSet[0].entered, 4);
+  assert.equal(out.perSet[0].answered, 3, 'the blank is still not an answer');
+  assert.equal(out.perSet[0].score, 3);
+  assert.equal(out.perSet[1].complete, false, 'a set with nothing saved is not');
+});

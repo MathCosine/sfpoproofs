@@ -424,6 +424,14 @@ const saveSheet = async (n, at, sheet = null) => {
   const got = await one(`select string_agg(team || '=' || score, ' ' order by team) from guts_public`);
   check('each division\'s guts is marked against its own key', got === 'A01=1 B01=1 B02=1', got);
 
+  // A set saved with a blank in it has been turned in: the board's set bar
+  // must show it, or the team looks stuck on that set for the whole round.
+  await sql(`insert into guts_answers (team, problem, answer)
+             values ('A01', 3, null), ('A01', 4, 4)`);
+  const mask = await one(`select set_mask || '/' || answered from guts_public where team = 'A01'`);
+  check('a guts set saved with a blank counts as turned in on the board',
+    mask === '1/3', `set_mask/answered = ${mask}`);
+
   // A database from before the split keeps its guts key as one shared
   // set of rows. Running schema.sql over it has to hand that key to both
   // divisions -- answers and point values -- rather than start them blank.

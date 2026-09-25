@@ -13,6 +13,7 @@
 //
 import { chromium } from 'playwright';
 import { createServer } from 'node:http';
+import { WebSocketServer } from 'ws';
 import { readFile } from 'node:fs/promises';
 import { extname, join, normalize } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -30,11 +31,21 @@ for (const signal of ['uncaughtException', 'unhandledRejection']) {
 // The library under test has to be the one the portal loads, or this
 // proves something about a different program.
 const storeSrc = await readFile(join(ROOT, 'assets/store.js'), 'utf8');
-const loadedVersion = /supabase-js@([\d.]+)\/\+esm/.exec(storeSrc)?.[1];
+const vendored = /vendor\/(supabase-js-([\d.]+))\/supabase\.js/.exec(storeSrc);
+const loadedVersion = vendored?.[2];
 const pinnedVersion = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'))
   .devDependencies['@supabase/supabase-js'];
-check('the supabase-js under test is the version the portal loads',
+check('the supabase-js the portal serves is the version pinned in package.json',
   loadedVersion && loadedVersion === pinnedVersion, `${loadedVersion} / ${pinnedVersion}`);
+// And byte for byte the published build of it, not something edited.
+{
+  const served = await readFile(join(ROOT, 'assets/vendor', vendored?.[1] ?? '-', 'supabase.js'))
+    .catch(() => Buffer.alloc(0));
+  const published = await readFile(
+    join(ROOT, 'node_modules/@supabase/supabase-js/dist/umd/supabase.js'));
+  check('and it is the published build, unchanged', served.equals(published),
+    `${served.length} / ${published.length} bytes`);
+}
 
 // ---------------------------------------------------------------------
 // A stand-in for Supabase
@@ -58,6 +69,9 @@ const refreshTokens = new Map();     // refresh token -> session id
 const lists = { admin_names: 'Thomas Ni\nRyan Wang\nLusen Yao', grader_names: 'Xu Shao\nCCMathClub' };
 let logoutBreaks = false;
 let unreachable = false;         // the wifi drops: every request fails to connect
+let tokenBusy = false;           // Supabase Auth's per-address rate limit, reached
+const restGets = {};             // table -> GET count, to see a screen reload
+const realtime = { enabled: false, echo: true, joins: [], sockets: new Set(), connections: 0 };
 const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
 const issue = (email) => {
   const sid = randomUUID();
@@ -122,6 +136,9 @@ const fake = createServer(async (req, res) => {
   // ---- auth --------------------------------------------------------
   if (url.pathname === '/auth/v1/token') {
     const body = await readBody(req);
+    if (tokenBusy) {
+      return authError(429, 'over_request_rate_limit', 'Request rate limit reached');
+    }
     if (url.searchParams.get('grant_type') === 'password') {
       if (PASSWORDS[body.email] && PASSWORDS[body.email] === body.password) {
         return send(200, issue(body.email));
@@ -164,12 +181,18 @@ const fake = createServer(async (req, res) => {
 
   // ---- the database ------------------------------------------------
   if (url.pathname.startsWith('/rest/v1/')) {
-    await readBody(req);
+    const body = await readBody(req);
     const table = url.pathname.slice('/rest/v1/'.length);
     if (table.startsWith('rpc/')) return send(200, 0);
     if (req.method !== 'GET' && req.method !== 'HEAD') {
+      // What Supabase does next: the change goes out to every channel
+      // listening to that table -- unless its realtime is dropping them.
+      if (req.method === 'POST' && realtime.echo) {
+        for (const row of Array.isArray(body) ? body : [body]) announce(table, 'INSERT', row);
+      }
       return send(req.method === 'POST' ? 201 : 204, req.method === 'POST' ? [] : null);
     }
+    restGets[table] = (restGets[table] ?? 0) + 1;
     // Row level security: without a live token, a staff table is empty.
     const rows = claims(req) ? (TABLES[table]?.() ?? []) : [];
     return send(200, rows, {
@@ -177,24 +200,80 @@ const fake = createServer(async (req, res) => {
   }
   return send(404, { message: 'not here' });
 });
-// Live updates are not what is under test; refuse the socket and let the
-// portal carry on without it, as it does when realtime is unreachable.
-fake.on('upgrade', (req, socket) => socket.destroy());
+// ---- realtime ----------------------------------------------------------
+// Enough of Supabase Realtime's Phoenix protocol to join a channel, hear
+// postgres changes, and be thrown off: a join is answered with the
+// bindings it asked for, a change goes to every binding on its table, and
+// closing a channel sends the phx_close Supabase sends when it shuts one
+// down (its rate limiter does exactly this). Off until a test turns it on,
+// so the sign-in checks above run as they always have: no socket at all.
+const wss = new WebSocketServer({ noServer: true });
+fake.on('upgrade', (req, socket, head) => {
+  if (!realtime.enabled || !req.url.startsWith('/realtime/v1/websocket')) {
+    socket.destroy();
+    return;
+  }
+  realtime.connections += 1;
+  wss.handleUpgrade(req, socket, head, (ws) => {
+    ws.channels = new Map();          // topic -> { joinRef, bindings }
+    realtime.sockets.add(ws);
+    ws.on('close', () => realtime.sockets.delete(ws));
+    ws.on('message', (raw) => {
+      const msg = JSON.parse(String(raw));
+      const reply = (response = {}) => ws.send(JSON.stringify({
+        topic: msg.topic, event: 'phx_reply', ref: msg.ref, join_ref: msg.join_ref,
+        payload: { status: 'ok', response } }));
+      if (msg.event === 'phx_join') {
+        const asked = msg.payload?.config?.postgres_changes ?? [];
+        const bindings = asked.map((b, i) => ({ ...b, id: 1000 + i }));
+        ws.channels.set(msg.topic, { joinRef: msg.ref, bindings });
+        realtime.joins.push({ topic: msg.topic, bindings: asked });
+        reply({ postgres_changes: bindings });
+      } else if (msg.event === 'phx_leave') {
+        ws.channels.delete(msg.topic);
+        reply();
+      } else {
+        reply();                        // heartbeat, access_token
+      }
+    });
+  });
+});
+const announce = (table, type, record) => {
+  for (const ws of realtime.sockets) {
+    for (const [topic, { bindings }] of ws.channels) {
+      const ids = bindings.filter((b) => b.table === table).map((b) => b.id);
+      if (!ids.length) continue;
+      ws.send(JSON.stringify({ topic, event: 'postgres_changes', ref: null, payload: {
+        ids, data: { schema: 'public', table, type, commit_timestamp: new Date().toISOString(),
+          columns: Object.keys(record).map((name) => ({ name, type: 'text' })),
+          record, old_record: null, errors: null } } }));
+    }
+  }
+};
+const closeChannels = () => {
+  for (const ws of realtime.sockets) {
+    for (const [topic, { joinRef }] of ws.channels) {
+      ws.send(JSON.stringify({ topic, event: 'system', ref: null,
+        payload: { status: 'error', extension: 'system', message: 'Too many messages per second',
+          channel: topic.replace(/^realtime:/, '') } }));
+      ws.send(JSON.stringify({ topic, event: 'phx_close', ref: joinRef, join_ref: joinRef,
+        payload: {} }));
+    }
+    ws.channels.clear();
+  }
+};
 await new Promise((r) => fake.listen(0, '127.0.0.1', r));
 const FAKE = `http://127.0.0.1:${fake.address().port}`;
 
 // ---------------------------------------------------------------------
-// The portal, served as it is, with supabase-js from node_modules in
-// place of the CDN copy of the same version.
+// The portal, served exactly as GitHub Pages serves it -- supabase-js
+// included, from the copy in assets/vendor.
 // ---------------------------------------------------------------------
 const TYPES = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css',
   '.json': 'application/json', '.png': 'image/png', '.svg': 'image/svg+xml' };
-const UMD = join(ROOT, 'node_modules/@supabase/supabase-js/dist/umd/');
 const site = createServer(async (req, res) => {
   const path = decodeURIComponent(req.url.split('?')[0]);
-  const file = path.startsWith('/__supabase/')
-    ? join(UMD, path.slice('/__supabase/'.length))
-    : join(ROOT, normalize(path === '/' ? 'index.html' : path).replace(/^(\.\.[/\\])+/, ''));
+  const file = join(ROOT, normalize(path === '/' ? 'index.html' : path).replace(/^(\.\.[/\\])+/, ''));
   try {
     const body = await readFile(file);
     res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' });
@@ -203,17 +282,12 @@ const site = createServer(async (req, res) => {
 });
 await new Promise((r) => site.listen(0, '127.0.0.1', r));
 const BASE = `http://127.0.0.1:${site.address().port}/`;
-const SHIM = `await new Promise((ok, fail) => {
-  const s = document.createElement('script');
-  s.src = '${BASE}__supabase/supabase.js'; s.onload = ok; s.onerror = fail;
-  document.head.appendChild(s);
-});
-export const createClient = (...a) => self.supabase.createClient(...a);`;
 
 const browser = await chromium.launch(
   process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const jsErrors = [];
 const liveRequests = [];
+const cdnRequests = [];
 const newContext = async () => {
   const ctx = await browser.newContext();
   await ctx.addInitScript(([url]) => {
@@ -221,8 +295,12 @@ const newContext = async () => {
       localStorage.setItem('contest-supabase-override', JSON.stringify({ url, key: 'test-anon-key' }));
     }
   }, [FAKE]);
-  await ctx.route(/cdn\.jsdelivr\.net\/npm\/@supabase\/supabase-js@/, (route) =>
-    route.fulfill({ status: 200, contentType: 'text/javascript', body: SHIM }));
+  // Nothing may come from a CDN any more: a venue that blocks one must not
+  // be able to stop anyone signing in.
+  await ctx.route(/cdn\.jsdelivr\.net|unpkg\.com|esm\.sh/, (route) => {
+    cdnRequests.push(route.request().url());
+    route.abort();
+  });
   await ctx.route(/supabase\.co/, (route) => { liveRequests.push(route.request().url()); route.abort(); });
   return ctx;
 };
@@ -416,6 +494,113 @@ const REFUSED = 'That name and password were not accepted';
   await ctx.close();
 }
 
+// ---- 5. too many sign-ins from one network --------------------------------
+// Supabase Auth limits sign-ins per network address, and a venue is one
+// address. Hitting it is neither a dead connection nor a wrong password,
+// and must not read as either.
+{
+  const ctx = await newContext();
+  const p = await open(ctx);
+  tokenBusy = true;
+  const said = await signIn(p, { name: 'Xu Shao', staff: 'staff pass words' });
+  tokenBusy = false;
+  check('a rate-limited sign-in says to wait a minute',
+    /too many sign-ins/i.test(said) && !said.includes(REFUSED) && !/reach the server/i.test(said),
+    said);
+  await ctx.close();
+}
+
+// ---- 6. live updates survive the server closing them ---------------------
+// Supabase shuts a channel down -- its message-rate limiter does, among
+// other things -- by sending phx_close. supabase-js reports CLOSED and
+// drops the channel for good; it only rejoins channels that errored.
+realtime.enabled = true;
+const waitFor = async (fn, ms = 15000) => {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 100)); }
+  return false;
+};
+{
+  const ctx = await newContext();
+  const p = await open(ctx);
+  await signIn(p, { name: 'Xu Shao', staff: 'staff pass words' });
+  const joined = await waitFor(() => realtime.joins.length >= 1);
+  check('a scorer\'s screen joins the live channel', joined, `${realtime.joins.length} joins`);
+  const graders = realtime.joins[0]?.bindings.find((b) => b.table === 'graders');
+  check('and hears only its own row of the scorer register, not every heartbeat',
+    /^grader_id=eq\./.test(graders?.filter ?? ''), JSON.stringify(graders));
+
+  const loadsBefore = restGets.answer_key ?? 0;
+  closeChannels();
+  const rejoined = await waitFor(() => realtime.joins.length >= 2, 10000);
+  check('a channel the server closes is joined again', rejoined, `${realtime.joins.length} joins`);
+  const reloaded = await waitFor(() => (restGets.answer_key ?? 0) > loadsBefore, 8000);
+  check('and the screen reloads, to pick up what it missed while off', reloaded);
+
+  // ---- 7. a save whose change never comes back ---------------------------
+  // Over the rate limit Supabase does not close anything: it skips the
+  // changes, silently. The one screen that can notice is one that just
+  // saved, because it expects to hear its own save come back.
+  const keySheet = async (id) => {
+    await p.fill('#individualId', id);
+    await p.evaluate(() => {
+      document.querySelectorAll('#answerGrid .ans input').forEach((input, i) => {
+        input.value = String(i + 1);
+        input.dispatchEvent(new Event('input'));
+      });
+    });
+    await p.click('#saveSheet');
+  };
+  await new Promise((r) => setTimeout(r, 1500));
+  realtime.echo = true;
+  let before = restGets.answer_key ?? 0;
+  await keySheet('A011');
+  await new Promise((r) => setTimeout(r, 12000));
+  check('a save that comes back over realtime costs no reload',
+    (restGets.answer_key ?? 0) === before, `${(restGets.answer_key ?? 0) - before} reloads`);
+
+  realtime.echo = false;
+  before = restGets.answer_key ?? 0;
+  await keySheet('A012');
+  const caughtUp = await waitFor(() => (restGets.answer_key ?? 0) > before, 14000);
+  check('a save that never comes back makes the screen catch up by itself', caughtUp,
+    `${(restGets.answer_key ?? 0) - before} reloads`);
+  realtime.echo = true;
+  await ctx.close();
+}
+{
+  const ctx = await newContext();
+  const p = await open(ctx);
+  const joinsBefore = realtime.joins.length;
+  await signIn(p, { name: 'Thomas Ni', admin: 'admin pass words' });
+  await waitFor(() => realtime.joins.length > joinsBefore);
+  const graders = realtime.joins.at(-1)?.bindings.find((b) => b.table === 'graders');
+  check('an admin\'s screen hears the whole scorer register',
+    graders && !graders.filter, JSON.stringify(graders));
+  await ctx.close();
+}
+
+// ---- 8. the public board polls, and takes no realtime connection ---------
+// A board link passed round a room of phones must not spend the scorers'
+// connections or their messages per second.
+{
+  const ctx = await newContext();
+  const b = await ctx.newPage();
+  b.on('pageerror', (e) => jsErrors.push(`board: ${e}`));
+  const connectionsBefore = realtime.connections;
+  const readsBefore = restGets.guts_public ?? 0;
+  await b.goto(`${BASE}guts.html`, { waitUntil: 'domcontentloaded' });
+  const polled = await waitFor(() => (restGets.guts_public ?? 0) >= readsBefore + 3, 16000);
+  check('the public board keeps itself current by polling', polled,
+    `${(restGets.guts_public ?? 0) - readsBefore} reads`);
+  check('and never opens a realtime connection', realtime.connections === connectionsBefore,
+    `${realtime.connections - connectionsBefore} connection(s)`);
+  check('and says it is live', (await b.textContent('#liveLabel')).trim() === 'Live');
+  await ctx.close();
+}
+realtime.enabled = false;
+
+check('nothing is loaded from a CDN', cdnRequests.length === 0, cdnRequests[0] ?? '');
 check('no uncaught JavaScript errors', jsErrors.length === 0, jsErrors.slice(0, 2).join(' | '));
 check('never touched a live Supabase project', liveRequests.length === 0, liveRequests[0] ?? '');
 

@@ -6,7 +6,10 @@
 <title>Cowconuts 2026 — Guts Round</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<!-- Not render-blocking: on a network that silently drops Google, a blocking
+     stylesheet would hold the whole page blank until the request gave up. -->
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet"></noscript>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 <style>
 /* =====================================================================
@@ -173,7 +176,7 @@ footer .spacer{margin-left:auto}
 }
 </style>
 </head>
-<body data-app-version="2026.09.23.3">
+<body data-app-version="2026.09.25.1">
 <div class="wrap">
   <header>
     <div class="brand">
@@ -204,9 +207,9 @@ footer .spacer{margin-left:auto}
 </div>
 
 <script type="module">
-import { resolvedConfig } from './assets/config.js?v=2026.09.23.3';
-import { createPublicStore } from './assets/store.js?v=2026.09.23.3';
-import { gutsRemaining, formatClock, competitionRanks } from './assets/scoring.js?v=2026.09.23.3';
+import { resolvedConfig } from './assets/config.js?v=2026.09.25.1';
+import { createPublicStore } from './assets/store.js?v=2026.09.25.1';
+import { gutsRemaining, formatClock, competitionRanks } from './assets/scoring.js?v=2026.09.25.1';
 
 // The board has no password to give away, so it may still be pointed at a
 // project from the address bar — that is how a projector machine is set
@@ -491,7 +494,12 @@ if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
   setInterval(read, 3000);
 } else {
   const store = createPublicStore(cfg);
+  // One read at a time: on a slow connection a poll can outlast the next
+  // one, and stacking them up would only make it slower.
+  let pulling = false;
   const pull = async () => {
+    if (pulling) return;
+    pulling = true;
     try {
       const next = await store.load();
       board = next.board;
@@ -501,6 +509,8 @@ if (demo || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
       render();
     } catch {
       setLive(false);
+    } finally {
+      pulling = false;
     }
   };
   await pull();

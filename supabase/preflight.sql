@@ -114,6 +114,22 @@ select 11.5, 'Each division''s guts is marked against its own key',
          false, false, '')))[1]::text, 'no guts key rows — re-run schema.sql') end
 
 union all
+select 11.6, 'A guts set saved with a blank counts as handed in',
+  -- Older rebuilds counted only filled-in answers, so a team that left one
+  -- blank showed on the projector as stuck on that set all round.
+  case when coalesce((select prosrc from pg_proc
+                       where proname = 'refresh_guts_public'
+                         and pronamespace = 'public'::regnamespace), '')
+            ~ 'guts_answers\s+where answer is not null'
+    then 'FIX' else 'GO' end,
+  case when coalesce((select prosrc from pg_proc
+                       where proname = 'refresh_guts_public'
+                         and pronamespace = 'public'::regnamespace), '')
+            ~ 'guts_answers\s+where answer is not null'
+    then 'the projector still ignores sets with a blank in them — re-run schema.sql'
+    else 'a set is in once its four answers are saved, blanks and all' end
+
+union all
 select 12, 'Row level security is on everywhere',
   case when (select count(*) from pg_class c
                join pg_namespace ns on ns.oid = c.relnamespace
@@ -378,31 +394,61 @@ select 60, 'Realtime messages, estimated for the day', 'INFO',
   (select
      'about ' || to_char(round(msgs / 1000.0) * 1000, 'FM999,999,999')
      || ' of the 2,000,000 a month (' || round(100.0 * msgs / 2000000.0)::int || '%)'
-     || ' for ' || graders || ' scorers over ' || hours || ' hours'
-     || ' — the two timers every tab runs are most of it, not anything anyone types'
+     || ' for ' || graders || ' scorers over ' || hours || ' hours.'
+     || ' Every change counts once for every open portal that hears it;'
+     || ' the projector board polls instead and costs none'
    from (
      select s.graders, s.hours,
-       -- presence every 60s and a lock renewed every 80s, each fanned
-       -- out to every open portal; then the actual work.
-       (s.hours * 60) * s.graders * s.graders
+       -- Each tab says "still here" once a minute, heard by itself and
+       -- the admins' screens (say three); a held lock is renewed every
+       -- 80s and heard by every tab. Then the work itself: a sheet is a
+       -- save, a lock let go and the next one taken; a guts set is four
+       -- answers and the same two lock changes.
+       (s.hours * 60) * s.graders * 3
        + (s.hours * 3600 / 80) * s.graders * s.graders
-       + coalesce((select c from cnt where t = 'roster'), 176) * 2 * s.graders
-       + coalesce((select c from cnt where t = 'roster'), 176) * 1.4 * s.graders
-       + coalesce(nullif((select c from cnt where t = 'roster'), 0), 176) / 4 * 28 * s.graders
-       + coalesce(nullif((select c from cnt where t = 'roster'), 0), 176) / 4 * 7 * (s.graders + 3)
+       + coalesce(nullif((select c from cnt where t = 'roster'), 0), 176) * 3 * s.graders
+       + coalesce(nullif((select c from cnt where t = 'teams'), 0), 44) * 7 * 6 * s.graders
        as msgs
        from settings s) e)
 
 union all
+select 60.5, 'The busiest minute, against the 100 a second limit',
+  -- Time-up in the guts round: every team hands in the set it is on at
+  -- once, and every scorer keys them as fast as they can -- a set takes
+  -- about fifteen seconds. Supabase averages over the last minute.
+  (select case when peak < 80 then 'GO' else 'LOOK' end
+     from (select
+       least(coalesce(nullif((select c from cnt where t = 'teams'), 0), 44), s.graders * 4)
+         * 6 * s.graders / 60.0
+       + s.graders * s.graders / 80.0 + s.graders * 3 / 60.0 as peak
+       from settings s) p),
+  (select 'about ' || round(peak)::int || ' a second in the minute after time-up. '
+          || case when peak < 80 then 'Comfortably inside the free plan''s 100.'
+             else 'Near or over the free plan''s 100: if it tips over, Supabase skips live'
+                  || ' updates for up to a minute. No save is lost -- they go straight to the'
+                  || ' database -- and a screen that misses its own save reloads itself; the'
+                  || ' rest catch up within two minutes. Fewer scorers keying guts at once, or'
+                  || ' the Pro plan (500 a second) for the month, removes it.' end
+     from (select
+       least(coalesce(nullif((select c from cnt where t = 'teams'), 0), 44), s.graders * 4)
+         * 6 * s.graders / 60.0
+       + s.graders * s.graders / 80.0 + s.graders * 3 / 60.0 as peak
+       from settings s) p)
+
+union all
 select 61, 'Egress, estimated for the day', 'INFO',
-  (select 'about ' || round(mb)::int || ' MB of the 5,000 MB a month — '
-          || 'one full load of this contest is ' || round(kb)::int || ' KB compressed'
+  (select 'about ' || round(mb)::int || ' MB of the 5,000 MB a month -- '
+          || 'one full load of this contest is ' || round(kb)::int || ' KB compressed; '
+          || 'each phone left open on the public board adds about 1.5 MB an hour'
      from (select
              (coalesce((select c from cnt where t = 'roster'), 176) * 0.055
               + coalesce(nullif((select c from cnt where t = 'roster'), 0), 176) / 4 * 0.135
               + 2)::numeric as kb,
              s.graders, s.hours from settings s) b,
-          lateral (select (kb * (graders * hours * 12 + graders) / 1024)::numeric as mb) m)
+          -- every portal reloads every two minutes while on screen, plus
+          -- one projector polling two small reads every five seconds.
+          lateral (select (kb * (graders * hours * 30 + graders) / 1024
+                           + hours * 720 * 2.0 / 1024)::numeric as mb) m)
 
 union all
 select 62, 'A free project pauses when nothing touches it', 'LOOK',
