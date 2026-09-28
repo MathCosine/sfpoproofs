@@ -2,9 +2,13 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.25.1';
-import { createStore } from './store.js?v=2026.09.25.1';
-import { toCsv, downloadCsv } from './csv.js?v=2026.09.25.1';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.28.1';
+import { createStore } from './store.js?v=2026.09.28.1';
+import { toCsv, downloadCsv } from './csv.js?v=2026.09.28.1';
+import {
+  studentReports, teamReports, pickReports, renderReportsDocument,
+  studentReportTable, teamReportTable,
+} from './reports.js?v=2026.09.28.1';
 import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
@@ -16,7 +20,7 @@ import {
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
-} from './scoring.js?v=2026.09.25.1';
+} from './scoring.js?v=2026.09.28.1';
 
 // Every import above resolved, so the script is running; the fallback in
 // index.html that reports a page too half-updated to start stands down.
@@ -2007,6 +2011,53 @@ function rankedByDivision(rows, valueOf = (r) => r.score) {
   return out;
 }
 
+// ---------------------------------------------------------------------
+// Score reports
+// ---------------------------------------------------------------------
+
+/** The reports for whichever division and IDs are chosen in Setup. */
+function chosenReports(kind) {
+  const filter = { division: $('#reportDivision').value, only: $('#reportOnly').value };
+  const all = kind === 'student'
+    ? studentReports({
+      individuals: derived.individuals, teams: data.teams, key: derived.key, cfg,
+      combined: derived.combined, guts: derived.guts,
+    })
+    : teamReports({
+      combined: derived.combined, guts: derived.guts, individuals: derived.individuals,
+      gutsByTeam: derived.gutsByTeam, key: derived.key, cfg,
+    });
+  return pickReports(all, filter);
+}
+
+function openReports(kind) {
+  const reports = chosenReports(kind);
+  const title = kind === 'student' ? 'Student score reports' : 'Team score reports';
+  const html = renderReportsDocument(reports, {
+    contestName: data.state?.contest_name ?? cfg.CONTEST_NAME, title,
+  });
+  // A page of its own, so it prints without the portal around it. Not
+  // revoked: reloading that tab should still work.
+  const url = URL.createObjectURL(new Blob([html], { type: 'text/html' }));
+  const win = window.open(url, '_blank');
+  if (!win) {
+    toast('The browser blocked the new tab. Allow pop-ups for this site, then try again.', 'error');
+    return;
+  }
+  const skipped = kind === 'student'
+    ? derived.individuals.filter((p) => p.disqualified).length
+    : derived.combined.filter((t) => t.disqualified).length;
+  $('#reportState').textContent = `${reports.length} ${kind} report${reports.length === 1 ? '' : 's'} `
+    + `opened in a new tab${skipped ? ` · ${skipped} disqualified left out` : ''}.`;
+}
+
+function exportReportCsv(kind) {
+  const reports = chosenReports(kind);
+  const { header, rows } = kind === 'student'
+    ? studentReportTable(reports, cfg) : teamReportTable(reports, cfg);
+  downloadCsv(`cowconuts-2026-${kind}-reports.csv`, toCsv(header, rows));
+}
+
 function exportIndividualCsv() {
   const rows = rankedByDivision(derived.individuals).map(([r, rank]) => [
     rank, r.division ?? '', r.individualId, r.team, r.member, r.name,
@@ -2614,6 +2665,10 @@ function wire() {
   $('#exportGuts').addEventListener('click', exportGutsCsv);
   $('#exportCombined').addEventListener('click', exportCombinedCsv);
   $('#exportStats').addEventListener('click', exportStatsCsv);
+  $('#reportStudents').addEventListener('click', () => openReports('student'));
+  $('#reportTeams').addEventListener('click', () => openReports('team'));
+  $('#reportStudentsCsv').addEventListener('click', () => exportReportCsv('student'));
+  $('#reportTeamsCsv').addEventListener('click', () => exportReportCsv('team'));
 
   const confirmInput = $('#wipeConfirm');
   const wipeButton = $('#wipeAll');

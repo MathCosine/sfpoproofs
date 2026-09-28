@@ -93,6 +93,29 @@ unfreezing publishes everything that happened during the freeze.
 correct), per-division mean, median, standard deviation, quartiles and range for both
 rounds, and a score distribution.
 
+**Score reports** — Admin → Setup → Score reports. One page per student and one per team,
+opened in a new tab to print or **save as a PDF**; each fits one sheet of Letter or A4.
+
+- **A student's page**: score out of 20; place in the division (equal scores share a
+  place, before any tiebreak, "tied with 2 others" where it applies); the division's
+  median, average and top score; all twenty problems as ✓ correct, ✗ incorrect or – blank,
+  each with the share of the division who got it right; a chart of how the division
+  scored with their column highlighted; and a line on how their team did.
+- **A team's page**: combined score and place; the individual round as each member's
+  score and place, with the best three marked and the sum written out; the guts round set
+  by set, ✓ ✗ – for each problem and points earned; and every team in the division on
+  one scale with theirs highlighted.
+- **Never what anybody wrote.** A report shows right, wrong or blank, not the answer on
+  the sheet or the key — a test prints reports from a contest whose answers are
+  unmistakable numbers and checks none of them appears anywhere.
+- Disqualified contestants and teams are left out, as are teams that never took part.
+  Pick a division, or type IDs in **Only these** (`A011 A012`, or a team like `A01` for
+  all its members) to reprint one. In the print dialog choose **Save as PDF** and turn off
+  **Headers and footers**. The **spreadsheet** buttons give the same numbers one row
+  each, for a mail merge.
+- A page that would run long — a name that fills two lines — tightens its own spacing
+  and chart until it fits, so nothing is ever cut off at the foot of a sheet.
+
 **Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
 the guts point values, which are configuration rather than answers.
 
@@ -606,8 +629,8 @@ data. The bar reads **demo mode** in amber throughout.
 ## Tests
 
 ```bash
-npm test               # 110 unit tests: scoring, the clock, realtime patching, lock contention
-npm run test:e2e       # 256 browser checks, including twenty scorers at once
+npm test               # 115 unit tests: scoring, the clock, realtime patching, lock contention
+npm run test:e2e       # 270 browser checks, including twenty scorers at once
 npm run test:db        # 29 checks: twenty connections racing a real Postgres, and the password change
 npm run test:auth      # 42 checks: the real sign-in path and live updates, with the real supabase-js
 SCREENSHOTS=1 npm run test:e2e   # ...and refresh the images in docs/

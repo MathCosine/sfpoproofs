@@ -2053,6 +2053,101 @@ await shot.close();
   await tied.close();
 }
 
+// ---- score reports, a page each ---------------------------------------
+{
+  const rc = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  await rc.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+  const admin = await rc.newPage();
+  watch(admin, 'reports');
+  await admin.goto(BASE, { waitUntil: 'networkidle' });
+  await admin.fill('#graderName', 'Report Admin');
+  await admin.fill('#adminPassword', 'demo');
+  await admin.click('#gateEnter');
+  await admin.waitForSelector('#app:not(.hidden)');
+  await admin.click('.tab[data-tab="setup"]');
+  await seedDemoData(admin);
+  await admin.waitForTimeout(600);
+  const expected = await admin.evaluate(() => JSON.parse(localStorage.getItem('contest-demo-db'))
+    .contestants.filter((c) => !c.disqualified).length);
+
+  const open = async (button) => {
+    const [pop] = await Promise.all([rc.waitForEvent('page'), admin.click(button)]);
+    watch(pop, 'report-tab');
+    await pop.waitForLoadState('load');
+    return pop;
+  };
+  const pdfPages = async (p, format) => {
+    const pdf = await p.pdf({ format, printBackground: true });
+    return (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) || []).length;
+  };
+
+  // The longest names anybody could have, to prove no page runs over.
+  await admin.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    db.contestants[0].name = 'Maximilian Alexander Konstantinos Papadopoulos-Wolfeschlegelsteinhausen';
+    db.teams[0].name = 'The Extraordinarily Long-Named Collective of Integer Enthusiasts and Friends';
+    localStorage.setItem('contest-demo-db', JSON.stringify(db));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+  });
+  await admin.waitForTimeout(500);
+  const overflowing = (p) => p.evaluate(() => [...document.querySelectorAll('section.page')]
+    .filter((pg) => pg.scrollHeight > pg.clientHeight + 1).length);
+
+  const students = await open('#reportStudents');
+  const studentPages = await students.locator('section.page').count();
+  check('nothing on any student page is cut off, even under the longest name',
+    (await overflowing(students)) === 0, `${await overflowing(students)} page(s) run over`);
+  check('student reports: one page for every contestant entered', studentPages === expected,
+    `${studentPages} pages for ${expected} contestants`);
+  check('each fits one sheet of Letter', (await pdfPages(students, 'Letter')) === studentPages);
+  check('and one sheet of A4', (await pdfPages(students, 'A4')) === studentPages);
+  const first = await students.locator('section.page').first().innerText();
+  check('a student page shows the score, the place and the problem grid',
+    /Score/i.test(first) && /Place in Division/i.test(first) && /Problem by problem/i.test(first)
+      && (await students.locator('section.page').first().locator('.prob').count()) === 20,
+    first.replace(/\s+/g, ' ').slice(0, 120));
+  check('and the division chart with this student marked',
+    (await students.locator('section.page').first().locator('.bar--mine').count()) === 1);
+  await students.emulateMedia({ media: 'print' });
+  check('the print toolbar is not printed', await students.locator('.bar-tools').isHidden());
+  await students.emulateMedia({ media: 'screen' });
+  await students.close();
+
+  const teams = await open('#reportTeams');
+  const teamPages = await teams.locator('section.page').count();
+  check('nothing on any team page is cut off either',
+    (await overflowing(teams)) === 0, `${await overflowing(teams)} page(s) run over`);
+  const expectedTeams = await admin.evaluate(() => JSON.parse(localStorage.getItem('contest-demo-db'))
+    .teams.filter((t) => !t.disqualified).length);
+  check('team reports: one page for every team that took part', teamPages === expectedTeams,
+    `${teamPages} pages for ${expectedTeams} teams`);
+  check('each fits one sheet of Letter', (await pdfPages(teams, 'Letter')) === teamPages);
+  check('and one sheet of A4', (await pdfPages(teams, 'A4')) === teamPages);
+  check('a team page lists its members and seven guts sets',
+    (await teams.locator('section.page').first().locator('.tbl:not(.tbl--guts) tbody tr').count()) >= 3
+    && (await teams.locator('section.page').first().locator('.tbl--guts tbody tr').count()) === 7);
+  await teams.close();
+
+  // One student's report reprinted on its own.
+  await admin.fill('#reportOnly', 'A011');
+  const one = await open('#reportStudents');
+  check('a single report can be printed on its own',
+    (await one.locator('section.page').count()) === 1
+    && (await one.locator('section.page .mono').first().textContent()) === 'A011');
+  await one.close();
+  await admin.fill('#reportOnly', '');
+
+  // The portal's own leaderboard and the report agree on a place.
+  const onBoard = await admin.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    return db.contestants.length;
+  });
+  check('the spreadsheet version downloads with a row per student',
+    (await readDownload('#reportStudentsCsv', admin)).text.trim().split('\n').length === expected + 1,
+    `${onBoard} contestants`);
+  await rc.close();
+}
+
 // ---- a half-typed sheet is not lost to a stray reload ------------------
 {
   const own = await browser.newContext({ viewport: { width: 1300, height: 900 } });

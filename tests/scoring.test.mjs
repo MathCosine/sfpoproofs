@@ -1628,7 +1628,7 @@ test('every script and import carries the current version', async () => {
   const { APP_VERSION } = await import('../assets/config.js');
   const root = new URL('../', import.meta.url);
   const files = ['index.html', 'guts.html', 'assets/app.js', 'assets/store.js',
-    'assets/scoring.js', 'assets/csv.js', 'assets/config.js'];
+    'assets/scoring.js', 'assets/csv.js', 'assets/config.js', 'assets/reports.js'];
   for (const file of files) {
     const text = await readFile(new URL(file, root), 'utf8');
     for (const [, version] of text.matchAll(/\?v=([\w.]+)/g)) {
@@ -1654,4 +1654,149 @@ test('a guts set saved with a blank is entered, and the blank scores nothing', (
   assert.equal(out.perSet[0].answered, 3, 'the blank is still not an answer');
   assert.equal(out.perSet[0].score, 3);
   assert.equal(out.perSet[1].complete, false, 'a set with nothing saved is not');
+});
+
+// ---------------------------------------------------------------------
+// Score reports
+// ---------------------------------------------------------------------
+
+import {
+  studentReports, teamReports, pickReports, renderReportsDocument, studentReportTable,
+  teamReportTable, tiedPhrase, gutsBreakdown,
+} from '../assets/reports.js';
+
+/**
+ * A small contest with answers nobody could mistake for anything else on
+ * the page: the individual key is 4000+n, the guts key 7000+n, and a
+ * wrong answer is 9000+n. If any of those shows up in a report, a report
+ * is leaking what was written.
+ */
+function reportFixture() {
+  const rows = [];
+  for (let p = 1; p <= 20; p += 1) {
+    for (const d of ['A', 'B']) rows.push({ round: 'individual', division: d, problem: p, answer: 4000 + p, points: 1 });
+  }
+  for (let p = 1; p <= 28; p += 1) {
+    for (const d of ['A', 'B']) rows.push({ round: 'guts', division: d, problem: p, answer: 7000 + p, points: Math.ceil(p / 4) });
+  }
+  const key = indexKey(rows);
+  const sheet = (right) => Array.from({ length: 20 }, (_, i) => (i < right ? 4001 + i : (i < 18 ? 9001 + i : null)));
+  const contestants = [
+    { individual_id: 'A011', team: 'A01', member: '1', division: 'A', name: 'Ada <b>Lovelace</b>', answers: sheet(15) },
+    { individual_id: 'A012', team: 'A01', member: '2', division: 'A', name: 'Grace Hopper', answers: sheet(15) },
+    { individual_id: 'A013', team: 'A01', member: '3', division: 'A', name: 'Emmy Noether', answers: sheet(12) },
+    { individual_id: 'A014', team: 'A01', member: '4', division: 'A', name: 'Out Early', answers: sheet(19), disqualified: true },
+    { individual_id: 'A021', team: 'A02', member: '1', division: 'A', name: 'Alan Turing', answers: sheet(17) },
+    { individual_id: 'B011', team: 'B01', member: '1', division: 'B', name: 'Srinivasa', answers: sheet(3) },
+  ];
+  const teams = [
+    { team: 'A01', name: 'Cowbell', division: 'A' },
+    { team: 'A02', name: 'Moo Point', division: 'A' },
+    { team: 'A03', name: 'No Show', division: 'A' },
+    { team: 'B01', name: 'Udder Chaos', division: 'B' },
+  ];
+  const gutsRows = [];
+  for (let p = 1; p <= 8; p += 1) gutsRows.push({ team: 'A01', problem: p, answer: p % 3 === 0 ? 9500 + p : 7000 + p });
+  for (let p = 1; p <= 4; p += 1) gutsRows.push({ team: 'A02', problem: p, answer: p === 4 ? null : 7000 + p });
+  const gutsByTeam = indexGutsAnswers(gutsRows);
+  const individuals = individualStandings(contestants, key, cfg);
+  const guts = gutsStandings(teams, gutsByTeam, key, cfg);
+  const combined = combinedStandings(individuals, guts, key, cfg, teams);
+  return { key, contestants, teams, gutsByTeam, individuals, guts, combined };
+}
+
+test('a student report places ties together and leaves the disqualified out', () => {
+  const f = reportFixture();
+  const reports = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg,
+    combined: f.combined, guts: f.guts });
+  assert.deepEqual(reports.map((r) => r.id), ['A011', 'A012', 'A013', 'A021', 'B011'],
+    'A014 was disqualified and gets no report');
+  const [ada, grace, emmy, alan] = reports;
+  assert.equal(alan.place, 1);
+  assert.equal(ada.place, 2, 'two on 15 are both second');
+  assert.equal(grace.place, 2);
+  assert.equal(ada.tiedWith, 1);
+  assert.equal(emmy.place, 4, 'and the next score is fourth, not third');
+  assert.equal(ada.of, 4, 'placed among the four Division A papers still ranked');
+  assert.equal(ada.correct, 15);
+  assert.equal(ada.wrong, 3);
+  assert.equal(ada.blank, 2);
+  assert.equal(ada.teamName, 'Cowbell');
+  assert.equal(ada.teamResult.place, 1, 'and the page says how the team did');
+  assert.equal(ada.distribution.find((d) => d.score === 15).count, 2);
+  assert.equal(ada.solveRates[0], 1, 'everyone ranked got problem 1');
+  assert.equal(tiedPhrase(1), 'tied with 1 other');
+  assert.equal(tiedPhrase(3), 'tied with 3 others');
+});
+
+test('a team report counts its best three and shows guts right or wrong, set by set', () => {
+  const f = reportFixture();
+  const reports = teamReports({ combined: f.combined, guts: f.guts, individuals: f.individuals,
+    gutsByTeam: f.gutsByTeam, key: f.key, cfg });
+  assert.deepEqual(reports.map((r) => r.team), ['A01', 'A02', 'B01'],
+    'a team with nothing entered gets no report');
+  const cow = reports[0];
+  assert.equal(cow.individual, 42, '15 + 15 + 12, the disqualified 19 not counted');
+  assert.deepEqual(cow.counting, [15, 15, 12]);
+  assert.equal(cow.members.find((m) => m.id === 'A014').ranked, false);
+  assert.deepEqual(cow.sets[0].marks, ['correct', 'correct', 'wrong', 'correct']);
+  assert.equal(cow.sets[0].earned, 3);
+  assert.equal(cow.sets[1].earned, 2 * 3, 'set 2 is worth 2 a problem');
+  assert.deepEqual(cow.sets[2].marks, ['blank', 'blank', 'blank', 'blank']);
+  assert.equal(cow.guts, 9);
+  assert.equal(cow.places.combined.place, 1);
+  assert.equal(cow.places.combined.of, 2);
+  const moo = reports[1];
+  assert.deepEqual(moo.sets[0].marks, ['correct', 'correct', 'correct', 'blank']);
+  assert.deepEqual(gutsBreakdown(new Map(), f.key, cfg, 'A')[0].marks, ['blank', 'blank', 'blank', 'blank']);
+});
+
+test('a printed report never shows an answer, and prints one page per report', () => {
+  const f = reportFixture();
+  const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg,
+    combined: f.combined, guts: f.guts });
+  const teamsR = teamReports({ combined: f.combined, guts: f.guts, individuals: f.individuals,
+    gutsByTeam: f.gutsByTeam, key: f.key, cfg });
+  for (const [reports, title] of [[students, 'Students'], [teamsR, 'Teams']]) {
+    const html = renderReportsDocument(reports, { contestName: 'Cowconuts 2026', title });
+    assert.equal((html.match(/<section class="page">/g) ?? []).length, reports.length);
+    assert.doesNotMatch(html, /\b(40\d\d|70\d\d|90\d\d|95\d\d)\b/,
+      'no key answer and no written answer appears anywhere');
+    assert.doesNotMatch(html, /<b>Lovelace<\/b>/, 'a name is text, never markup');
+  }
+  const html = renderReportsDocument(students, { contestName: 'Cowconuts 2026' });
+  assert.match(html, /Ada &lt;b&gt;Lovelace&lt;\/b&gt;/);
+  assert.match(html, /2nd/);
+  assert.match(html, /tied with 1 other/);
+});
+
+test('reports can be picked by division, by ID, or by team', () => {
+  const f = reportFixture();
+  const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg });
+  const teamsR = teamReports({ combined: f.combined, guts: f.guts, individuals: f.individuals,
+    gutsByTeam: f.gutsByTeam, key: f.key, cfg });
+  assert.deepEqual(pickReports(students, { division: 'B' }).map((r) => r.id), ['B011']);
+  assert.deepEqual(pickReports(students, { only: 'a012, b011' }).map((r) => r.id), ['A012', 'B011']);
+  assert.deepEqual(pickReports(students, { only: 'A01' }).map((r) => r.id), ['A011', 'A012', 'A013'],
+    'a team key picks out its members');
+  assert.deepEqual(pickReports(teamsR, { only: 'A021' }).map((r) => r.team), ['A02'],
+    'a member picks out their team');
+});
+
+test('the spreadsheet versions carry the same numbers and no answers', () => {
+  const f = reportFixture();
+  const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg });
+  const { header, rows } = studentReportTable(students, cfg);
+  const ada = rows[0];
+  assert.equal(ada[header.indexOf('place')], 2);
+  assert.equal(ada[header.indexOf('tied_with')], 1);
+  assert.equal(ada[header.indexOf('p1')], 'C');
+  assert.equal(ada[header.indexOf('p16')], 'X');
+  assert.equal(ada[header.indexOf('p20')], 'B');
+  assert.doesNotMatch(JSON.stringify(rows), /\b(40\d\d|90\d\d)\b/);
+  const teamsR = teamReports({ combined: f.combined, guts: f.guts, individuals: f.individuals,
+    gutsByTeam: f.gutsByTeam, key: f.key, cfg });
+  const t = teamReportTable(teamsR, cfg);
+  assert.equal(t.rows[0][t.header.indexOf('individual_best_three')], 42);
+  assert.equal(t.rows[0][t.header.indexOf('guts_set1')], 3);
 });

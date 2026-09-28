@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.25.1">
+<body data-app-version="2026.09.28.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -535,6 +535,34 @@
           <button class="btn" id="exportStats">Statistics</button>
         </div>
 
+        <div class="panel__head" style="margin-top:28px"><h2>Score reports</h2></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          One page per student and one per team, to print or save as a PDF: scores, places
+          (equal scores share a place, before any tiebreak), which problems were right, wrong
+          or blank — never the answers written — and where the score sits in the division.
+          Disqualified contestants and teams are left out. The spreadsheet versions carry the
+          same numbers, one row each, for a mail merge.
+        </p>
+        <div class="grid-3">
+          <div class="field">
+            <label class="field__label" for="reportDivision">Division</label>
+            <select class="select" id="reportDivision">
+              <option value="">Both</option><option value="A">A</option><option value="B">B</option>
+            </select>
+          </div>
+          <div class="field" style="grid-column:span 2">
+            <label class="field__label" for="reportOnly">Only these <span class="muted">optional</span></label>
+            <input class="input mono" id="reportOnly" placeholder="A011 A012, or a team like A01" autocomplete="off">
+          </div>
+        </div>
+        <div class="chip-row">
+          <button class="btn btn--primary" id="reportStudents">Student reports</button>
+          <button class="btn btn--primary" id="reportTeams">Team reports</button>
+          <button class="btn btn--ghost" id="reportStudentsCsv">Student reports (spreadsheet)</button>
+          <button class="btn btn--ghost" id="reportTeamsCsv">Team reports (spreadsheet)</button>
+        </div>
+        <p class="field__hint" id="reportState" style="margin-top:8px"></p>
+
         <div class="panel__head" style="margin-top:28px"><h2>Clear test data</h2></div>
         <p class="field__hint" style="margin-bottom:12px">
           Deletes every answer sheet, guts answer and lock, and forgets who signed in. The
@@ -591,6 +619,6 @@
     window.addEventListener('load', function () { setTimeout(halfUpdated, 4000); });
   })();
 </script>
-<script type="module" src="assets/app.js?v=2026.09.25.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.28.1"></script>
 </body>
 </html>
