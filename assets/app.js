@@ -679,6 +679,13 @@ async function claimCurrent() {
     lastClaimAt = Date.now();
   } catch { /* a lost claim must never block entry */ } finally {
     claiming = false;
+    // The sheet on screen may have changed while that request was out --
+    // a quick scorer moving on, or a crowd queued behind the same lock.
+    // A claim asked for meanwhile was skipped, so take the one on screen
+    // now rather than at the next heartbeat, up to twenty seconds away:
+    // until then nobody is told somebody else has it.
+    const now = wantedClaim();
+    if (now && (now.scope !== want.scope || now.ref !== want.ref)) setTimeout(claimCurrent, 0);
   }
 }
 

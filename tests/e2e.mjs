@@ -913,11 +913,20 @@ const banners = await Promise.all(crew.map((t) => t.textContent('#individualBann
 check('twenty different sheets means nobody is blocked',
   banners.every((b) => !b.includes('entering this sheet right now')));
 
-// Now all twenty pile onto the SAME sheet.
+// Now all twenty pile onto the SAME sheet. In demo mode their claims
+// queue behind one lock on the shared storage, so wait for the outcome
+// rather than a guessed number of seconds -- two was not enough on a
+// slow CI runner. The bound is well inside the twenty-second heartbeat,
+// so a tab that only caught up on its next heartbeat still fails this.
 await Promise.all(crew.map((tab) => tab.fill('#individualId', 'A771')));
-await page.waitForTimeout(2000);
-const contested = await Promise.all(crew.map((t) => t.textContent('#individualBanner')));
-const warned = contested.filter((b) => b.includes('entering this sheet right now')).length;
+const warnedOff = async () => (await Promise.all(crew.map((t) => t.textContent('#individualBanner'))))
+  .filter((b) => b.includes('entering this sheet right now')).length;
+let warned = 0;
+for (const until = Date.now() + 12000; Date.now() < until;) {
+  warned = await warnedOff();
+  if (warned >= CREW - 1) break;
+  await page.waitForTimeout(250);
+}
 check('piling onto one sheet warns all but the holder',
   warned >= CREW - 2, `${warned} of ${CREW} warned off`);
 
