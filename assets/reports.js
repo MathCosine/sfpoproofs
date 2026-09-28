@@ -391,10 +391,11 @@ const tile = (label, value, of, sub, lead = false) => `
     <div class="tile__sub">${sub}</div>
   </div>`;
 
+const SEP = '<span class="sep">·</span>';
 const placeValue = (p) => (p?.place ? esc(ordinal(p.place)) : '—');
 const placeSub = (p, division = null) => (p?.place
   ? `of ${p.of}${division ? ` in Division ${esc(division)}` : ''}`
-    + `${p.tiedWith ? ` · ${tiedPhrase(p.tiedWith)}` : ''}`
+    + `${p.tiedWith ? ` ${SEP} ${tiedPhrase(p.tiedWith)}` : ''}`
   : 'not ranked');
 
 function studentPage(r, contestName) {
@@ -404,7 +405,7 @@ function studentPage(r, contestName) {
         <span class="prob__mark" aria-label="${MARK_WORD[m]}">${MARK_GLYPH[m]}</span>
         <span class="prob__rate">${Math.round((r.solveRates[i] ?? 0) * 100)}%</span>
       </div>`).join('');
-  const team = `Team ${esc(r.team)}${r.teamName ? ` · ${esc(r.teamName)}` : ''}`;
+  const team = `Team ${esc(r.team)}${r.teamName ? ` ${SEP} ${esc(r.teamName)}` : ''}`;
   const legend = ['correct', 'wrong', 'blank', ...(r.marks.includes('unkeyed') ? ['unkeyed'] : [])]
     .map((m) => `<span class="key key--${m}"><i>${MARK_GLYPH[m]}</i>${MARK_WORD[m][0].toUpperCase()}${MARK_WORD[m].slice(1)}</span>`)
     .join('');
@@ -420,10 +421,10 @@ function studentPage(r, contestName) {
     </div>
     <div class="tiles">
       ${tile('Score', esc(fmt(r.score)), `/ ${esc(fmt(r.max))}`,
-    `${r.correct} correct · ${r.wrong} incorrect · ${r.blank} blank`, true)}
+    `${r.correct} correct ${SEP} ${r.wrong} incorrect ${SEP} ${r.blank} blank`, true)}
       ${tile(`Place in Division ${r.division}`, placeValue(r), '', placeSub(r))}
       ${tile(`Division ${r.division} median`, esc(fmt(r.stats.median)), '',
-      `average ${esc(fmt(Math.round(r.stats.mean * 10) / 10))} · top score ${esc(fmt(r.stats.max))}`)}
+      `average ${esc(fmt(Math.round(r.stats.mean * 10) / 10))} ${SEP} top score ${esc(fmt(r.stats.max))}`)}
     </div>
     <section class="block">
       <h2>Problem by problem</h2>
@@ -440,7 +441,7 @@ function studentPage(r, contestName) {
       <span class="teamline__label">Your team</span>
       <span class="teamline__name">${esc(r.teamName || `Team ${r.team}`)} <span class="mono muted">${esc(r.team)}</span></span>
       <span class="teamline__score">Combined score <b>${esc(fmt(r.teamResult.total))}</b><span class="muted"> / ${esc(fmt(r.teamResult.max))}</span></span>
-      <span class="teamline__place"><b>${esc(ordinal(r.teamResult.place))}</b> of ${r.teamResult.of} teams${r.teamResult.tiedWith ? ` · ${tiedPhrase(r.teamResult.tiedWith)}` : ''}</span>
+      <span class="teamline__place"><b>${esc(ordinal(r.teamResult.place))}</b> of ${r.teamResult.of} teams${r.teamResult.tiedWith ? ` ${SEP} ${tiedPhrase(r.teamResult.tiedWith)}` : ''}</span>
     </section>` : ''}
     <footer class="foot">
       <span>Places are before any tiebreak: equal scores share a place.</span>
@@ -480,9 +481,9 @@ function teamPage(r, contestName) {
       ${tile('Combined score', esc(fmt(r.total)), `/ ${esc(fmt(r.max))}`,
     `${placeValue(r.places.combined)} ${placeSub(r.places.combined, r.division)}`, true)}
       ${tile('Individual round', esc(fmt(r.individual * r.multiplier)), '',
-      `best three ${esc(fmt(r.individual))} × ${esc(fmt(r.multiplier))} · ${placeValue(r.places.individual)} of ${r.places.individual.of}`)}
+      `best three ${esc(fmt(r.individual))} × ${esc(fmt(r.multiplier))} ${SEP} ${placeValue(r.places.individual)} of ${r.places.individual.of}`)}
       ${tile('Guts round', esc(fmt(r.guts)), `/ ${esc(fmt(r.gutsMax))}`,
-      `${placeValue(r.places.guts)} of ${r.places.guts.of}${r.places.guts.tiedWith ? ` · ${tiedPhrase(r.places.guts.tiedWith)}` : ''}`)}
+      `${placeValue(r.places.guts)} of ${r.places.guts.of}${r.places.guts.tiedWith ? ` ${SEP} ${tiedPhrase(r.places.guts.tiedWith)}` : ''}`)}
     </div>
     <section class="block">
       <h2>Individual round</h2>
@@ -524,10 +525,11 @@ const STYLE = `
   color-scheme: light;
 }
 *{box-sizing:border-box}
-html,body{margin:0;background:var(--desk);color:var(--ink);font-family:var(--sans);
+html,body{margin:0;background:var(--desk);color:var(--ink);font-family:var(--sans);word-spacing:.05em;
   -webkit-print-color-adjust:exact;print-color-adjust:exact;-webkit-font-smoothing:antialiased}
 .mono{font-family:var(--mono);letter-spacing:-.01em}
 .muted{color:var(--ink-3)}
+.sep{display:inline-block;margin:0 .28em;color:var(--ink-3)}
 
 /* The page box fits both Letter and A4 inside half-inch margins. */
 @page{margin:0.45in}

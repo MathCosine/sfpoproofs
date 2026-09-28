@@ -95,6 +95,8 @@ rounds, and a score distribution.
 
 **Score reports** — Admin → Setup → Score reports. One page per student and one per team,
 opened in a new tab to print or **save as a PDF**; each fits one sheet of Letter or A4.
+[`docs/sample-score-reports.pdf`](docs/sample-score-reports.pdf) shows three pages, from
+demo data.
 
 - **A student's page**: score out of 20; place in the division (equal scores share a
   place, before any tiebreak, "tied with 2 others" where it applies); the division's
