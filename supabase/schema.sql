@@ -167,6 +167,9 @@ alter table contestants add column if not exists disqualified boolean not null d
 alter table contestants add column if not exists dq_reason text not null default '';
 alter table contestants add column if not exists dq_by     text not null default '';
 alter table contestants add column if not exists dq_at     timestamptz;
+-- The tiebreak: the place a contestant was given on the final list, used
+-- only to order equal scores (lowest first). Null means not on the list.
+alter table contestants add column if not exists tiebreak_rank int;
 
 -- ---------------------------------------------------------------------
 -- The participant roster.

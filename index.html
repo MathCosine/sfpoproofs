@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.28.1">
+<body data-app-version="2026.09.28.2">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -535,10 +535,41 @@
           <button class="btn" id="exportStats">Statistics</button>
         </div>
 
+        <div class="panel__head" style="margin-top:28px"><h2>Tiebreaks</h2>
+          <span class="spacer"></span><span class="tag" id="tiebreakState">none</span></div>
+        <p class="field__hint" style="margin-bottom:12px">
+          Pick the division, then paste your final list: a place and a name on each line
+          (<span class="mono">1 Sam Taylor</span>, <span class="mono">2nd, Jane Doe</span>, or with
+          the ID, <span class="mono">3 A051</span>). A list already in order needs no numbers, and
+          two lines on the same place stay tied. Scores still come first: the list only orders
+          people on the same score, and anyone on that score who is not on the list goes below
+          them. The leaderboard, awards, exports and score reports all follow it. Pasting again
+          replaces that division's list.
+        </p>
+        <div class="grid-3">
+          <div class="field">
+            <label class="field__label" for="tiebreakDivision">Division</label>
+            <select class="select" id="tiebreakDivision">
+              <option value="A">A</option><option value="B">B</option>
+            </select>
+          </div>
+          <div class="field" style="grid-column:span 2">
+            <label class="field__label" for="tiebreakPaste">Final list</label>
+            <textarea class="input" id="tiebreakPaste" rows="6" spellcheck="false"
+                      placeholder="1 Sam Taylor&#10;2 Jane Doe&#10;3 A051"></textarea>
+          </div>
+        </div>
+        <div class="chip-row" style="margin-top:10px">
+          <button class="btn btn--primary" id="tiebreakApply">Apply tiebreak</button>
+          <button class="btn btn--ghost" id="tiebreakClear">Remove Division A tiebreak</button>
+        </div>
+        <div id="tiebreakProblems"></div>
+        <div id="tiebreakList"></div>
+
         <div class="panel__head" style="margin-top:28px"><h2>Score reports</h2></div>
         <p class="field__hint" style="margin-bottom:12px">
           One page per student and one per team, to print or save as a PDF: scores, places
-          (equal scores share a place, before any tiebreak), which problems were right, wrong
+          (with any tiebreaks above applied; otherwise equal scores share a place), which problems were right, wrong
           or blank — never the answers written — and where the score sits in the division.
           Disqualified contestants and teams are left out. The spreadsheet versions carry the
           same numbers, one row each, for a mail merge.
@@ -619,6 +650,6 @@
     window.addEventListener('load', function () { setTimeout(halfUpdated, 4000); });
   })();
 </script>
-<script type="module" src="assets/app.js?v=2026.09.28.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.28.2"></script>
 </body>
 </html>

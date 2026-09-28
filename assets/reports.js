@@ -2,8 +2,9 @@
 //  Score reports: a page per student and a page per team, to print or
 //  save as a PDF.
 //
-//  What a report shows is decided here, once: scores, places (equal
-//  scores share a place, before any tiebreak), which problems were right,
+//  What a report shows is decided here, once: scores, places (the
+//  individual tiebreak splits equal scores once it is entered; otherwise,
+//  and for teams, equal scores share a place), which problems were right,
 //  wrong or blank, and where the score sits among the division. What it
 //  never shows is what anybody wrote -- a report is handed to a student,
 //  and the answers on the sheet are not theirs to take home from it.
@@ -15,8 +16,8 @@
 
 import {
   competitionRanks, ordinal, summarise, keyMaxPoints, gutsKey, problemsInSet,
-  divisionOfTeam,
-} from './scoring.js?v=2026.09.28.1';
+  divisionOfTeam, compareIndividuals, individualRankKey, hasTiebreak,
+} from './scoring.js?v=2026.09.28.2';
 
 const byId = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 
@@ -30,18 +31,27 @@ export function tiedPhrase(others) {
  * Places within one division, the way the leaderboard shows them: the
  * disqualified are left out, the rest sorted best first and placed with
  * competition ranking, so two firsts are both first and nobody is second.
+ * `compare` and `rankKey` default to the plain value; students pass the
+ * tiebreak-aware pair, so a tiebreak splits them here as it does there.
  */
-function placed(rows, valueOf, idOf) {
-  const sorted = [...rows].sort((a, b) => valueOf(b) - valueOf(a) || byId(idOf(a), idOf(b)));
-  const places = competitionRanks(sorted, valueOf);
+function placed(rows, valueOf, idOf, {
+  compare = (a, b) => valueOf(b) - valueOf(a),
+  rankKey = valueOf,
+} = {}) {
+  const sorted = [...rows].sort((a, b) => compare(a, b) || byId(idOf(a), idOf(b)));
+  const places = competitionRanks(sorted, rankKey);
   const counts = new Map();
-  for (const r of sorted) counts.set(valueOf(r), (counts.get(valueOf(r)) ?? 0) + 1);
+  for (const r of sorted) counts.set(rankKey(r), (counts.get(rankKey(r)) ?? 0) + 1);
   const out = new Map();
   sorted.forEach((r, i) => out.set(idOf(r), {
-    place: places[i], of: sorted.length, tiedWith: counts.get(valueOf(r)) - 1,
+    place: places[i], of: sorted.length, tiedWith: counts.get(rankKey(r)) - 1,
   }));
   return out;
 }
+
+/** Student places: score, then the tiebreak list when there is one. */
+const placeStudents = (cohort) => placed(cohort, (p) => p.score, (p) => p.individualId,
+  { compare: compareIndividuals, rankKey: individualRankKey });
 
 // ---------------------------------------------------------------------
 // Students
@@ -61,7 +71,10 @@ export function studentReports({ individuals, teams = [], key, cfg, combined = n
     const cohort = individuals.filter((p) => p.division === division && !p.disqualified);
     if (!cohort.length) continue;
     const max = keyMaxPoints(key, 'individual', cfg.INDIVIDUAL_PROBLEMS, division);
-    const places = placed(cohort, (p) => p.score, (p) => p.individualId);
+    const places = placeStudents(cohort);
+    const tiebreaks = cohort.some(hasTiebreak);
+    const onScore = new Map();
+    for (const p of cohort) onScore.set(p.score, (onScore.get(p.score) ?? 0) + 1);
     const stats = summarise(cohort.map((p) => p.score));
     const top = Math.max(1, Math.round(max));
     const distribution = Array.from({ length: top + 1 }, (_, score) => ({ score, count: 0 }));
@@ -88,6 +101,11 @@ export function studentReports({ individuals, teams = [], key, cfg, combined = n
         blank: marks.filter((m) => m === 'blank').length,
         marks: marks.map((m) => (m === 'correct' || m === 'wrong' ? m : m === 'unkeyed' ? 'unkeyed' : 'blank')),
         ...places.get(p.individualId),
+        // Said on the page only when the tiebreak is what placed them:
+        // on the list, and somebody else had the same score.
+        tiebreakPlace: p.tiebreakRank ?? null,
+        placedByTiebreak: hasTiebreak(p) && onScore.get(p.score) > 1,
+        tiebreaks,
         stats,
         distribution,
         solveRates,
@@ -159,11 +177,11 @@ function teamSummaries(combined, guts, cfg) {
  */
 export function teamReports({ combined, guts, individuals, gutsByTeam, key, cfg }) {
   const studentPlaces = new Map();
+  const tiebreakDivisions = new Set();
   for (const division of cfg.DIVISIONS) {
     const cohort = individuals.filter((p) => p.division === division && !p.disqualified);
-    for (const [id, p] of placed(cohort, (r) => r.score, (r) => r.individualId)) {
-      studentPlaces.set(id, p);
-    }
+    for (const [id, p] of placeStudents(cohort)) studentPlaces.set(id, p);
+    if (cohort.some(hasTiebreak)) tiebreakDivisions.add(division);
   }
   const out = [];
   for (const { division, cohort, byCombined } of teamCohorts(combined, guts, cfg)) {
@@ -209,6 +227,7 @@ export function teamReports({ combined, guts, individuals, gutsByTeam, key, cfg 
         },
         totals,
         stats,
+        tiebreaks: tiebreakDivisions.has(division),
       });
     }
   }
@@ -238,11 +257,12 @@ const MARK_LETTER = { correct: 'C', wrong: 'X', blank: 'B', unkeyed: 'U' };
 
 export function studentReportTable(reports, cfg) {
   const header = ['individual_id', 'name', 'division', 'team', 'team_name', 'score', 'out_of',
-    'place', 'of', 'tied_with', 'correct', 'incorrect', 'blank',
+    'place', 'of', 'tied_with', 'tiebreak_place', 'correct', 'incorrect', 'blank',
     'division_median', 'division_mean', 'division_top',
     ...Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => `p${i + 1}`)];
   const rows = reports.map((r) => [
     r.id, r.name, r.division, r.team, r.teamName, r.score, r.max, r.place, r.of, r.tiedWith,
+    r.tiebreakPlace ?? '',
     r.correct, r.wrong, r.blank, round1(r.stats.median), round1(r.stats.mean), r.stats.max,
     ...r.marks.map((m) => MARK_LETTER[m] ?? ''),
   ]);
@@ -422,7 +442,8 @@ function studentPage(r, contestName) {
     <div class="tiles">
       ${tile('Score', esc(fmt(r.score)), `/ ${esc(fmt(r.max))}`,
     `${r.correct} correct ${SEP} ${r.wrong} incorrect ${SEP} ${r.blank} blank`, true)}
-      ${tile(`Place in Division ${r.division}`, placeValue(r), '', placeSub(r))}
+      ${tile(`Place in Division ${r.division}`, placeValue(r), '', placeSub(r)
+        + (r.placedByTiebreak ? ` ${SEP} placed by the tiebreak` : ''))}
       ${tile(`Division ${r.division} median`, esc(fmt(r.stats.median)), '',
       `average ${esc(fmt(Math.round(r.stats.mean * 10) / 10))} ${SEP} top score ${esc(fmt(r.stats.max))}`)}
     </div>
@@ -444,7 +465,9 @@ function studentPage(r, contestName) {
       <span class="teamline__place"><b>${esc(ordinal(r.teamResult.place))}</b> of ${r.teamResult.of} teams${r.teamResult.tiedWith ? ` ${SEP} ${tiedPhrase(r.teamResult.tiedWith)}` : ''}</span>
     </section>` : ''}
     <footer class="foot">
-      <span>Places are before any tiebreak: equal scores share a place.</span>
+      <span>${r.tiebreaks
+    ? 'Equal scores are placed by the tiebreak round.'
+    : 'Places are before any tiebreak: equal scores share a place.'}</span>
       <span class="mono">${esc(r.id)}</span>
     </footer>
   </section>`;
@@ -505,7 +528,9 @@ function teamPage(r, contestName) {
       <p class="caption">Each dot is a team's combined score, out of ${esc(fmt(r.max))}. ${r.totals.length} teams; median ${esc(fmt(r.stats.median))}. Yours is highlighted.</p>
     </section>
     <footer class="foot">
-      <span>Places are before any tiebreak: equal scores share a place.</span>
+      <span>${r.tiebreaks
+    ? 'Equal team scores share a place. Members\u2019 places include the individual tiebreak.'
+    : 'Places are before any tiebreak: equal scores share a place.'}</span>
       <span class="mono">Team ${esc(r.team)}</span>
     </footer>
   </section>`;

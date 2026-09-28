@@ -14,6 +14,8 @@ import {
   individualMaxPoints, gutsMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster, parseTeamList, parseTeamKey,
+  parseTiebreakList, matchTiebreakList, tiebreakDisagreements, nameKey,
+  compareIndividuals, individualRankKey, hasTiebreak,
 } from '../assets/scoring.js';
 import { applyPatch } from '../assets/store.js';
 import { parseCsv, toCsv } from '../assets/csv.js';
@@ -1799,4 +1801,142 @@ test('the spreadsheet versions carry the same numbers and no answers', () => {
   const t = teamReportTable(teamsR, cfg);
   assert.equal(t.rows[0][t.header.indexOf('individual_best_three')], 42);
   assert.equal(t.rows[0][t.header.indexOf('guts_set1')], 3);
+});
+
+// ---------------------------------------------------------------------
+// Tiebreaks
+// ---------------------------------------------------------------------
+
+test('the final list reads however it is typed or pasted', () => {
+  const { rows, problems } = parseTiebreakList([
+    'Place\tName',
+    '1\tTest Person',
+    '2nd, Second Person',
+    '3. A051',
+    '3 A052 Tied Third',
+    '#5 José  Núñez',
+    '',
+    '7)',
+  ].join('\n'));
+  assert.deepEqual(rows.map((r) => [r.place, r.individualId, r.name]), [
+    [1, null, 'Test Person'],
+    [2, null, 'Second Person'],
+    [3, 'A051', ''],
+    [3, 'A052', 'Tied Third'],
+    [5, null, 'José Núñez'],
+  ]);
+  assert.equal(problems.length, 1, 'the header is skipped, the empty line ignored, the place with no name reported');
+
+  // A spreadsheet already in order: no numbers, so the order is the place.
+  // Made-up rows in the layout of the real tiebreak export.
+  const pasted = parseTiebreakList([
+    'ID\tScore\tName\tEmail\tSolved\tTime',
+    'A061\t11\tFirst Made-Up\tfirst@example.com\t2\t14:56 \t1\t1\t0',
+    'A062\t11\tSecond Made-Up\tsecond@example.com\t2\t15:10 \t1\t0\t1',
+  ].join('\n'));
+  assert.deepEqual(pasted.rows.map((r) => [r.place, r.individualId, r.name]),
+    [[1, 'A061', 'First Made-Up'], [2, 'A062', 'Second Made-Up']]);
+  assert.doesNotMatch(JSON.stringify(pasted.rows.map(({ line, ...r }) => r)), /@/, 'no email is kept');
+  assert.equal(nameKey('  José   NÚÑEZ. '), 'jose nunez');
+});
+
+test('the list is matched to one division by ID or by name, and anything unsure is reported', () => {
+  const people = [
+    { individualId: 'A011', name: 'Ada Lovelace', division: 'A', score: 15 },
+    { individualId: 'A012', name: 'Sam Same', division: 'A', score: 15 },
+    { individualId: 'A021', name: 'Sam Same', division: 'A', score: 12 },
+    { individualId: 'A022', name: 'Out Person', division: 'A', score: 15, disqualified: true },
+    { individualId: 'B011', name: 'Bea Other', division: 'B', score: 15 },
+  ];
+  const { rows } = parseTiebreakList('1 ada lovelace\n2 Sam Same\n3 A021\n4 B011\n5 Nobody Here\n6 Out Person\n7 A011');
+  const { matched, problems } = matchTiebreakList(rows, people, 'A');
+  assert.deepEqual(matched.map((m) => [m.person.individualId, m.place]), [['A011', 1], ['A021', 3]]);
+  assert.equal(problems.length, 5);
+  assert.match(problems[0], /2 people in Division A are called that.*A012 or A021/);
+  assert.match(problems[1], /B011 is in Division B, not A/);
+  assert.match(problems[2], /nobody in Division A/);
+  assert.match(problems[3], /nobody in Division A/, 'the disqualified are not matched by name');
+  assert.match(problems[4], /already on this list/);
+});
+
+test('the list orders equal scores; scores still come first; the rest stay tied', () => {
+  const key = indexKey(Array.from({ length: 20 }, (_, i) => ({
+    round: 'individual', division: 'A', problem: i + 1, answer: 100 + i, points: 1,
+  })));
+  const sheet = (right) => Array.from({ length: 20 }, (_, i) => (i < right ? 100 + i : null));
+  const c = (id, right, rank = null) => ({
+    individual_id: id, team: id.slice(0, 3), member: id.slice(3), division: 'A', name: id,
+    answers: sheet(right), ...(rank != null ? { tiebreak_rank: rank } : {}),
+  });
+  const people = individualStandings([
+    c('A011', 15, 3),
+    c('A012', 15, 2),
+    c('A013', 15, 1),
+    c('A014', 15),
+    c('A021', 15),
+    c('A022', 16),
+    c('A023', 12, 7),
+    c('A024', 12, 7),
+    c('A031', 10, 1),
+  ], key, cfg);
+  assert.deepEqual(people.map((p) => p.individualId),
+    ['A022', 'A013', 'A012', 'A011', 'A014', 'A021', 'A023', 'A024', 'A031'],
+    'a higher score still wins; on 15 the list decides, and those not on it come after');
+  const places = competitionRanks(people, individualRankKey);
+  assert.deepEqual(places, [1, 2, 3, 4, 5, 5, 7, 7, 9],
+    'not on the list, or on it at the same place, still shares a place');
+  assert.equal(hasTiebreak(people[1]), true);
+  assert.equal(hasTiebreak(people[4]), false);
+  assert.ok(compareIndividuals(people[3], people[4]) < 0);
+  assert.deepEqual(awardLines(people, 'A', 10).slice(0, 4).map((l) => l.individualId),
+    ['A022', 'A013', 'A012', 'A011']);
+
+  // A031 listed 1st on 10 points is 9th: the scores win, and it is said.
+  const placeOf = new Map(people.map((p, i) => [p.individualId, places[i]]));
+  const off = tiebreakDisagreements([
+    { person: people[1], place: 2 }, { person: people[8], place: 1 },
+  ], placeOf);
+  assert.deepEqual(off.map((o) => [o.individualId, o.listed, o.actual]), [['A031', 1, 9]],
+    'A013 listed 2nd and placed 2nd is not mentioned');
+});
+
+test('reports and their spreadsheets follow the tiebreak', () => {
+  const f = reportFixture();
+  const contestants = f.contestants.map((c) => ({
+    ...c,
+    ...(c.individual_id === 'A011' ? { tiebreak_rank: 3 } : {}),
+    ...(c.individual_id === 'A012' ? { tiebreak_rank: 2 } : {}),
+  }));
+  const individuals = individualStandings(contestants, f.key, cfg);
+  const combined = combinedStandings(individuals, f.guts, f.key, cfg, f.teams);
+  const students = studentReports({ individuals, teams: f.teams, key: f.key, cfg, combined, guts: f.guts });
+  const ada = students.find((r) => r.id === 'A011');
+  const grace = students.find((r) => r.id === 'A012');
+  const alan = students.find((r) => r.id === 'A021');
+  assert.equal(grace.place, 2, 'listed ahead on the same score');
+  assert.equal(ada.place, 3);
+  assert.equal(ada.tiedWith, 0, 'the tie is broken, so nobody is tied');
+  assert.equal(ada.placedByTiebreak, true);
+  assert.equal(alan.placedByTiebreak, false, 'nobody else had his score');
+  assert.equal(students.find((r) => r.id === 'B011').tiebreaks, false, 'Division B had no tiebreak');
+
+  const html = renderReportsDocument(students, { contestName: 'Cowconuts 2026' });
+  assert.match(html, /placed by the tiebreak/);
+  assert.match(html, /Equal scores are placed by the tiebreak round/);
+  assert.match(html, /Places are before any tiebreak/, 'still said on the Division B page');
+  assert.doesNotMatch(html, /tied with 1 other/);
+
+  const { header, rows } = studentReportTable(students, cfg);
+  const graceRow = rows.find((r) => r[0] === 'A012');
+  assert.equal(graceRow[header.indexOf('place')], 2);
+  assert.equal(graceRow[header.indexOf('tiebreak_place')], 2);
+  assert.equal(rows.find((r) => r[0] === 'B011')[header.indexOf('tiebreak_place')], '');
+
+  const teamsR = teamReports({ combined, guts: f.guts, individuals, gutsByTeam: f.gutsByTeam, key: f.key, cfg });
+  const cow = teamsR.find((t) => t.team === 'A01');
+  assert.equal(cow.members.find((m) => m.id === 'A012').place, 2);
+  assert.equal(cow.members.find((m) => m.id === 'A011').place, 3);
+  assert.equal(cow.places.combined.place, 1, 'team places are untouched');
+  assert.match(renderReportsDocument(teamsR, { contestName: 'Cowconuts 2026' }),
+    /Members’ places include the individual tiebreak/);
 });

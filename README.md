@@ -93,13 +93,25 @@ unfreezing publishes everything that happened during the freeze.
 correct), per-division mean, median, standard deviation, quartiles and range for both
 rounds, and a score distribution.
 
+**Tiebreaks** — Admin → Setup → Tiebreaks. Pick the division and paste the final list, a
+place and a name on each line (`1 Sam Taylor`, `2nd, Jane Doe`, or `3 A051` with the ID).
+A list already in order needs no numbers, and two lines on the same place stay tied.
+Scores still come first: the list only orders people **on the same score**, and anyone on
+that score who is not on the list goes below them. The leaderboard, the awards list, the
+individual CSV (`tiebreak_place`) and the score reports all re-sort. Pasting again replaces
+that division's list; **Remove Division X tiebreak** puts the ties back. Before anything is
+saved, each line is matched to that division's saved sheets. A name nobody has, a name two
+people share (put the ID on that line), or an ID from the other division is listed and
+left out. A place that the scores contradict is flagged: listed 1st but on fewer points
+than someone else.
+
 **Score reports** — Admin → Setup → Score reports. One page per student and one per team,
 opened in a new tab to print or **save as a PDF**; each fits one sheet of Letter or A4.
 [`docs/sample-score-reports.pdf`](docs/sample-score-reports.pdf) shows three pages, from
 demo data.
 
-- **A student's page**: score out of 20; place in the division (equal scores share a
-  place, before any tiebreak, "tied with 2 others" where it applies); the division's
+- **A student's page**: score out of 20; place in the division (after the tiebreak list,
+  if one is in; otherwise equal scores share a place, "tied with 2 others"); the division's
   median, average and top score; all twenty problems as ✓ correct, ✗ incorrect or – blank,
   each with the share of the division who got it right; a chart of how the division
   scored with their column highlighted; and a line on how their team did.

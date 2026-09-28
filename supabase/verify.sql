@@ -70,6 +70,13 @@ select 4.6, 'A guts set with a blank counts as handed in',
   'Otherwise a team that leaves one guts answer blank looks stuck on that set on the projector'
 
 union all
+select 4.7, 'Tiebreaks can be stored',
+  case when exists (select 1 from information_schema.columns
+      where table_schema='public' and table_name='contestants' and column_name = 'tiebreak_rank')
+    then 'OK' else 'FAIL' end,
+  'contestants.tiebreak_rank: the place on the final tiebreak list, used to order equal scores'
+
+union all
 select 5, 'Public board has set_mask',
   case when exists (select 1 from information_schema.columns
       where table_schema='public' and table_name='guts_public' and column_name='set_mask')

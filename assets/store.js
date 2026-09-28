@@ -4,7 +4,7 @@
 //    demo     — localStorage + BroadcastChannel, for ?demo=1 and tests
 // =====================================================================
 
-import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.28.1';
+import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.28.2';
 
 // supabase-js, served from this site rather than a CDN. Contest day then
 // depends on two services -- GitHub Pages and Supabase -- not three, and a
@@ -48,6 +48,14 @@ export function failure(error) {
       + 'is lost; try again in a moment.'), { unreachable: true });
   }
   return Object.assign(new Error(message || 'Something went wrong.'), { code: error?.code });
+}
+
+/** A database that has not been given the tiebreak column yet says so. */
+function tiebreakFailure(error) {
+  return /tiebreak_rank/.test(String(error?.message ?? ''))
+    ? new Error('This database has no tiebreak column yet. Run supabase/schema.sql in the '
+      + 'Supabase SQL Editor, then try again.')
+    : failure(error);
 }
 const TABLES = ['app_settings', 'contest_state', 'answer_key', 'teams',
   'contestants', 'guts_answers', 'claims', 'graders', 'roster'];
@@ -562,6 +570,30 @@ export function supabaseBackend(cfg, injectedClient = null) {
       }
     },
 
+    /**
+     * Tiebreak places onto sheets already saved, in one request, so a
+     * division's list lands whole or not at all. The team is sent along
+     * because an upsert builds a whole row before it finds the one to
+     * update, and team is the one column with no default.
+     */
+    async saveTiebreaks(rows) {
+      const c = await getClient();
+      const block = rows.map((r) => ({
+        individual_id: r.individual_id, team: r.team, tiebreak_rank: r.tiebreak_rank,
+      }));
+      const { error } = await c.from('contestants').upsert(block, { onConflict: 'individual_id' });
+      if (error) throw tiebreakFailure(error);
+    },
+
+    async clearTiebreaks(division) {
+      const c = await getClient();
+      const { error } = await c.from('contestants')
+        .update({ tiebreak_rank: null })
+        .eq('division', division)
+        .not('tiebreak_rank', 'is', null);
+      if (error) throw tiebreakFailure(error);
+    },
+
     async removeTeam(team) {
       const c = await getClient();
       const { error } = await c.from('teams').delete().eq('team', team);
@@ -913,6 +945,21 @@ function demoBackend(cfg) {
     },
 
     async setTeam(team, patch) { await mutate((db) => upsertTeam(db, team, patch)); },
+
+    async saveTiebreaks(rows) {
+      await mutate((db) => {
+        for (const r of rows) {
+          const c = db.contestants.find((x) => x.individual_id === r.individual_id);
+          if (c) c.tiebreak_rank = r.tiebreak_rank;
+        }
+      });
+    },
+
+    async clearTiebreaks(division) {
+      await mutate((db) => {
+        for (const c of db.contestants) if (c.division === division) c.tiebreak_rank = null;
+      });
+    },
 
     async saveTeams(rows) {
       await mutate((db) => {

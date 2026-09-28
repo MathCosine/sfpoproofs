@@ -188,6 +188,160 @@ export function scoreSheet(answers, key, cfg, division) {
   return { score, answered, marks, correct: marks.filter((m) => m === 'correct').length };
 }
 
+// ---------------------------------------------------------------------
+// Tiebreaks
+//
+// The tiebreak round is decided outside the portal and comes back as a
+// list: a place and a name, division by division. Scores still come
+// first -- the list only orders people on the same score, lowest listed
+// place first. Somebody on that score who is not on the list goes below
+// everyone on it, and stays tied with anyone else who is not: the list
+// separates the people it names, it does not invent an order for anyone
+// else.
+// ---------------------------------------------------------------------
+
+export const hasTiebreak = (p) => p?.tiebreakRank != null;
+
+/** Best first: score, then on the tiebreak list, then its place. */
+export function compareIndividuals(a, b) {
+  return (b.score - a.score)
+    || (Number(hasTiebreak(b)) - Number(hasTiebreak(a)))
+    || ((a.tiebreakRank ?? 0) - (b.tiebreakRank ?? 0));
+}
+
+/** Two contestants share a place only when this is equal. */
+export function individualRankKey(p) {
+  return hasTiebreak(p) ? `${p.score}|${p.tiebreakRank}` : `${p.score}|-`;
+}
+
+/** A name as it is compared: case, accents, dots and spacing ignored. */
+export function nameKey(name) {
+  return String(name ?? '').normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+const PLACE_RE = /^(?:#|t-?)?(\d{1,3})(?:st|nd|rd|th)?[.):]?$/i;
+const LEADING_PLACE_RE = /^\s*((?:#|t-?)?\d{1,3}(?:st|nd|rd|th)?[.):]?)\s+(.+)$/i;
+const LIST_HEADER_RE = /^(place|rank|pos(ition)?|name|student|contestant|id|#)\b/i;
+
+const isExactId = (c) => {
+  const p = parseIndividualId(c);
+  return p.ok && p.id === c.toUpperCase().replace(/[\s\-_.]/g, '');
+};
+
+/**
+ * The final list, as typed or pasted: a line per contestant, a place and
+ * a name -- "1 Sam Taylor", "2nd, Jane Doe", "3.\tA051", a tab-separated
+ * row with the ID on it. A line with no place number takes its place from
+ * its position, so a spreadsheet already in order pastes as it is. Two
+ * lines on the same place stay tied.
+ */
+export function parseTiebreakList(text) {
+  const rows = [];
+  const problems = [];
+  let order = 0;
+  for (const raw of String(text ?? '').split(/\r?\n/)) {
+    if (!raw.trim()) continue;
+    let cells;
+    if (raw.includes('\t')) cells = raw.split('\t');
+    else if (/[,;]/.test(raw)) cells = splitRosterLine(raw);
+    else {
+      // Typed with spaces: "1 Sam Taylor", "2. A051", "3 A052 Jane Doe".
+      const m = LEADING_PLACE_RE.exec(raw);
+      const words = (m ? m[2] : raw).trim().split(/\s+/);
+      const idAt = [0, words.length - 1].find((i) => isExactId(words[i]));
+      const body = idAt == null ? [words.join(' ')]
+        : [words[idAt], words.filter((_, i) => i !== idAt).join(' ')];
+      cells = m ? [m[1], ...body] : body;
+    }
+    cells = cells.map((c) => c.trim()).filter((c) => c !== '');
+    if (!cells.length) continue;
+    const placeMatch = PLACE_RE.exec(cells[0]);
+    const rest = placeMatch ? cells.slice(1) : cells;
+    const idCell = rest.find(isExactId);
+    const name = rest.find((c) => !isExactId(c) && !/^[\d.:/\s]+$/.test(c) && !c.includes('@')) ?? '';
+    if (!idCell && !name) {
+      problems.push(`${raw.trim().slice(0, 60)} (no name or ID on this line)`);
+      continue;
+    }
+    if (!placeMatch && !idCell && LIST_HEADER_RE.test(cells[0])) continue;
+    order += 1;
+    rows.push({
+      place: placeMatch ? Number(placeMatch[1]) : order,
+      individualId: idCell ? parseIndividualId(idCell).id : null,
+      name,
+      line: raw.trim().slice(0, 60),
+    });
+  }
+  return { rows, problems };
+}
+
+/**
+ * The list matched to the contestants of one division: by ID when a line
+ * has one, otherwise by name. A name nobody in the division has, or that
+ * two people share, is reported rather than guessed at.
+ */
+export function matchTiebreakList(rows, people, division) {
+  const inDivision = people.filter((p) => p.division === division && !p.disqualified);
+  const byName = new Map();
+  for (const p of inDivision) {
+    const k = nameKey(p.name);
+    if (!k) continue;
+    byName.set(k, [...(byName.get(k) ?? []), p]);
+  }
+  const matched = [];
+  const problems = [];
+  const taken = new Set();
+  for (const r of rows) {
+    let person = null;
+    if (r.individualId) {
+      person = people.find((p) => p.individualId === r.individualId) ?? null;
+      if (!person) { problems.push(`${r.line} (no sheet saved under ${r.individualId})`); continue; }
+      if (person.division !== division) {
+        problems.push(`${r.line} (${r.individualId} is in Division ${person.division ?? '?'}, not ${division})`);
+        continue;
+      }
+      if (person.disqualified) { problems.push(`${r.line} (${r.individualId} is disqualified)`); continue; }
+    } else {
+      const found = byName.get(nameKey(r.name)) ?? [];
+      if (found.length > 1) {
+        problems.push(`${r.line} (${found.length} people in Division ${division} are called that — `
+          + `put the ID on the line: ${found.map((p) => p.individualId).join(' or ')})`);
+        continue;
+      }
+      if (!found.length) {
+        problems.push(`${r.line} (nobody in Division ${division} with a saved sheet has that name)`);
+        continue;
+      }
+      [person] = found;
+    }
+    if (taken.has(person.individualId)) {
+      problems.push(`${r.line} (${person.individualId} is already on this list)`);
+      continue;
+    }
+    taken.add(person.individualId);
+    matched.push({ person, place: r.place });
+  }
+  return { matched, problems };
+}
+
+/**
+ * Where the list and the scores disagree: somebody the list puts 3rd who,
+ * with the scores taken first, comes out 5th. Scores win; this says so.
+ */
+export function tiebreakDisagreements(matched, placeOf) {
+  return matched
+    .filter((m) => placeOf.get(m.person.individualId) != null
+      && Number(placeOf.get(m.person.individualId)) !== m.place)
+    .map((m) => ({
+      individualId: m.person.individualId,
+      name: m.person.name,
+      listed: m.place,
+      actual: Number(placeOf.get(m.person.individualId)),
+      score: m.person.score,
+    }));
+}
+
 export function individualStandings(contestants, key, cfg, dq = new Set()) {
   return contestants
     .map((c) => {
@@ -207,11 +361,12 @@ export function individualStandings(contestants, key, cfg, dq = new Set()) {
         disqualified: dq.has(String(c.team)) || Boolean(c.disqualified),
         selfDisqualified: Boolean(c.disqualified),
         dqReason: c.disqualified ? (c.dq_reason ?? '') : '',
+        tiebreakRank: c.tiebreak_rank ?? null,
         ...result,
       };
     })
     .sort((a, b) => Number(a.disqualified) - Number(b.disqualified)
-      || b.score - a.score
+      || compareIndividuals(a, b)
       || a.individualId.localeCompare(b.individualId, undefined, { numeric: true }));
 }
 
@@ -596,7 +751,7 @@ export function awardLines(individuals, division, count = 10, { withPlaces = fal
   // Placed across the whole division, then cut to the top few: a place
   // worked out inside the slice would renumber itself every time the
   // list got longer or shorter.
-  const places = competitionRanks(eligible);
+  const places = competitionRanks(eligible, individualRankKey);
   return eligible.slice(0, count).map((p, i) => ({
     place: places[i],
     individualId: p.individualId,

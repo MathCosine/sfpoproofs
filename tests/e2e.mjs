@@ -2059,6 +2059,98 @@ await shot.close();
     .filter((l) => l.split(',')[1] === 'A').slice(0, 3).map((l) => l.split(',')[0]);
   check('the exported file places the tie the same way',
     ranks.join(',') === '1,1,3', ranks.join(',') || 'no csv');
+
+  // ---- and a tiebreak list splits it -----------------------------------
+  // The wrong division first: nothing on the list is in it, so nothing moves.
+  await tp.selectOption('#tiebreakDivision', 'B');
+  await tp.fill('#tiebreakPaste', '1 A092');
+  await tp.click('#tiebreakApply');
+  await tp.waitForTimeout(400);
+  check('a list pasted under the wrong division is refused, and says why',
+    /is in Division A, not B/.test(await tp.locator('#tiebreakProblems').innerText().catch(() => ''))
+      && (await tp.locator('#tiebreakState').textContent()) === 'none');
+
+  // The final list as it would be typed: a place and a name or ID, in any
+  // of the shapes a spreadsheet or a keyboard gives. A093 is on 19 with
+  // A022, who is not on the list, so the list puts A093 ahead of A022.
+  await tp.selectOption('#tiebreakDivision', 'A');
+  await tp.fill('#tiebreakPaste', ['1\tA092', '2, A091', '3 A093', '4 Nobody Real'].join('\n'));
+  await tp.click('#tiebreakApply');
+  await tp.waitForTimeout(700);
+  const held = await tp.locator('#tiebreakProblems').innerText().catch(() => '');
+  check('a name nobody in the division has is held back and named',
+    /Nobody Real/.test(held) && !/A09[123]/.test(held), held.replace(/\s+/g, ' ').slice(0, 140));
+  check('the panel counts what was applied', /3 A/.test(await tp.locator('#tiebreakState').innerText()),
+    await tp.locator('#tiebreakState').innerText());
+  const decided = await tp.evaluate(() => [...document.querySelectorAll('#tiebreakList tbody tr')]
+    .map((tr) => [...tr.children].slice(0, 2).map((td) => td.textContent.trim()).join(' ')));
+  check('and lists who the tiebreak put where',
+    decided.slice(0, 4).join(',') === '1 A092,2 A091,3 A093,4 A022', decided.slice(0, 5).join(' | '));
+
+  await tp.click('.tab[data-tab="leaderboard"]');
+  await tp.click('.tab[data-board="individual"]');
+  await tp.waitForTimeout(500);
+  const board = async () => tp.evaluate(() => {
+    const wrap = document.querySelector('#boards .table-wrap');
+    return {
+      head: [...wrap.querySelectorAll('thead th')].map((th) => th.textContent.trim()),
+      rows: [...wrap.querySelectorAll('tbody tr')].slice(0, 4)
+        .map((tr) => [...tr.children].map((td) => td.textContent.trim())),
+    };
+  });
+  const after = await board();
+  check('the leaderboard re-sorts by the list',
+    after.rows.map((r) => `${r[0]} ${r[1]}`).join(',') === '1 A092,2 A091,3 A093,4 A022',
+    after.rows.map((r) => `${r[0]} ${r[1]}`).join(','));
+  check('and shows the listed place beside the score',
+    after.head.includes('Tiebreak') && after.rows[0][after.head.indexOf('Tiebreak')] === '1st'
+      && after.rows[3][after.head.indexOf('Tiebreak')] === '—',
+    `${after.head.join('|')} / ${after.rows[0]?.join('|')}`);
+
+  await tp.click('.tab[data-tab="setup"]');
+  const broken = (await readDownload('#exportIndividual', tp)).text.replace(/^﻿/, '');
+  const head = broken.trim().split('\n')[0].split(',');
+  const aRows = broken.trim().split('\n').slice(1).filter((l) => l.split(',')[1] === 'A').slice(0, 4)
+    .map((l) => l.split(','));
+  check('the exported file follows the list and carries it',
+    aRows.map((r) => `${r[0]} ${r[2]}`).join(',') === '1 A092,2 A091,3 A093,4 A022'
+      && aRows[0][head.indexOf('tiebreak_place')] === '1',
+    aRows.map((r) => `${r[0]} ${r[2]}`).join(','));
+
+  await tp.fill('#reportOnly', 'A091');
+  const [rep] = await Promise.all([tied.waitForEvent('page'), tp.click('#reportStudents')]);
+  await rep.waitForLoadState('load');
+  const repText = (await rep.locator('section.page').first().innerText()).replace(/\s+/g, ' ');
+  check('the score report places them by it and says so',
+    /2nd/.test(repText) && /placed by the tiebreak/.test(repText)
+      && /Equal scores are placed by the tiebreak round/.test(repText) && !/tied with/.test(repText),
+    repText.slice(0, 200));
+  await rep.close();
+  await tp.fill('#reportOnly', '');
+
+  // Pasting again replaces the division's list rather than adding to it.
+  await tp.fill('#tiebreakPaste', '1 A091\n2 A092');
+  await tp.click('#tiebreakApply');
+  await tp.waitForTimeout(600);
+  const redone = await tp.evaluate(() => [...document.querySelectorAll('#tiebreakList tbody tr')]
+    .map((tr) => [...tr.children].slice(0, 2).map((td) => td.textContent.trim()).join(' ')));
+  const again = (await readDownload('#exportIndividual', tp)).text.replace(/^\uFEFF/, '')
+    .trim().split('\n').slice(1).filter((l) => l.split(',')[1] === 'A').slice(0, 4)
+    .map((l) => l.split(',')).map((r) => `${r[0]} ${r[2]}`);
+  check('a second list replaces the first: A093 comes off it and ties again',
+    redone.join(',') === '1 A091,2 A092' && again.join(',') === '1 A091,2 A092,3 A022,3 A093'
+      && /2 A/.test(await tp.locator('#tiebreakState').textContent()),
+    `${redone.join(' | ')} / ${again.join(' | ')}`);
+
+  await tp.click('#tiebreakClear');
+  await tp.click('#tiebreakClear');
+  await tp.waitForTimeout(600);
+  await tp.click('.tab[data-tab="leaderboard"]');
+  await tp.waitForTimeout(400);
+  const cleared = await board();
+  check('removing the tiebreak puts the tie back',
+    cleared.rows.map((r) => r[0]).slice(0, 3).join(',') === '1,1,3' && !cleared.head.includes('Tiebreak'),
+    cleared.rows.map((r) => `${r[0]} ${r[1]}`).join(','));
   await tied.close();
 }
 

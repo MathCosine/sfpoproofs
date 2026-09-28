@@ -2,25 +2,26 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.28.1';
-import { createStore } from './store.js?v=2026.09.28.1';
-import { toCsv, downloadCsv } from './csv.js?v=2026.09.28.1';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.28.2';
+import { createStore } from './store.js?v=2026.09.28.2';
+import { toCsv, downloadCsv } from './csv.js?v=2026.09.28.2';
 import {
   studentReports, teamReports, pickReports, renderReportsDocument,
   studentReportTable, teamReportTable,
-} from './reports.js?v=2026.09.28.1';
+} from './reports.js?v=2026.09.28.2';
 import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
   indexKey, keyGaps, individualKey, gutsKey, divisionStatistics, awardLines,
-  competitionRanks,
+  competitionRanks, ordinal,
   TEAM_COUNTING_MEMBERS, individualMultiplier, combinedMaxPoints,
   awardLine, nameAllowed, parseNameList, parseRoster, indexRoster,
   graderActivity, sinceLabel, rosterRows, filterRoster, parseTeamList,
   scoreSheet, individualStandings, indexGutsAnswers, scoreGutsTeam, gutsStandings,
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
-} from './scoring.js?v=2026.09.28.1';
+  individualRankKey, hasTiebreak, parseTiebreakList, matchTiebreakList, tiebreakDisagreements,
+} from './scoring.js?v=2026.09.28.2';
 
 // Every import above resolved, so the script is running; the fallback in
 // index.html that reports a page too half-updated to start stands down.
@@ -1061,8 +1062,8 @@ function renderBoards() {
     const offset = page * size;
     // Worked out across the division rather than down the page, so the
     // eleventh row is eleventh and a tie keeps its shared place.
-    const places = competitionRanks(ranked,
-      activeBoard === 'combined' ? (r) => r.total : (r) => r.score);
+    const places = competitionRanks(ranked, activeBoard === 'combined' ? (r) => r.total
+      : activeBoard === 'individual' ? individualRankKey : (r) => r.score);
 
     if (activeBoard === 'combined') {
       const cell = (r) => {
@@ -1090,6 +1091,9 @@ function renderBoards() {
         host.appendChild(w);
       }
     } else if (activeBoard === 'individual') {
+      // The tiebreak column appears once a tiebreak list is in for this
+      // division: the place the list gave, which is what split the tie.
+      const withTiebreak = all.some(hasTiebreak);
       const row = (r, place) => [
         { text: place == null ? 'DQ' : String(place),
           cls: place == null ? 'rank' : rankCls(place) },
@@ -1097,11 +1101,15 @@ function renderBoards() {
         { text: r.name || '—' },
         { text: String(r.correct), cls: 'num' },
         { text: String(r.score), cls: 'num' },
+        ...(withTiebreak ? [{
+          text: hasTiebreak(r) ? ordinal(r.tiebreakRank) : '—', cls: 'num muted',
+        }] : []),
         { text: `${r.answered}/${cfg.INDIVIDUAL_PROBLEMS}`, cls: 'muted' },
         { node: rowCopyButton(r) },
       ];
       const header = ['#', 'ID', 'Name', { label: 'Correct', num: true },
-        { label: 'Points', num: true }, 'Answered', ''];
+        { label: 'Points', num: true },
+        ...(withTiebreak ? [{ label: 'Tiebreak', num: true }] : []), 'Answered', ''];
       if (shown.length) host.appendChild(table(header, shown.map((r, i) => row(r, places[offset + i]))));
       if (bar) host.appendChild(bar);
       if (page === 0 && shown.length) {
@@ -2019,6 +2027,117 @@ function rankedByDivision(rows, valueOf = (r) => r.score) {
 }
 
 // ---------------------------------------------------------------------
+// Tiebreaks
+// ---------------------------------------------------------------------
+
+/**
+ * What the tiebreaks decided, division by division: everyone on a score
+ * the list touched, in the order the portal now places them.
+ */
+function renderTiebreaks() {
+  const host = $('#tiebreakList');
+  if (!host) return;
+  const division = $('#tiebreakDivision').value;
+  const listed = derived.individuals.filter(hasTiebreak);
+  $('#tiebreakState').textContent = listed.length
+    ? cfg.DIVISIONS.map((d) => `${listed.filter((p) => p.division === d).length} ${d}`).join(' · ')
+    : 'none';
+  $('#tiebreakClear').textContent = `Remove Division ${division} tiebreak`;
+  const signature = division + listed.map((p) => `${p.individualId}${individualRankKey(p)}`).join(',')
+    + derived.individuals.length;
+  if (host.dataset.signature === signature) return;
+  host.dataset.signature = signature;
+  host.replaceChildren();
+  if (!listed.length) return;
+  const placeOf = new Map(rankedByDivision(derived.individuals, individualRankKey)
+    .map(([r, place]) => [r.individualId, place]));
+  for (const d of cfg.DIVISIONS) {
+    const scores = new Set(listed.filter((p) => p.division === d).map((p) => p.score));
+    if (!scores.size) continue;
+    const people = derived.individuals.filter((p) => p.division === d
+      && !p.disqualified && scores.has(p.score));
+    const heading = el('h3', null, `Division ${d} — who the tiebreak put where`);
+    heading.style.cssText = 'font-size:13px;text-transform:uppercase;letter-spacing:.07em;margin:14px 0 8px';
+    host.appendChild(heading);
+    host.appendChild(table(['#', 'ID', 'Name', { label: 'Score', num: true },
+      { label: 'On your list', num: true }],
+    people.map((p) => [
+      { text: String(placeOf.get(p.individualId) ?? ''), cls: rankCls(Number(placeOf.get(p.individualId))) },
+      { text: p.individualId },
+      { text: p.name || '—' },
+      { text: String(p.score), cls: 'num' },
+      { text: hasTiebreak(p) ? ordinal(p.tiebreakRank) : 'not on it', cls: 'num muted' },
+    ])));
+  }
+}
+
+function tiebreakNotice(title, lines, tone = 'warn') {
+  const box = el('div', `banner banner--${tone}`);
+  const d = el('div');
+  d.append(el('b', null, title), el('span', null, lines.slice(0, 12).join(' · ')
+    + (lines.length > 12 ? ` · and ${lines.length - 12} more` : '')));
+  box.append(el('div', null, tone === 'warn' ? '⚠' : 'ℹ'), d);
+  return box;
+}
+
+async function applyTiebreaks() {
+  const division = $('#tiebreakDivision').value;
+  const parsed = parseTiebreakList($('#tiebreakPaste').value);
+  const host = $('#tiebreakProblems');
+  host.replaceChildren();
+  if (!parsed.rows.length) {
+    toast(parsed.problems.length ? 'Nothing on that list could be read.' : 'Paste the list first — a place and a name on each line.', 'error');
+    if (parsed.problems.length) host.appendChild(tiebreakNotice('Not read', parsed.problems));
+    return;
+  }
+  const { matched, problems } = matchTiebreakList(parsed.rows, derived.individuals, division);
+  problems.unshift(...parsed.problems);
+  if (!matched.length) {
+    toast(`Nobody on that list matched Division ${division}. Is the right division picked?`, 'error');
+    host.appendChild(tiebreakNotice('Not applied', problems));
+    return;
+  }
+  // The division's list is replaced whole: anybody on the old list and
+  // not on this one comes off it, in the same request.
+  const teamOf = new Map(data.contestants.map((c) => [c.individual_id, c.team]));
+  const onList = new Set(matched.map((m) => m.person.individualId));
+  const rows = [
+    ...matched.map((m) => ({ individual_id: m.person.individualId,
+      team: teamOf.get(m.person.individualId), tiebreak_rank: m.place })),
+    ...derived.individuals.filter((p) => p.division === division && hasTiebreak(p)
+      && !onList.has(p.individualId))
+      .map((p) => ({ individual_id: p.individualId, team: teamOf.get(p.individualId), tiebreak_rank: null })),
+  ].filter((r) => r.team != null);
+  const button = $('#tiebreakApply');
+  button.disabled = true;
+  try {
+    await store.saveTiebreaks(rows);
+    await refresh();
+    $('#tiebreakPaste').value = '';
+    toast(`Tiebreak applied to Division ${division}: ${matched.length} on the list. `
+      + 'The leaderboard, awards, exports and score reports now follow it.', 'ok');
+    if (problems.length) {
+      host.appendChild(tiebreakNotice(`${problems.length} line${problems.length === 1 ? '' : 's'} not applied`, problems));
+    }
+    // Scores come first. Where the list says one thing and the scores
+    // another, the scores win -- and the list's author should know.
+    const placeOf = new Map(rankedByDivision(derived.individuals, individualRankKey)
+      .map(([r, place]) => [r.individualId, place]));
+    const off = tiebreakDisagreements(matched, placeOf);
+    if (off.length) {
+      host.appendChild(tiebreakNotice(
+        `${off.length} place${off.length === 1 ? '' : 's'} differ from your list — scores come first`,
+        off.map((o) => `${o.individualId} ${o.name || ''}: your list ${ordinal(o.listed)}, `
+          + `portal ${ordinal(o.actual)} on ${o.score} points`)));
+    }
+  } catch (err) {
+    toast(err.message || 'Could not apply the tiebreak.', 'error');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+// ---------------------------------------------------------------------
 // Score reports
 // ---------------------------------------------------------------------
 
@@ -2066,14 +2185,15 @@ function exportReportCsv(kind) {
 }
 
 function exportIndividualCsv() {
-  const rows = rankedByDivision(derived.individuals).map(([r, rank]) => [
+  const rows = rankedByDivision(derived.individuals, individualRankKey).map(([r, rank]) => [
     rank, r.division ?? '', r.individualId, r.team, r.member, r.name,
-    r.correct, r.score, r.answered, r.enteredBy, r.disqualified ? 'yes' : 'no',
+    r.correct, r.score, r.tiebreakRank ?? '',
+    r.answered, r.enteredBy, r.disqualified ? 'yes' : 'no',
     ...r.marks.map((m) => m[0].toUpperCase()),
   ]);
   downloadCsv('cowconuts-2026-individual.csv', toCsv(
     ['rank_in_division', 'division', 'individual_id', 'team', 'member', 'name', 'correct',
-      'points', 'answered', 'entered_by', 'disqualified',
+      'points', 'tiebreak_place', 'answered', 'entered_by', 'disqualified',
       ...Array.from({ length: cfg.INDIVIDUAL_PROBLEMS }, (_, i) => `q${i + 1}`)],
     rows));
 }
@@ -2185,6 +2305,7 @@ function render() {
   renderGraders();
   renderRoster();
   renderTeamList();
+  renderTiebreaks();
   renderDqList();
   applyRole();
 
@@ -2672,6 +2793,30 @@ function wire() {
   $('#exportGuts').addEventListener('click', exportGutsCsv);
   $('#exportCombined').addEventListener('click', exportCombinedCsv);
   $('#exportStats').addEventListener('click', exportStatsCsv);
+  $('#tiebreakApply').addEventListener('click', applyTiebreaks);
+  $('#tiebreakDivision').addEventListener('change', () => {
+    $('#tiebreakProblems').replaceChildren();
+    renderTiebreaks();
+  });
+  $('#tiebreakClear').addEventListener('click', async () => {
+    const button = $('#tiebreakClear');
+    const division = $('#tiebreakDivision').value;
+    if (button.dataset.armed !== division) {
+      button.dataset.armed = division;
+      button.textContent = `Click again — removes the Division ${division} tiebreak`;
+      setTimeout(() => { button.dataset.armed = ''; renderTiebreaks(); }, 4000);
+      return;
+    }
+    button.dataset.armed = '';
+    try {
+      await store.clearTiebreaks(division);
+      await refresh();
+      $('#tiebreakProblems').replaceChildren();
+      toast(`Division ${division} tiebreak removed. Equal scores share a place again.`, 'info');
+    } catch (err) {
+      toast(err.message || 'Could not remove the tiebreak.', 'error');
+    }
+  });
   $('#reportStudents').addEventListener('click', () => openReports('student'));
   $('#reportTeams').addEventListener('click', () => openReports('team'));
   $('#reportStudentsCsv').addEventListener('click', () => exportReportCsv('student'));
