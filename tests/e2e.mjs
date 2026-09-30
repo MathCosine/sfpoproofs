@@ -2319,14 +2319,23 @@ await shot.close();
   await admin.waitForTimeout(600);
 
   check('sending waits for a Google account', await admin.locator('#mailSend').isDisabled());
-  check('with no client ID in config.js, the panel asks for one', await admin.isVisible('#mailClientId'));
-  await admin.fill('#mailClientId', 'test-client.apps.googleusercontent.com');
+  // The client ID is either built into config.js, and then never asked
+  // for, or typed into the panel.
+  const { CONFIG: shipped } = await import('../assets/config.js');
+  const clientId = shipped.GOOGLE_CLIENT_ID || 'test-client.apps.googleusercontent.com';
+  if (shipped.GOOGLE_CLIENT_ID) {
+    check('with the client ID in config.js, the panel does not ask for one',
+      !(await admin.isVisible('#mailClientId')));
+  } else {
+    check('with no client ID in config.js, the panel asks for one', await admin.isVisible('#mailClientId'));
+    await admin.fill('#mailClientId', clientId);
+  }
   await admin.click('#mailConnect');
   await admin.waitForFunction(() => /director@example\.com/.test(document.querySelector('#mailAccount').textContent),
     null, { timeout: 10000 }).catch(() => {});
   const gis = await admin.evaluate(() => window.__gis);
   check('connecting asks Google for send permission only, with the client ID given',
-    gis?.client_id === 'test-client.apps.googleusercontent.com'
+    gis?.client_id === clientId
       && gis.scope.split(' ').includes('https://www.googleapis.com/auth/gmail.send')
       && !/mail\.google\.com|gmail\.readonly|gmail\.modify/.test(gis.scope),
     JSON.stringify(gis));

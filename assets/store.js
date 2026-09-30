@@ -4,7 +4,7 @@
 //    demo     — localStorage + BroadcastChannel, for ?demo=1 and tests
 // =====================================================================
 
-import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.30.2';
+import { indexKey, indexGutsAnswers, scoreGutsTeam } from './scoring.js?v=2026.09.30.3';
 
 // supabase-js, served from this site rather than a CDN. Contest day then
 // depends on two services -- GitHub Pages and Supabase -- not three, and a

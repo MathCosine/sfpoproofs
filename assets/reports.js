@@ -17,7 +17,7 @@
 import {
   competitionRanks, ordinal, summarise, keyMaxPoints, gutsKey, problemsInSet,
   divisionOfTeam, compareIndividuals, individualRankKey, hasTiebreak,
-} from './scoring.js?v=2026.09.30.2';
+} from './scoring.js?v=2026.09.30.3';
 
 const byId = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 

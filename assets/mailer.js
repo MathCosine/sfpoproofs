@@ -15,8 +15,8 @@
 //  instead of sending everyone a copy again.
 // =====================================================================
 
-import { parseIndividualId, nameKey } from './scoring.js?v=2026.09.30.2';
-import { reportFingerprint, REPORT_FONTS_URL } from './reports.js?v=2026.09.30.2';
+import { parseIndividualId, nameKey } from './scoring.js?v=2026.09.30.3';
+import { reportFingerprint, REPORT_FONTS_URL } from './reports.js?v=2026.09.30.3';
 
 /** Text as compared: spacing, case and letter-spacing gaps ignored. */
 const squash = (s) => String(s ?? '').normalize('NFC').replace(/\s+/g, '').toLowerCase();

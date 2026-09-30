@@ -2,17 +2,17 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.30.2';
-import { createStore } from './store.js?v=2026.09.30.2';
-import { toCsv, downloadCsv } from './csv.js?v=2026.09.30.2';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.30.3';
+import { createStore } from './store.js?v=2026.09.30.3';
+import { toCsv, downloadCsv } from './csv.js?v=2026.09.30.3';
 import {
   studentReports, teamReports, pickReports, renderReportsDocument,
   studentReportTable, teamReportTable,
-} from './reports.js?v=2026.09.30.2';
+} from './reports.js?v=2026.09.30.3';
 import {
   parseRecipients, planEmails, fillTemplate, templateFields, buildMessage, toBase64Url,
   createReportRenderer, inlineReportFonts, loadGoogle, connectGoogle, sendGmail, CLIENT_ID_RE,
-} from './mailer.js?v=2026.09.30.2';
+} from './mailer.js?v=2026.09.30.3';
 import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
@@ -25,7 +25,7 @@ import {
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
   individualRankKey, hasTiebreak, parseTiebreakList, matchTiebreakList, tiebreakDisagreements,
-} from './scoring.js?v=2026.09.30.2';
+} from './scoring.js?v=2026.09.30.3';
 
 // Every import above resolved, so the script is running; the fallback in
 // index.html that reports a page too half-updated to start stands down.
