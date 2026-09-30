@@ -12,7 +12,7 @@
 // Bumped on every deploy. index.html and guts.html carry the same string
 // in data-app-version; a mismatch means the browser has a half-updated
 // copy and the portal says so rather than misbehaving quietly.
-export const APP_VERSION = '2026.09.30.1';
+export const APP_VERSION = '2026.09.30.2';
 
 export const CONFIG = {
   SUPABASE_URL: 'https://gfuqvjpxoqbtbyiftdax.supabase.co',
@@ -24,6 +24,12 @@ export const CONFIG = {
   ADMIN_EMAIL: 'admin@sfpo.local',
 
   CONTEST_NAME: 'Cowconuts 2026 Annual Math Contest',
+
+  // Emailing the score reports: the OAuth client ID of the Google Cloud
+  // project that sends them (README, "Emailing the reports"). Not a
+  // secret -- Google only lets it be used from this site's address, by the
+  // accounts listed as test users. Left blank, Admin asks for it instead.
+  GOOGLE_CLIENT_ID: '',
 
   // ---- Individual round -------------------------------------------
   INDIVIDUAL_PROBLEMS: 20,

@@ -17,7 +17,7 @@
 import {
   competitionRanks, ordinal, summarise, keyMaxPoints, gutsKey, problemsInSet,
   divisionOfTeam, compareIndividuals, individualRankKey, hasTiebreak,
-} from './scoring.js?v=2026.09.30.1';
+} from './scoring.js?v=2026.09.30.2';
 
 const byId = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 
@@ -159,12 +159,22 @@ function teamCohorts(combined, guts, cfg) {
   });
 }
 
-/** team -> its combined score and place, for the line on a student's page. */
+/**
+ * team -> how the team did as a whole, for a student's page: the combined
+ * score and place, and the guts round's. Never a teammate's own score --
+ * the page goes to one family, and the other three are not theirs.
+ */
 function teamSummaries(combined, guts, cfg) {
   const out = new Map();
   for (const { cohort, byCombined } of teamCohorts(combined, guts, cfg)) {
+    const gutsOf = (t) => Number(t.guts ?? 0);
+    const byGuts = placed(cohort, gutsOf, (t) => t.team);
     for (const t of cohort) {
-      out.set(String(t.team), { total: t.total, max: t.max, ...byCombined.get(t.team) });
+      const g = byGuts.get(t.team);
+      out.set(String(t.team), {
+        total: t.total, max: t.max, ...byCombined.get(t.team),
+        guts: gutsOf(t), gutsMax: t.gutsMax, gutsPlace: g.place, gutsTiedWith: g.tiedWith,
+      });
     }
   }
   return out;
@@ -430,7 +440,7 @@ function studentPage(r, contestName) {
     .map((m) => `<span class="key key--${m}"><i>${MARK_GLYPH[m]}</i>${MARK_WORD[m][0].toUpperCase()}${MARK_WORD[m].slice(1)}</span>`)
     .join('');
   return `
-  <section class="page">
+  <section class="page" data-report="${esc(r.id)}">
     <header class="mast">
       <span class="mast__contest">${esc(contestName)}</span>
       <span class="mast__kind">Individual score report</span>
@@ -459,10 +469,20 @@ function studentPage(r, contestName) {
     </section>
     ${r.teamResult ? `
     <section class="teamline">
-      <span class="teamline__label">Your team</span>
-      <span class="teamline__name">${esc(r.teamName || `Team ${r.team}`)} <span class="mono muted">${esc(r.team)}</span></span>
-      <span class="teamline__score">Combined score <b>${esc(fmt(r.teamResult.total))}</b><span class="muted"> / ${esc(fmt(r.teamResult.max))}</span></span>
-      <span class="teamline__place"><b>${esc(ordinal(r.teamResult.place))}</b> of ${r.teamResult.of} teams${r.teamResult.tiedWith ? ` ${SEP} ${tiedPhrase(r.teamResult.tiedWith)}` : ''}</span>
+      <div class="teamline__who">
+        <span class="teamline__label">Your team</span>
+        <span class="teamline__name">${esc(r.teamName || `Team ${r.team}`)} <span class="mono muted">${esc(r.team)}</span></span>
+      </div>
+      <div class="teamline__stat">
+        <span class="teamline__label">Team overall</span>
+        <span class="teamline__value"><b>${esc(fmt(r.teamResult.total))}</b><span class="muted"> / ${esc(fmt(r.teamResult.max))}</span></span>
+        <span><b>${esc(ordinal(r.teamResult.place))}</b> of ${r.teamResult.of} teams${r.teamResult.tiedWith ? ` ${SEP} ${tiedPhrase(r.teamResult.tiedWith)}` : ''}</span>
+      </div>
+      <div class="teamline__stat">
+        <span class="teamline__label">Guts round</span>
+        <span class="teamline__value"><b>${esc(fmt(r.teamResult.guts))}</b><span class="muted"> / ${esc(fmt(r.teamResult.gutsMax))}</span></span>
+        <span><b>${esc(ordinal(r.teamResult.gutsPlace))}</b> of ${r.teamResult.of} teams${r.teamResult.gutsTiedWith ? ` ${SEP} ${tiedPhrase(r.teamResult.gutsTiedWith)}` : ''}</span>
+      </div>
     </section>` : ''}
     <footer class="foot">
       <span>${r.tiebreaks
@@ -491,7 +511,7 @@ function teamPage(r, contestName) {
           <td class="num"><b>${esc(fmt(s.earned))}</b><span class="muted"> / ${esc(fmt(s.possible))}</span></td>
         </tr>`).join('');
   return `
-  <section class="page">
+  <section class="page" data-report="${esc(r.team)}">
     <header class="mast">
       <span class="mast__contest">${esc(contestName)}</span>
       <span class="mast__kind">Team score report</span>
@@ -639,12 +659,14 @@ html,body{margin:0;background:var(--desk);color:var(--ink);font-family:var(--san
 .mk--blank,.mk--unkeyed{background:var(--blank-soft);color:var(--blank)}
 .note{margin:8px 0 0;font-size:9pt;color:var(--ink-2)}
 
-.teamline{margin-top:20px;display:flex;align-items:baseline;gap:8px 22px;flex-wrap:wrap;
+.teamline{margin-top:20px;display:grid;grid-template-columns:1.25fr 1fr 1fr;gap:16px;align-items:start;
   padding:12px 16px;border:1px solid var(--rule);border-radius:8px;font-size:10pt;color:var(--ink-2)}
+.teamline__who,.teamline__stat{display:flex;flex-direction:column;gap:3px;min-width:0}
 .teamline__label{font-size:8.5pt;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-2)}
-.teamline__name{color:var(--ink);font-weight:600}
+.teamline__name{color:var(--ink);font-weight:600;font-size:11pt;overflow-wrap:anywhere}
+.teamline__value{font-size:10pt}
+.teamline__value b{font-size:15pt;letter-spacing:-.01em}
 .teamline b{color:var(--ink);font-weight:600}
-.teamline__place{margin-left:auto}
 .foot{margin-top:auto;padding-top:10px;border-top:1px solid var(--rule);display:flex;
   justify-content:space-between;font-size:8pt;color:var(--ink-3)}
 
@@ -687,6 +709,10 @@ export function reportFingerprint(r) {
     r.place ? `${ordinal(r.place)} of ${r.of}` : null].filter(Boolean);
 }
 
+/** The report's typefaces, as Google Fonts serves them. */
+export const REPORT_FONTS_URL = 'https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700'
+  + '&family=IBM+Plex+Mono:wght@400;500&display=swap';
+
 export function renderReportsDocument(reports, { contestName = 'Contest', title = 'Score reports' } = {}) {
   const pages = reports.map((r) => (r.kind === 'team' ? teamPage(r, contestName) : studentPage(r, contestName)))
     .join('');
@@ -696,7 +722,7 @@ export function renderReportsDocument(reports, { contestName = 'Contest', title 
 <title>${esc(contestName)} — ${esc(title)}</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link href="${REPORT_FONTS_URL.replace(/&/g, '&amp;')}" rel="stylesheet" media="print" onload="this.media='all'">
 <style>${STYLE}</style></head>
 <body>
 <div class="bar-tools">

@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.30.1">
+<body data-app-version="2026.09.30.2">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -598,15 +598,14 @@
           <span class="spacer"></span><span class="tag" id="mailState">not connected</span></div>
         <p class="field__hint" style="margin-bottom:6px">
           Sends each student their own report as a PDF attachment, from a Google account you
-          connect here. Every page is checked before it goes: it has to name the student and
-          show the portal's current score and place, or nothing is sent. Addresses stay in this
-          tab and are never saved. Needs a one-time Google setup — see
-          <b>Emailing the reports</b> in the README.
+          connect here. Each PDF is drawn from the scores as they are when it goes, and checked
+          against the student it is for first. Addresses stay in this tab and are never saved.
+          Needs a one-time Google setup — see <b>Emailing the reports</b> in the README.
         </p>
 
         <div class="subhead"><span class="step">1</span><h3>Connect Google</h3></div>
         <div class="grid-2">
-          <div class="field">
+          <div class="field" id="mailClientIdField">
             <label class="field__label" for="mailClientId">OAuth client ID</label>
             <input class="input mono" id="mailClientId" placeholder="….apps.googleusercontent.com"
                    autocomplete="off" spellcheck="false">
@@ -621,23 +620,14 @@
           <span class="field__hint" id="mailAccount">Not connected.</span>
         </div>
 
-        <div class="subhead"><span class="step">2</span><h3>The reports, saved as PDF</h3></div>
+        <div class="subhead"><span class="step">2</span><h3>What each student gets</h3></div>
         <p class="field__hint" style="margin-bottom:10px">
-          Open <b>Student reports</b> above with Division on Both and nothing in Only these, and
-          save it as a PDF (margins and scale left at Default), then choose that file here. Team
-          reports are optional; with them, each student also gets their team's page.
+          Their own individual score report as a one-page PDF, drawn here just before its email
+          goes. It shows their team's overall and guts scores, never a teammate's own score.
         </p>
-        <div class="grid-2">
-          <div class="field">
-            <label class="field__label" for="mailStudentPdf">Student reports PDF</label>
-            <input class="input" type="file" id="mailStudentPdf" accept="application/pdf,.pdf">
-          </div>
-          <div class="field">
-            <label class="field__label" for="mailTeamPdf">Team reports PDF <span class="muted">optional</span></label>
-            <input class="input" type="file" id="mailTeamPdf" accept="application/pdf,.pdf">
-          </div>
+        <div class="chip-row">
+          <button class="btn btn--ghost" id="mailSample">See a sample PDF</button>
         </div>
-        <div id="mailPdfState"></div>
 
         <div class="subhead"><span class="step">3</span><h3>Email addresses</h3></div>
         <p class="field__hint" style="margin-bottom:10px">
@@ -735,6 +725,6 @@
     window.addEventListener('load', function () { setTimeout(halfUpdated, 4000); });
   })();
 </script>
-<script type="module" src="assets/app.js?v=2026.09.30.1"></script>
+<script type="module" src="assets/app.js?v=2026.09.30.2"></script>
 </body>
 </html>

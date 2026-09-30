@@ -114,7 +114,8 @@ demo data.
   if one is in; otherwise equal scores share a place, "tied with 2 others"); the division's
   median, average and top score; all twenty problems as ✓ correct, ✗ incorrect or – blank,
   each with the share of the division who got it right; a chart of how the division
-  scored with their column highlighted; and a line on how their team did.
+  scored with their column highlighted; and how their team did, overall and in guts,
+  with its places, never a teammate's own score.
 - **A team's page**: combined score and place; the individual round as each member's
   score and place, with the best three marked and the sum written out; the guts round set
   by set, ✓ ✗ – for each problem and points earned; and every team in the division on
@@ -131,31 +132,33 @@ demo data.
   and chart until it fits, so nothing is ever cut off at the foot of a sheet.
 
 **Email the reports** — Admin → Setup → Email the reports. Each student gets their own
-report as a PDF, and optionally their team's, from a Google account connected there.
-Needs a one-time Google setup ([below](#5-emailing-the-reports-optional)). Then:
+individual score report as a one-page PDF, from a Google account connected there. The page
+shows their team's overall score and guts score (and places), never a teammate's own score.
+Team reports are not emailed. Needs a one-time Google setup
+([below](#5-emailing-the-reports-optional)). Then:
 
 1. **Connect Google account.** A Google window asks to let the portal send email as you.
    Access lasts an hour and is never saved.
-2. **Save the reports as a PDF.** Use **Student reports** above (Division on Both, nothing
-   in Only these), print, and choose **Save as PDF**, with margins and scale left at
-   Default. Do the same for **Team reports** if the team page should go too. Choose the
-   files in the panel.
-3. **Paste the addresses** from the registration sheet, a row per student: the ID and
+2. **Paste the addresses** from the registration sheet, a row per student: the ID and
    the email anywhere on it (`A011  Sam Taylor  11  sam@example.com` is fine). Every
    address on a line gets the email.
-4. **Check the preview**, edit the subject and message if you like (`{first}`, `{name}`,
-   `{id}`, `{division}`, `{team}`, `{team_name}` and `{contest}` are filled in), and **Send a test to
-   me** — it arrives in your own inbox exactly as a family will get it.
-5. **Send**, two clicks. About one email a second; keep the tab open. **Stop** is safe:
-   sending again carries on with those not yet sent.
+3. **Check the preview**, edit the subject and message if you like (`{first}`, `{name}`,
+   `{id}`, `{division}`, `{team}`, `{team_name}` and `{contest}` are filled in). **See a
+   sample PDF** opens the first report, and **Send a test to me** puts that email in your
+   own inbox exactly as a family will get it.
+4. **Send**, two clicks. About one email a second, so 176 take around four minutes; keep
+   the tab open. **Stop** is safe: sending again carries on with those not yet sent.
+
+Nothing needs saving or uploading. Each PDF is drawn in the browser just before its
+email goes, from the scores as they are at that moment: the report is laid out exactly as
+it prints, in the report's own fonts, and captured as a Letter page at about 240 dpi,
+roughly 300 KB each. The page's words are laid invisibly over the image, so the PDF can
+still be searched.
 
 What keeps a report from the wrong family:
 
-- **Every page is read before anything is sent.** A page must name exactly one
-  student (or team) and still show the portal's name, score and place for them. If any
-  page doesn't match (a report ran onto two pages, or a score or tiebreak changed after
-  the PDF was saved), the whole PDF is refused and the panel names the pages. Save it
-  again and choose the new file.
+- **Every page is checked before it is attached.** It must show the student's ID, name,
+  score and place as the portal has them, or that email is not sent.
 - **A pasted line that names someone else is held back.** If the line has a name and it
   isn't the student's, that student is not sent to. This is how a mistyped ID shows up.
   The same ID on two lines with different addresses is held back too.
@@ -469,8 +472,9 @@ only the accounts you list can use it.
    no path; add `http://localhost:8000` too if you run the portal locally). **Create**,
    then copy the **Client ID**. It ends in `.apps.googleusercontent.com`. It is not a
    secret, and there is no client secret to keep.
-6. In the portal: **Admin → Setup → Email the reports**, paste the Client ID, and
-   **Connect Google account**.
+6. Put the Client ID in `assets/config.js` as `GOOGLE_CLIENT_ID` and push. The panel then
+   stops asking for it. Until then, paste it into **Admin → Setup → Email the reports**,
+   where this browser remembers it. Then **Connect Google account**.
 
 Google will say **"Google hasn't verified this app."** That is expected for a project
 in Testing: click **Continue** and allow **Send email on your behalf**. The portal asks
@@ -795,10 +799,10 @@ assets/
   store.js              Supabase + demo backends, realtime patching
   scoring.js            pure logic — grading, standings, the clock
   reports.js            score reports, a page per student and per team
-  mailer.js             emailing the reports: page checks, MIME, Gmail
+  mailer.js             emailing the reports: drawing, checks, MIME, Gmail
   csv.js                exports
   styles.css            design system
-  vendor/               supabase-js, pdf.js and pdf-lib, served from here
+  vendor/               supabase-js, pdf-lib and modern-screenshot, served from here
 scorer-card.html        one printed page per scorer, for the day
 supabase/schema.sql     paste into the Supabase SQL editor
 tests/                  unit tests + a two-tab browser test

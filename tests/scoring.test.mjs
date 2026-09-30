@@ -1761,7 +1761,7 @@ test('a printed report never shows an answer, and prints one page per report', (
     gutsByTeam: f.gutsByTeam, key: f.key, cfg });
   for (const [reports, title] of [[students, 'Students'], [teamsR, 'Teams']]) {
     const html = renderReportsDocument(reports, { contestName: 'Cowconuts 2026', title });
-    assert.equal((html.match(/<section class="page">/g) ?? []).length, reports.length);
+    assert.equal((html.match(/<section class="page"/g) ?? []).length, reports.length);
     assert.doesNotMatch(html, /\b(40\d\d|70\d\d|90\d\d|95\d\d)\b/,
       'no key answer and no written answer appears anywhere');
     assert.doesNotMatch(html, /<b>Lovelace<\/b>/, 'a name is text, never markup');
@@ -1946,7 +1946,7 @@ test('reports and their spreadsheets follow the tiebreak', () => {
 // ---------------------------------------------------------------------
 
 import {
-  identifyPage, indexPages, checkPages, parseRecipients, nameFits, planEmails,
+  pageMatches, parseRecipients, nameFits, planEmails,
   fillTemplate, templateFields, encodeHeader, buildMessage, toBase64Url, firstName,
 } from '../assets/mailer.js';
 import { reportFingerprint } from '../assets/reports.js';
@@ -1963,44 +1963,24 @@ function pageText(r) {
     + `SCOR E\n${r.score} / ${r.max}\nP LACE IN D IVISION ${r.division}\n${ord}\nof ${r.of}\n`;
 }
 
-test('a printed page is known by the one student or team it names, and nothing else is', () => {
-  assert.deepEqual(identifyPage('Individual score report\nAda\nA011 Division A Team A01 · Cowbell'),
-    { kind: 'student', id: 'A011' });
-  assert.deepEqual(identifyPage('TEAM SCORE REPORT\nCowbell\nTeam A01 Division A\nA011 Ada 12\nA012 Grace 14'),
-    { kind: 'team', id: 'A01' });
-  assert.equal(identifyPage('Individual score report\nA011 … A012').kind, null, 'two students on one page');
-  assert.equal(identifyPage('✓ 17 62% ✗ 18 67%').kind, null, 'the second half of a report that ran over');
-  const { pageOf, problems } = indexPages([
-    'Individual score report A011', 'Individual score report A012', 'nothing', 'Individual score report A011',
-  ], 'student');
-  assert.deepEqual([...pageOf], [['A011', 0], ['A012', 1]]);
-  assert.equal(problems.length, 2);
-  assert.match(problems[0], /page 3 does not say whose/);
-  assert.match(problems[1], /A011 is on page 1 and again on page 4/);
-});
-
-test('a page is only good while it still shows the portal’s name, score and place', () => {
+test('a drawn page is only sent while it shows that student’s name, score and place', () => {
   const f = reportFixture();
   const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg,
     combined: f.combined, guts: f.guts });
-  const texts = students.map(pageText);
-  const { pageOf } = indexPages(texts, 'student');
-  const fresh = checkPages(students, pageOf, texts);
-  assert.equal(fresh.found.size, students.length);
-  assert.deepEqual(fresh.stale, []);
-  assert.deepEqual(reportFingerprint(students[0]).slice(0, 3), ['A011', 'Ada <b>Lovelace</b>', '15 / 20']);
-
-  // A tiebreak since the PDF was saved: A011 and A012 were both 2nd; the
-  // tiebreak keeps A012 2nd and puts A011 3rd, so only A011's page is wrong.
+  const [ada, grace] = students;
+  assert.deepEqual(reportFingerprint(ada).slice(0, 3), ['A011', 'Ada <b>Lovelace</b>', '15 / 20']);
+  assert.equal(pageMatches(pageText(ada), ada), true);
+  assert.equal(pageMatches(pageText(grace), ada), false, 'another student’s page is refused');
+  // A tiebreak since: A011 and A012 were both 2nd; now A011 is 3rd.
   const moved = individualStandings(f.contestants.map((c) => (c.individual_id === 'A012'
     ? { ...c, tiebreak_rank: 1 } : c)), f.key, cfg);
   const now = studentReports({ individuals: moved, teams: f.teams, key: f.key, cfg });
-  const stale = checkPages(now, pageOf, texts);
-  assert.deepEqual(stale.stale.map((x) => [x.id, x.off]), [['A011', ['3rd of 4']]],
-    'the page that now shows the wrong place is caught');
-  // And somebody disqualified since.
-  const out = now.filter((r) => r.id !== 'B011');
-  assert.deepEqual(checkPages(out, pageOf, texts).extra, ['B011']);
+  assert.equal(pageMatches(pageText(ada), now.find((r) => r.id === 'A011')), false,
+    'a page drawn before the place changed is refused');
+  const teamsR = teamReports({ combined: f.combined, guts: f.guts, individuals: f.individuals,
+    gutsByTeam: f.gutsByTeam, key: f.key, cfg });
+  assert.equal(pageMatches(pageText(teamsR[0]), teamsR[0]), true);
+  assert.equal(pageMatches(pageText(teamsR[1]), teamsR[0]), false);
 });
 
 test('addresses paste from a whole registration row, and a doubtful line is held back', () => {
@@ -2014,6 +1994,7 @@ test('addresses paste from a whole registration row, and a doubtful line is held
     'A022\tNo Address',
     'nobody@example.com',
     'A023 A024 both@example.com',
+    'A014\tout@example.com',
   ].join('\n'));
   assert.deepEqual(byId.get('A011').emails, ['ada@example.com', 'parent@example.com']);
   assert.deepEqual(byId.get('A011').words, ['Ada', 'Lovelace']);
@@ -2027,14 +2008,12 @@ test('addresses paste from a whole registration row, and a doubtful line is held
 
   const f = reportFixture();
   const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg });
-  const studentPages = new Map(students.filter((r) => r.id !== 'B011').map((r, i) => [r.id, i]));
-  const plan = planEmails({ students, studentPages, recipients: byId });
+  const plan = planEmails({ students, recipients: byId });
   assert.deepEqual(plan.ready.map((x) => [x.report.id, x.to.length]), [['A011', 2], ['A012', 1]]);
   assert.deepEqual(plan.held.map((h) => h.id), ['A013', 'A021']);
   assert.match(plan.held[0].why, /Someone Else/);
-  assert.deepEqual(plan.notPrinted, ['B011']);
-  const withTeams = planEmails({ students, studentPages, teamPages: new Map([['A01', 0]]), recipients: byId });
-  assert.deepEqual(withTeams.ready.map((x) => x.teamPage), [0, 0]);
+  assert.deepEqual(plan.noEmail, ['B011']);
+  assert.deepEqual(plan.noReport, ['A014'], 'an address for somebody disqualified gets nothing');
 });
 
 test('the email is well-formed MIME, with its PDFs attached and nothing else', () => {
@@ -2069,4 +2048,24 @@ test('the email is well-formed MIME, with its PDFs attached and nothing else', (
   assert.equal(Buffer.from(raw, 'base64url').toString('latin1'), mime);
   assert.match(buildMessage({ from: 'd@example.com', fromName: 'Contest, Staff', to: ['a@example.com'], subject: 's', body: 'b' }),
     /^From: =\?UTF-8\?B\?[^?]+\?= <d@example\.com>/, 'a name with a comma is encoded, not left to break the header');
+});
+
+test('a student’s page shows how the team did overall and in guts, and no teammate', () => {
+  const f = reportFixture();
+  const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg,
+    combined: f.combined, guts: f.guts });
+  const ada = students.find((r) => r.id === 'A011');
+  const cow = f.combined.find((t) => t.team === 'A01');
+  assert.equal(ada.teamResult.total, cow.total);
+  assert.equal(ada.teamResult.guts, 9);
+  assert.equal(ada.teamResult.gutsPlace, 1, 'Cowbell’s 9 beats Moo Point’s 3 in guts');
+  const html = renderReportsDocument([ada], { contestName: 'Cowconuts 2026' });
+  const page = html.slice(html.indexOf('<section class="page"'));
+  assert.match(page, /Team overall/);
+  assert.match(page, /Guts round/);
+  assert.match(page, new RegExp(`<b>${cow.total}</b>`));
+  assert.match(page, /<b>9<\/b><span class="muted"> \/ /);
+  for (const mate of ['A012', 'A013', 'A014', 'Grace Hopper', 'Emmy Noether', 'Out Early']) {
+    assert.ok(!page.includes(mate), `${mate} appears on Ada's page`);
+  }
 });

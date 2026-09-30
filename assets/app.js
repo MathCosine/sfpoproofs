@@ -2,17 +2,17 @@
 //  Cowconuts 2026 Annual Math Contest — staff portal
 // =====================================================================
 
-import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.30.1';
-import { createStore } from './store.js?v=2026.09.30.1';
-import { toCsv, downloadCsv } from './csv.js?v=2026.09.30.1';
+import { CONFIG, APP_VERSION, resolvedConfig, readOverride, writeOverride } from './config.js?v=2026.09.30.2';
+import { createStore } from './store.js?v=2026.09.30.2';
+import { toCsv, downloadCsv } from './csv.js?v=2026.09.30.2';
 import {
   studentReports, teamReports, pickReports, renderReportsDocument,
   studentReportTable, teamReportTable,
-} from './reports.js?v=2026.09.30.1';
+} from './reports.js?v=2026.09.30.2';
 import {
-  indexPages, checkPages, parseRecipients, planEmails, fillTemplate, templateFields,
-  buildMessage, toBase64Url, openReportsPdf, loadGoogle, connectGoogle, sendGmail, CLIENT_ID_RE,
-} from './mailer.js?v=2026.09.30.1';
+  parseRecipients, planEmails, fillTemplate, templateFields, buildMessage, toBase64Url,
+  createReportRenderer, inlineReportFonts, loadGoogle, connectGoogle, sendGmail, CLIENT_ID_RE,
+} from './mailer.js?v=2026.09.30.2';
 import {
   parseIndividualId, isMemberNumber, teamKey, divisionOfTeam, teamNumberOf,
   parseAnswer, problemsInSet, gutsProblemCount,
@@ -25,7 +25,7 @@ import {
   combinedStandings, splitByDivision, dqTeams, liveClaims, claimRef,
   gutsRemaining, shouldFreeze, formatClock, individualMaxPoints, gutsMaxPoints,
   individualRankKey, hasTiebreak, parseTiebreakList, matchTiebreakList, tiebreakDisagreements,
-} from './scoring.js?v=2026.09.30.1';
+} from './scoring.js?v=2026.09.30.2';
 
 // Every import above resolved, so the script is running; the fallback in
 // index.html that reports a page too half-updated to start stands down.
@@ -453,7 +453,10 @@ async function saveSheet() {
     await store.saveContestant(row);
     const result = scoreSheet(values, derived.key, cfg, division);
     toast(`${current.id} saved · ${result.correct}/${cfg.INDIVIDUAL_PROBLEMS} · ${result.score} pts`);
-    await releaseHeld();
+    // clearSheet lets go of the sheet itself, without waiting on it. Waiting
+    // here cleared the form only once the release came back -- and a scorer
+    // already typing the next ID by then had it wiped, so their next Save
+    // saved nothing.
     clearSheet({ keepTeam: true });
     applyWrite([['contestants', row]]);
   } catch (err) {
@@ -613,7 +616,9 @@ async function saveGutsSet() {
       await store.setTeam(current.team, { division: current.division });
     }
     toast(`Team ${current.team} set ${current.set} saved.`);
-    await releaseHeld();
+    // Not awaited, for the same reason as a saved sheet: the next set's
+    // answers may already be going in.
+    releaseHeld();
     $('#gutsTeamName').dataset.dirty = '';
     const next = current.set < cfg.GUTS_SETS ? current.set + 1 : current.set;
     $('#gutsSet').value = String(next);
@@ -2149,9 +2154,9 @@ async function applyTiebreaks() {
 // Email the reports
 // ---------------------------------------------------------------------
 
-// Remembered in this browser only: the Google client ID (not a secret),
-// the sender name and the message, and which IDs this browser has already
-// sent to -- IDs and times, never an address.
+// Remembered in this browser only: the Google client ID when it is not
+// built in (not a secret), the sender name and the message, and which
+// IDs this browser has already sent to -- IDs and times, never an address.
 const MAIL_PREFS = 'contest-mail-prefs';
 const MAIL_SENT = 'contest-mail-sent';
 const MAIL_GAP_MS = 1100;
@@ -2159,8 +2164,6 @@ const MAIL_RETRY_MS = 20000;
 
 const mail = {
   google: null, // { token, expiresAt, email } for the hour Google allows
-  students: null, // the student PDF: { name, texts, page(), pageOf, problems }
-  teams: null,
   sending: false,
   stop: false,
   log: [],
@@ -2173,6 +2176,9 @@ const writeJson = (key, value) => {
   try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private window: fine */ }
 };
 const contestName = () => data.state?.contest_name ?? cfg.CONTEST_NAME;
+const fileSlug = () => contestName().split(/\s+/).slice(0, 2).join('-').replace(/[^A-Za-z0-9-]/g, '') || 'contest';
+const builtInClientId = () => (CLIENT_ID_RE.test(cfg.GOOGLE_CLIENT_ID ?? '') ? cfg.GOOGLE_CLIENT_ID : '');
+const googleClientId = () => builtInClientId() || $('#mailClientId').value.trim();
 
 function mailDefaults() {
   return {
@@ -2194,7 +2200,9 @@ function fillMailInputs() {
     ['#mailSubject', 'subject'], ['#mailBody', 'body']]) {
     $(id).value = prefs[keyName];
   }
-  if (CLIENT_ID_RE.test(prefs.clientId)) loadGoogle().catch(() => {});
+  // Built into config.js, the client ID is not asked for at all.
+  $('#mailClientIdField').classList.toggle('hidden', Boolean(builtInClientId()));
+  if (CLIENT_ID_RE.test(googleClientId())) loadGoogle().catch(() => {});
 }
 
 function saveMailPrefs() {
@@ -2206,44 +2214,19 @@ function saveMailPrefs() {
   });
 }
 
-function allReports(kind) {
-  return kind === 'student'
-    ? studentReports({
-      individuals: derived.individuals, teams: data.teams, key: derived.key, cfg,
-      combined: derived.combined, guts: derived.guts,
-    })
-    : teamReports({
-      combined: derived.combined, guts: derived.guts, individuals: derived.individuals,
-      gutsByTeam: derived.gutsByTeam, key: derived.key, cfg,
-    });
-}
+const studentReportsNow = () => studentReports({
+  individuals: derived.individuals, teams: data.teams, key: derived.key, cfg,
+  combined: derived.combined, guts: derived.guts,
+});
 
 /**
- * Everything the panel knows, worked out afresh: the PDFs checked against
- * the scores as they are now, the addresses matched to the students, and
- * who would be sent to by the Send button.
+ * Everything the panel knows, worked out afresh: the addresses matched to
+ * the students, and who the Send button would email.
  */
 function mailPlan() {
-  if (!mail.students) return null;
-  const students = allReports('student');
-  const studentCheck = checkPages(students, mail.students.pageOf, mail.students.texts);
-  const teamCheck = mail.teams
-    ? checkPages(allReports('team'), mail.teams.pageOf, mail.teams.texts) : null;
-  const blockers = [];
-  for (const [label, file, check] of [['Student', mail.students, studentCheck], ['Team', mail.teams, teamCheck]]) {
-    if (!file) continue;
-    const lines = [
-      ...file.problems,
-      ...check.stale.map((x) => `${x.id} on page ${x.page} no longer shows “${x.off.join('”, “')}”`),
-      ...check.extra.map((id) => `${id} is in the PDF but no longer gets a report`),
-    ];
-    if (lines.length) blockers.push({ label, file: file.name, lines });
-  }
+  const students = studentReportsNow();
   const recipients = parseRecipients($('#mailRecipients').value);
-  const plan = planEmails({
-    students, studentPages: studentCheck.found,
-    teamPages: teamCheck ? teamCheck.found : null, recipients: recipients.byId,
-  });
+  const plan = planEmails({ students, recipients: recipients.byId });
   const wanted = $('#mailOnly').value.toUpperCase().split(/[^A-Z0-9]+/).filter(Boolean);
   const sent = readJson(MAIL_SENT, {});
   const resend = $('#mailResend').checked;
@@ -2251,40 +2234,45 @@ function mailPlan() {
     || wanted.includes(item.report.id) || wanted.includes(String(item.report.team)));
   const toSend = chosen.filter((item) => resend || !sent[item.report.id]);
   return {
-    ...plan, students, studentCheck, teamCheck, blockers, sent, chosen, toSend,
+    ...plan, students, chosen, toSend,
     recipientProblems: recipients.problems, hasRecipients: recipients.byId.size > 0,
   };
 }
 
-async function composeEmail(item, { test = false } = {}) {
+/**
+ * The reports laid out for drawing, from the same standings as `plan`, so
+ * the page drawn for a student is the report the plan has for them.
+ */
+function prepareDrawing(plan) {
+  return inlineReportFonts().then((fontCss) => createReportRenderer(renderReportsDocument(plan.students, {
+    contestName: contestName(), title: 'Student score reports',
+  }), { fontCss }));
+}
+
+async function attachmentsFor(item, drawing) {
   const r = item.report;
-  const contest = contestName();
-  const slug = contest.split(/\s+/).slice(0, 2).join('-').replace(/[^A-Za-z0-9-]/g, '') || 'contest';
-  const fields = { ...templateFields(r, contest) };
+  return [{
+    filename: `${fileSlug()}-score-report-${r.id}.pdf`,
+    bytes: await drawing.pdf(r, `${contestName()} score report: ${r.name || r.id}`),
+  }];
+}
+
+async function composeEmail(item, drawing, { test = false } = {}) {
+  const r = item.report;
+  const fields = templateFields(r, contestName());
   const subject = fillTemplate($('#mailSubject').value, fields);
   const body = fillTemplate($('#mailBody').value, fields);
-  const attachments = [{
-    filename: `${slug}-score-report-${r.id}.pdf`,
-    bytes: await mail.students.page(item.page, `${contest} score report: ${r.name || r.id}`),
-  }];
-  if (item.teamPage != null) {
-    attachments.push({
-      filename: `${slug}-team-report-${r.team}.pdf`,
-      bytes: await mail.teams.page(item.teamPage, `${contest} team score report: ${r.teamName || r.team}`),
-    });
-  }
-  const to = test ? [mail.google.email] : item.to;
   const message = buildMessage({
     from: mail.google?.email ?? '',
     fromName: $('#mailFromName').value.trim(),
-    to,
+    to: test ? [mail.google.email] : item.to,
     subject: test ? `[Test] ${subject}` : subject,
     body: test
       ? `(A test, sent only to you. This is what ${item.to.join(', ')} will get for ${r.id} ${r.name}.)\n\n${body}`
       : body,
-    attachments,
+    attachments: await attachmentsFor(item, drawing),
   });
-  return { raw: toBase64Url(message), to, subject, body, attachments };
+  return toBase64Url(message);
 }
 
 function renderMailPreview(plan) {
@@ -2296,23 +2284,21 @@ function renderMailPreview(plan) {
   const fields = templateFields(r, contestName());
   const box = el('div', 'mail-preview');
   const meta = el('dl', 'mail-preview__meta');
-  const slug = contestName().split(/\s+/).slice(0, 2).join('-').replace(/[^A-Za-z0-9-]/g, '') || 'contest';
-  const files = [`${slug}-score-report-${r.id}.pdf`,
-    ...(item.teamPage != null ? [`${slug}-team-report-${r.team}.pdf`] : [])];
+  const files = [`${fileSlug()}-score-report-${r.id}.pdf`];
   for (const [k, v] of [
     ['From', `${$('#mailFromName').value.trim()}${mail.google?.email ? ` <${mail.google.email}>` : ''}`],
     ['To', item.to.join(', ')],
     ['Subject', fillTemplate($('#mailSubject').value, fields)],
     ['Attached', files.join(', ')],
   ]) meta.append(el('dt', null, k), el('dd', null, v));
-  box.append(el('b', null, `Preview — ${r.id} ${r.name}`), meta,
-    el('pre', 'mail-preview__body', fillTemplate($('#mailBody').value, fields)));
-  box.firstChild.style.cssText = 'display:block;margin-bottom:8px';
+  const title = el('b', null, `Preview — ${r.id} ${r.name}`);
+  title.style.cssText = 'display:block;margin-bottom:8px';
+  box.append(title, meta, el('pre', 'mail-preview__body', fillTemplate($('#mailBody').value, fields)));
   host.appendChild(box);
 }
 
 function renderMail() {
-  if (!$('#mailState') || mail.sending) return;
+  if (!$('#mailState') || mail.sending || activeTab !== 'setup') return;
   const connected = mail.google && mail.google.expiresAt > Date.now();
   $('#mailAccount').textContent = connected
     ? `Connected as ${mail.google.email || 'your Google account'} (for about `
@@ -2320,27 +2306,12 @@ function renderMail() {
     : mail.google ? 'The Google sign-in has expired. Connect again.' : 'Not connected.';
   $('#mailConnect').textContent = connected ? 'Connect a different account' : 'Connect Google account';
 
-  const plan = mailPlan();
-  const pdfHost = $('#mailPdfState');
-  pdfHost.replaceChildren();
-  if (plan) {
-    for (const b of plan.blockers) {
-      pdfHost.appendChild(listNotice(`${b.label} PDF (${b.file}) cannot be sent from — `
-        + 'save the reports as a PDF again and choose the new file', b.lines, 'error'));
-    }
-    if (!plan.blockers.length) {
-      const note = (label, file, check) => listNotice(`${label} PDF: ${file.texts.length} page`
-        + `${file.texts.length === 1 ? '' : 's'}, each one checked against the portal`
-        + `${check.missing.length ? ` · ${check.missing.length} not in it, so not sent` : ''}`,
-      check.missing.slice(0, 40), 'ok');
-      pdfHost.appendChild(note('Student', mail.students, plan.studentCheck));
-      if (mail.teams) pdfHost.appendChild(note('Team', mail.teams, plan.teamCheck));
-    }
-  }
-
+  // Worked out only once there is something pasted: it builds every report.
+  const pasted = $('#mailRecipients').value.trim();
+  const plan = pasted ? mailPlan() : null;
   const recHost = $('#mailRecipientState');
   recHost.replaceChildren();
-  if (plan?.hasRecipients || plan?.recipientProblems.length) {
+  if (plan) {
     const bits = [`${plan.ready.length} ready`];
     if (plan.held.length) bits.push(`${plan.held.length} held back`);
     if (plan.noEmail.length) bits.push(`${plan.noEmail.length} with no email`);
@@ -2357,22 +2328,18 @@ function renderMail() {
     if (plan.recipientProblems.length) {
       recHost.appendChild(listNotice('Lines not used', plan.recipientProblems));
     }
-  } else if (mail.students && !$('#mailRecipients').value.trim()) {
-    // Nothing pasted yet: say nothing more.
   }
 
   renderMailPreview(plan);
 
-  const n = plan && !plan.blockers.length ? plan.toSend.length : 0;
+  const n = plan ? plan.toSend.length : 0;
   const already = plan ? plan.chosen.length - plan.toSend.length : 0;
   if ($('#mailSend').dataset.armed !== '1') {
     $('#mailSend').textContent = n ? `Send to ${n} student${n === 1 ? '' : 's'}` : 'Send';
   }
   $('#mailSend').disabled = !connected || !n;
-  $('#mailTest').disabled = !connected || !mail.google?.email || !plan || plan.blockers.length > 0
-    || !(plan.toSend[0] ?? plan.chosen[0]);
-  $('#mailState').textContent = !connected ? 'not connected'
-    : !plan ? 'connected' : `${n} to send`;
+  $('#mailTest').disabled = !connected || !mail.google?.email || !(plan?.toSend[0] ?? plan?.chosen[0]);
+  $('#mailState').textContent = !connected ? 'not connected' : !plan ? 'connected' : `${n} to send`;
   if (!mail.log.length) {
     $('#mailProgress').textContent = already
       ? `${already} already sent from this browser ${already === 1 ? 'is' : 'are'} skipped.` : '';
@@ -2392,8 +2359,8 @@ function renderMailLog() {
 
 const pause = (ms) => new Promise((r) => { setTimeout(r, ms); });
 
-async function sendMailItem(item, { test = false } = {}) {
-  const { raw } = await composeEmail(item, { test });
+async function sendMailItem(item, drawing, { test = false } = {}) {
+  const raw = await composeEmail(item, drawing, { test });
   for (let attempt = 0; ; attempt += 1) {
     try {
       return await sendGmail(mail.google.token, raw);
@@ -2406,35 +2373,72 @@ async function sendMailItem(item, { test = false } = {}) {
 
 async function sendMailTest() {
   const plan = mailPlan();
-  const item = plan?.toSend[0] ?? plan?.chosen[0];
+  const item = plan.toSend[0] ?? plan.chosen[0];
   if (!item || !mail.google?.email) return;
   const button = $('#mailTest');
   button.disabled = true;
+  $('#mailProgress').textContent = 'Drawing the report…';
+  let drawing = null;
   try {
-    await sendMailItem(item, { test: true });
+    drawing = await prepareDrawing(plan);
+    await sendMailItem(item, drawing, { test: true });
     toast(`Test sent to ${mail.google.email}: ${item.report.id}'s email, exactly as it will go.`, 'ok');
   } catch (err) {
     toast(err.message, 'error');
   } finally {
+    drawing?.destroy();
+    $('#mailProgress').textContent = '';
     button.disabled = false;
     renderMail();
   }
 }
 
+/** The first student's attachment, opened in a new tab to look at. */
+async function showMailSample() {
+  const plan = mailPlan();
+  const item = plan.toSend[0] ?? plan.chosen[0] ?? plan.ready[0]
+    ?? (plan.students[0] && { report: plan.students[0], to: [] });
+  if (!item) { toast('There are no reports to draw yet.', 'error'); return; }
+  // Opened now, inside the click, or the browser calls it a pop-up.
+  const tab = window.open('', '_blank');
+  if (!tab) { toast('The browser blocked the new tab. Allow pop-ups for this site.', 'error'); return; }
+  const button = $('#mailSample');
+  button.disabled = true;
+  let drawing = null;
+  try {
+    drawing = await prepareDrawing(plan);
+    const [file] = await attachmentsFor(item, drawing);
+    tab.location = URL.createObjectURL(new Blob([file.bytes], { type: 'application/pdf' }));
+  } catch (err) {
+    tab.close();
+    toast(err.message, 'error');
+  } finally {
+    drawing?.destroy();
+    button.disabled = false;
+  }
+}
+
 async function sendMailAll() {
   const plan = mailPlan();
-  if (!plan || plan.blockers.length || !plan.toSend.length) return;
+  if (!plan.toSend.length) return;
   const items = plan.toSend;
   mail.sending = true;
   mail.stop = false;
   mail.log = [];
-  for (const b of ['#mailSend', '#mailTest', '#mailConnect']) $(b).disabled = true;
+  for (const b of ['#mailSend', '#mailTest', '#mailConnect', '#mailSample']) $(b).disabled = true;
   $('#mailStop').classList.remove('hidden');
   $('#mailState').textContent = 'sending';
+  $('#mailProgress').textContent = 'Laying out the reports…';
   let sentCount = 0;
   let failed = 0;
   let halted = '';
-  for (const [i, item] of items.entries()) {
+  let drawing = null;
+  try {
+    drawing = await prepareDrawing(plan);
+  } catch (err) {
+    halted = `The reports could not be drawn: ${err.message}`;
+  }
+  for (const [i, item] of (drawing ? items : []).entries()) {
     if (mail.stop) { halted = 'Stopped. Send again to carry on with the rest.'; break; }
     if (mail.google.expiresAt - Date.now() < 30000) {
       halted = 'The Google sign-in ran out. Connect again, then Send carries on with the rest.';
@@ -2444,7 +2448,7 @@ async function sendMailAll() {
     mail.log.unshift(row);
     renderMailLog();
     try {
-      await sendMailItem(item);
+      await sendMailItem(item, drawing);
       sentCount += 1;
       row.result = 'sent';
       const sent = readJson(MAIL_SENT, {});
@@ -2467,30 +2471,14 @@ async function sendMailAll() {
     if (halted) break;
     if (i < items.length - 1) await pause(MAIL_GAP_MS);
   }
+  drawing?.destroy();
   mail.sending = false;
   $('#mailStop').classList.add('hidden');
-  $('#mailConnect').disabled = false;
+  for (const b of ['#mailConnect', '#mailSample']) $(b).disabled = false;
   $('#mailProgress').textContent = `${sentCount} sent${failed ? ` · ${failed} failed` : ''}`
     + ` of ${items.length}.${halted ? ` ${halted}` : ''}`;
   toast(halted || `Done: ${sentCount} email${sentCount === 1 ? '' : 's'} sent`
     + `${failed ? `, ${failed} failed — see the list` : ''}.`, halted || failed ? 'error' : 'ok');
-  renderMail();
-}
-
-async function loadMailPdf(kind, input) {
-  const file = input.files?.[0];
-  mail[kind] = null;
-  const host = $('#mailPdfState');
-  if (!file) { renderMail(); return; }
-  host.replaceChildren(listNotice(`Reading ${file.name}…`, [], 'info'));
-  try {
-    const pdf = await openReportsPdf(file);
-    const { pageOf, problems } = indexPages(pdf.texts, kind === 'students' ? 'student' : 'team');
-    mail[kind] = { ...pdf, pageOf, problems };
-  } catch (err) {
-    input.value = '';
-    toast(err.message || 'That PDF could not be read.', 'error');
-  }
   renderMail();
 }
 
@@ -2500,14 +2488,12 @@ function wireMail() {
     $(id).addEventListener('input', () => { saveMailPrefs(); renderMail(); });
   }
   $('#mailClientId').addEventListener('change', () => {
-    if (CLIENT_ID_RE.test($('#mailClientId').value.trim())) loadGoogle().catch(() => {});
+    if (CLIENT_ID_RE.test(googleClientId())) loadGoogle().catch(() => {});
   });
   for (const id of ['#mailRecipients', '#mailOnly']) $(id).addEventListener('input', renderMail);
   $('#mailResend').addEventListener('change', renderMail);
-  $('#mailStudentPdf').addEventListener('change', (e) => loadMailPdf('students', e.target));
-  $('#mailTeamPdf').addEventListener('change', (e) => loadMailPdf('teams', e.target));
   $('#mailConnect').addEventListener('click', async () => {
-    const clientId = $('#mailClientId').value.trim();
+    const clientId = googleClientId();
     if (!CLIENT_ID_RE.test(clientId)) {
       toast('Paste the OAuth client ID first. It ends in .apps.googleusercontent.com.', 'error');
       return;
@@ -2522,12 +2508,13 @@ function wireMail() {
     }
     renderMail();
   });
+  $('#mailSample').addEventListener('click', showMailSample);
   $('#mailTest').addEventListener('click', sendMailTest);
   $('#mailSend').addEventListener('click', () => {
     const button = $('#mailSend');
     if (button.dataset.armed !== '1') {
       button.dataset.armed = '1';
-      const n = mailPlan()?.toSend.length ?? 0;
+      const n = mailPlan().toSend.length;
       button.textContent = `Click again to email ${n} student${n === 1 ? '' : 's'}`;
       setTimeout(() => { if (button.dataset.armed === '1') { button.dataset.armed = ''; renderMail(); } }, 5000);
       return;

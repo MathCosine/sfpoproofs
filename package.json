@@ -13,6 +13,7 @@
   },
   "devDependencies": {
     "@supabase/supabase-js": "2.45.4",
+    "modern-screenshot": "4.7.0",
     "pdf-lib": "1.17.1",
     "pdfjs-dist": "4.10.38",
     "playwright": "^1.47.2",

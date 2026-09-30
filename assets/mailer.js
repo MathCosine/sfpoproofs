@@ -1,12 +1,12 @@
 // =====================================================================
 //  Emailing the score reports, from a Google account connected here.
 //
-//  The reports are saved once as a PDF from the report tab -- the very
-//  pages that print -- and dropped back in. Every page is read, and a
-//  page is only ever sent if it says whose it is and still shows the
-//  portal's numbers for them. A page for the wrong student, or a PDF saved
-//  before a score or a tiebreak changed, stops the whole send: a report
-//  that reaches the wrong family cannot be called back.
+//  Each report is drawn here, one at a time as it is sent: the reports
+//  are laid out in a hidden frame -- the very document the print tab
+//  shows -- and the student's page is photographed at print resolution
+//  and set on a Letter page of its own. Before a page is photographed,
+//  its words are checked against the student it is for: a report that
+//  reaches the wrong family cannot be called back.
 //
 //  Nothing leaves this browser tab except the emails themselves. The
 //  Google sign-in lasts an hour and is never saved; the addresses are
@@ -15,82 +15,21 @@
 //  instead of sending everyone a copy again.
 // =====================================================================
 
-import { parseIndividualId, nameKey } from './scoring.js?v=2026.09.30.1';
-import { reportFingerprint } from './reports.js?v=2026.09.30.1';
-
-// ---------------------------------------------------------------------
-// Reading the saved PDF
-// ---------------------------------------------------------------------
+import { parseIndividualId, nameKey } from './scoring.js?v=2026.09.30.2';
+import { reportFingerprint, REPORT_FONTS_URL } from './reports.js?v=2026.09.30.2';
 
 /** Text as compared: spacing, case and letter-spacing gaps ignored. */
 const squash = (s) => String(s ?? '').normalize('NFC').replace(/\s+/g, '').toLowerCase();
 
-const STUDENT_ID_RE = /(?<![A-Za-z0-9])[AB](?:0[1-9]|[1-9]\d)[1-9](?![0-9])/g;
-const TEAM_KEY_RE = /Team\s*([AB](?:0[1-9]|[1-9]\d))(?![0-9])/g;
-
-/**
- * Whose report one page of the PDF is, from its text: a student page
- * names one contestant ID, a team page one team. Anything else -- a
- * blank page, half of a report that ran onto a second sheet, a page that
- * names two people -- is nobody's, and is never sent.
- */
-export function identifyPage(text) {
-  const flat = squash(text);
-  const student = flat.includes('individualscorereport');
-  const team = flat.includes('teamscorereport');
-  if (student === team) return { kind: null };
-  const ids = student
-    ? [...new Set(String(text).match(STUDENT_ID_RE) ?? [])]
-    : [...new Set([...String(text).matchAll(TEAM_KEY_RE)].map((m) => m[1]))];
-  return ids.length === 1 ? { kind: student ? 'student' : 'team', id: ids[0] } : { kind: null, ids };
-}
-
-/** Which page each report is on, and every page that is nobody's. */
-export function indexPages(texts, kind) {
-  const pageOf = new Map();
-  const problems = [];
-  texts.forEach((text, i) => {
-    const page = identifyPage(text);
-    if (page.kind !== kind) {
-      problems.push(page.kind
-        ? `page ${i + 1} is a ${page.kind} report, not a ${kind} one`
-        : page.ids?.length > 1
-          ? `page ${i + 1} names ${page.ids.join(' and ')}`
-          : `page ${i + 1} does not say whose report it is — did a report run onto a second page?`);
-      return;
-    }
-    if (pageOf.has(page.id)) {
-      problems.push(`${page.id} is on page ${pageOf.get(page.id) + 1} and again on page ${i + 1}`);
-      return;
-    }
-    pageOf.set(page.id, i);
-  });
-  return { pageOf, problems };
-}
-
 const reportKey = (r) => (r.kind === 'team' ? r.team : r.id);
 
 /**
- * The pages checked against the reports as the portal would print them
- * now. `stale` is a page whose name, score or place is no longer right;
- * `extra` is a page for somebody who no longer gets a report at all.
- * Either means the PDF is out of date.
+ * Whether a drawn page says what this report says: who it is for, the
+ * score and the place. Checked on every page before it is sent.
  */
-export function checkPages(reports, pageOf, texts) {
-  const found = new Map();
-  const stale = [];
-  const missing = [];
-  for (const r of reports) {
-    const at = pageOf.get(reportKey(r));
-    if (at == null) { missing.push(reportKey(r)); continue; }
-    const flat = squash(texts[at]);
-    const off = reportFingerprint(r).filter((f) => !flat.includes(squash(f)));
-    if (off.length) stale.push({ id: reportKey(r), page: at + 1, off });
-    else found.set(reportKey(r), at);
-  }
-  const current = new Set(reports.map(reportKey));
-  const extra = [...pageOf.keys()].filter((k) => !current.has(k));
-  return { found, stale, missing, extra };
+export function pageMatches(text, report) {
+  const flat = squash(text);
+  return reportFingerprint(report).every((f) => flat.includes(squash(f)));
 }
 
 // ---------------------------------------------------------------------
@@ -151,19 +90,14 @@ export function nameFits(name, words) {
 }
 
 /**
- * Who gets what. `studentPages` and `teamPages` are the checked pages
- * (report key -> page index); `teamPages` is null when no team PDF is
- * attached. A student is held back rather than sent whenever there is
- * any doubt about the address.
+ * Who gets an email. A student is held back rather than sent whenever
+ * there is any doubt about the address.
  */
-export function planEmails({ students, studentPages, teamPages = null, recipients }) {
+export function planEmails({ students, recipients }) {
   const ready = [];
   const held = [];
   const noEmail = [];
-  const notPrinted = [];
   for (const r of students) {
-    const page = studentPages.get(r.id);
-    if (page == null) { notPrinted.push(r.id); continue; }
     const rec = recipients.get(r.id);
     if (!rec) { noEmail.push(r.id); continue; }
     if (rec.conflict) { held.push({ id: r.id, why: 'on two lines with different emails' }); continue; }
@@ -171,16 +105,11 @@ export function planEmails({ students, studentPages, teamPages = null, recipient
       held.push({ id: r.id, why: `the line says “${rec.words.join(' ')}”, the portal has “${r.name}”` });
       continue;
     }
-    const teamPage = teamPages ? teamPages.get(String(r.team)) : null;
-    if (teamPages && teamPage == null) {
-      held.push({ id: r.id, why: `no page for team ${r.team} in the team PDF` });
-      continue;
-    }
-    ready.push({ report: r, to: rec.emails, page, teamPage });
+    ready.push({ report: r, to: rec.emails });
   }
   const known = new Set(students.map((r) => r.id));
   const noReport = [...recipients.keys()].filter((id) => !known.has(id));
-  return { ready, held, noEmail, notPrinted, noReport };
+  return { ready, held, noEmail, noReport };
 }
 
 // ---------------------------------------------------------------------
@@ -282,52 +211,152 @@ export const toBase64Url = (ascii) => btoa(ascii).replace(/\+/g, '-').replace(/\
 // In the browser: the PDF tools, Google sign-in, and Gmail
 // ---------------------------------------------------------------------
 
-// Vendored, and only fetched once somebody opens a PDF here.
-const PDFJS = new URL('./vendor/pdfjs-4.10.38/pdf.min.js', import.meta.url).href;
-const PDFJS_WORKER = new URL('./vendor/pdfjs-4.10.38/pdf.worker.min.js', import.meta.url).href;
+// Vendored, and only fetched once a send starts.
+const SNAPSHOT = new URL('./vendor/modern-screenshot-4.7.0/modern-screenshot.js', import.meta.url).href;
 const PDFLIB = new URL('./vendor/pdf-lib-1.17.1/pdf-lib.esm.min.js', import.meta.url).href;
 
+const LETTER = [612, 792]; // points
+const PX_TO_PT = 72 / 96;
+const pause = (ms) => new Promise((r) => { setTimeout(r, ms); });
+
+let inlinedFonts = null;
 /**
- * A saved reports PDF: the text of every page, to work out whose each
- * one is, and a way to lift any single page out as a PDF of its own.
+ * The report's fonts as CSS with the font files written into it. A page
+ * is drawn by the browser from a self-contained picture of it, which
+ * cannot fetch anything, so the fonts have to travel inside. Latin
+ * subsets only: that is every name on the roster. Resolves to '' when
+ * Google Fonts cannot be reached, and the reports are drawn in the
+ * system font instead -- laid out in it too, so nothing wraps.
  */
-export async function openReportsPdf(file) {
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  const pdfjs = await import(PDFJS);
-  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-  let doc;
-  try {
-    doc = await pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise;
-  } catch {
-    throw new Error(`${file.name} could not be read as a PDF.`);
-  }
-  const texts = [];
-  for (let i = 1; i <= doc.numPages; i += 1) {
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    texts.push(content.items.map((it) => (it.str ?? '') + (it.hasEOL ? '\n' : '')).join(''));
-    page.cleanup();
-  }
-  await doc.destroy();
-  const { PDFDocument } = await import(PDFLIB);
-  const source = await PDFDocument.load(bytes);
-  const pages = new Map();
-  return {
-    name: file.name,
-    texts,
-    page(index, title) {
-      if (!pages.has(index)) {
-        pages.set(index, (async () => {
-          const out = await PDFDocument.create();
-          const [copy] = await out.copyPages(source, [index]);
-          out.addPage(copy);
-          out.setTitle(title);
-          out.setCreator('Contest staff portal');
-          return out.save();
-        })());
+export function inlineReportFonts() {
+  inlinedFonts ??= (async () => {
+    const res = await fetch(REPORT_FONTS_URL);
+    if (!res.ok) throw new Error(`fonts ${res.status}`);
+    const css = await res.text();
+    const rules = [...css.matchAll(/(?:\/\*\s*([\w-]+)\s*\*\/\s*)?(@font-face\s*\{[^}]*\})/g)]
+      .filter((m) => !m[1] || /^latin(-ext)?$/.test(m[1]))
+      .map((m) => m[2]);
+    if (!rules.length) throw new Error('no fonts');
+    // A variable font comes back once per weight, all naming one file: one
+    // rule spanning the weights instead, so the file travels once.
+    const prop = (rule, name) => new RegExp(`${name}\\s*:\\s*([^;}]+)`).exec(rule)?.[1].trim() ?? '';
+    const groups = new Map();
+    for (const rule of rules) {
+      const key = ['font-family', 'font-style', 'src', 'unicode-range'].map((n) => prop(rule, n)).join('|');
+      const weights = prop(rule, 'font-weight').split(/\s+/).map(Number).filter(Number.isFinite);
+      const group = groups.get(key);
+      if (group) group.weights.push(...weights);
+      else groups.set(key, { rule, weights });
+    }
+    const files = new Map();
+    const dataUrl = (url) => {
+      if (!files.has(url)) {
+        files.set(url, fetch(url).then(async (font) => {
+          if (!font.ok) throw new Error(`font ${font.status}`);
+          const type = font.headers.get('content-type') || 'font/woff2';
+          return `data:${type};base64,${bytesToBase64(new Uint8Array(await font.arrayBuffer()))}`;
+        }));
       }
-      return pages.get(index);
+      return files.get(url);
+    };
+    const inlined = await Promise.all([...groups.values()].map(async ({ rule, weights }) => {
+      let out = weights.length
+        ? rule.replace(/font-weight\s*:\s*[^;}]+/, `font-weight: ${Math.min(...weights)} ${Math.max(...weights)}`)
+        : rule;
+      for (const [whole, , url] of rule.matchAll(/url\((['"]?)([^)'"]+)\1\)/g)) {
+        out = out.replace(whole, `url(${await dataUrl(url)})`);
+      }
+      return out;
+    }));
+    return inlined.join('\n');
+  })().catch(() => { inlinedFonts = null; return ''; });
+  return inlinedFonts;
+}
+
+/**
+ * Report pages drawn in this browser as PDFs of their own. `html` is the
+ * document the print tab would show, holding every report of one kind;
+ * it is laid out once in a hidden frame, fonts and all, and each page is
+ * then photographed on demand at print resolution. The page's words are
+ * laid invisibly over the picture, so the PDF can still be searched.
+ */
+export async function createReportRenderer(html, { scale = 2.5, quality = 0.9, fontCss = '' } = {}) {
+  // Laid out in exactly the fonts the picture will carry: the inlined ones,
+  // or none. A page laid out in one font and drawn in another wraps.
+  const source = html
+    .replace(/<link[^>]*fonts\.(googleapis|gstatic)\.com[^>]*>/g, '')
+    .replace('</head>', () => `<style>${fontCss}</style></head>`);
+  const frame = document.createElement('iframe');
+  frame.setAttribute('aria-hidden', 'true');
+  frame.tabIndex = -1;
+  frame.style.cssText = 'position:fixed;left:-12000px;top:0;width:1000px;height:1200px;'
+    + 'border:0;opacity:0;pointer-events:none';
+  const loaded = new Promise((resolve) => { frame.addEventListener('load', resolve, { once: true }); });
+  frame.srcdoc = source;
+  document.body.appendChild(frame);
+  await loaded;
+  const doc = frame.contentDocument;
+  // Drawn as a sheet of paper, not as a card on the grey desk the print
+  // tab shows: no shadow, and white wherever an edge rounds to a pixel.
+  const flat = doc.createElement('style');
+  flat.textContent = 'html,body{background:#fff!important;padding:0!important}'
+    + '.page{box-shadow:none!important;margin:0!important}.bar-tools{display:none!important}';
+  doc.head.appendChild(flat);
+  // The fonts, then the report's own fitting of any page that runs long.
+  if (doc.fonts) {
+    await Promise.race([Promise.all([...doc.fonts].map((f) => f.load().catch(() => {}))), pause(5000)]);
+    await Promise.race([doc.fonts.ready, pause(5000)]);
+  }
+  frame.contentWindow.fit?.();
+  const [{ domToJpeg }, { PDFDocument, StandardFonts }] = await Promise.all([import(SNAPSHOT), import(PDFLIB)]);
+  const made = new Map();
+
+  async function draw(report, title) {
+    const key = reportKey(report);
+    const page = [...doc.querySelectorAll('section.page')].find((p) => p.dataset.report === key);
+    if (!page) throw new Error(`There is no report page for ${key}.`);
+    const words = page.innerText;
+    if (!pageMatches(words, report)) {
+      throw new Error(`The page drawn for ${key} does not show their current name, score and place.`);
+    }
+    const jpeg = await domToJpeg(page, {
+      scale, quality, backgroundColor: '#ffffff', font: fontCss ? { cssText: fontCss } : false,
+    });
+    const pdf = await PDFDocument.create();
+    const image = await pdf.embedJpg(jpeg);
+    const sheet = pdf.addPage(LETTER);
+    const width = page.offsetWidth * PX_TO_PT;
+    const height = page.offsetHeight * PX_TO_PT;
+    const ratio = Math.min(1, LETTER[0] / width, LETTER[1] / height);
+    const w = width * ratio;
+    const h = height * ratio;
+    sheet.drawImage(image, { x: (LETTER[0] - w) / 2, y: (LETTER[1] - h) / 2, width: w, height: h });
+    // The words, invisible, so the PDF can be searched and read aloud.
+    const font = await pdf.embedFont(StandardFonts.Helvetica);
+    const printable = (line) => [...line].map((ch) => {
+      try { font.encodeText(ch); return ch; } catch { return ' '; }
+    }).join('');
+    const lines = words.split(/\n+/).map((l) => printable(l.trim())).filter(Boolean);
+    const step = Math.min(9, (LETTER[1] - 72) / Math.max(1, lines.length));
+    lines.forEach((line, i) => {
+      sheet.drawText(line, { x: 36, y: LETTER[1] - 36 - i * step, size: Math.min(7, step), font, opacity: 0 });
+    });
+    pdf.setTitle(title);
+    pdf.setCreator('Contest staff portal');
+    pdf.setProducer('Contest staff portal');
+    return pdf.save();
+  }
+
+  return {
+    /** The report as a one-page PDF, drawn once and then reused. */
+    pdf(report, title) {
+      const key = reportKey(report);
+      if (!made.has(key)) {
+        made.set(key, draw(report, title).catch((err) => { made.delete(key); throw err; }));
+      }
+      return made.get(key);
     },
+    destroy() { frame.remove(); made.clear(); },
   };
 }
 
