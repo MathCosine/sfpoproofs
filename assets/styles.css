@@ -625,6 +625,21 @@ tbody tr:hover .rowcopy, .rowcopy:focus-visible { opacity: 1; }
   .roster-row__note { order: 5; }
 }
 
+/* A numbered step inside a panel. */
+.subhead { display: flex; align-items: center; gap: 9px; margin: 22px 0 10px; }
+.subhead h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .07em; }
+.subhead .step { width: 22px; height: 22px; font-size: 12px; }
+
+/* The email as a family will get it, before anything is sent. */
+.mail-preview { margin-top: 12px; border: var(--bw) solid var(--line); border-radius: var(--radius);
+  padding: 12px 14px; font-size: 13px; background: var(--card); }
+.mail-preview__meta { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-weight: 600;
+  padding-bottom: 9px; margin-bottom: 9px; border-bottom: var(--bw) dashed var(--line); }
+.mail-preview__meta dt { color: var(--muted); }
+.mail-preview__meta dd { margin: 0; overflow-wrap: anywhere; }
+.mail-preview__body { white-space: pre-wrap; margin: 0; font: inherit; }
+.mail-log { margin-top: 10px; max-height: 260px; overflow-y: auto; }
+
 /* A single tick box with its explanation beside it. */
 .check { display: flex; align-items: flex-start; gap: 9px; font-size: 12px; font-weight: 600;
   line-height: 1.45; cursor: pointer; }

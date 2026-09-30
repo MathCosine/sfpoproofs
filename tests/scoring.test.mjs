@@ -1630,7 +1630,7 @@ test('every script and import carries the current version', async () => {
   const { APP_VERSION } = await import('../assets/config.js');
   const root = new URL('../', import.meta.url);
   const files = ['index.html', 'guts.html', 'assets/app.js', 'assets/store.js',
-    'assets/scoring.js', 'assets/csv.js', 'assets/config.js', 'assets/reports.js'];
+    'assets/scoring.js', 'assets/csv.js', 'assets/config.js', 'assets/reports.js', 'assets/mailer.js'];
   for (const file of files) {
     const text = await readFile(new URL(file, root), 'utf8');
     for (const [, version] of text.matchAll(/\?v=([\w.]+)/g)) {
@@ -1939,4 +1939,134 @@ test('reports and their spreadsheets follow the tiebreak', () => {
   assert.equal(cow.places.combined.place, 1, 'team places are untouched');
   assert.match(renderReportsDocument(teamsR, { contestName: 'Cowconuts 2026' }),
     /Members’ places include the individual tiebreak/);
+});
+
+// ---------------------------------------------------------------------
+// Emailing the reports
+// ---------------------------------------------------------------------
+
+import {
+  identifyPage, indexPages, checkPages, parseRecipients, nameFits, planEmails,
+  fillTemplate, templateFields, encodeHeader, buildMessage, toBase64Url, firstName,
+} from '../assets/mailer.js';
+import { reportFingerprint } from '../assets/reports.js';
+
+/** Page text as pdf.js reads a printed report: letter-spaced headings and all. */
+function pageText(r) {
+  if (r.kind === 'team') {
+    return `COWCO N U TS 2 0 2 6 AN N UAL Team score report\n${r.name}\nTeam ${r.team} Division ${r.division}\n`
+      + `COMBINED SCOR E\n${r.total} / ${r.max}\n${r.places.combined.place === 1 ? '1st' : `${r.places.combined.place}th`} of ${r.places.combined.of} in Division ${r.division}\n`
+      + r.members.map((m) => `${m.id} ${m.name} ${m.score}`).join('\n');
+  }
+  const ord = { 1: '1st', 2: '2nd', 3: '3rd' }[r.place] ?? `${r.place}th`;
+  return `COWCO N U TS 2 0 2 6 Individual score report\n${r.name}\n${r.id} Division ${r.division} Team ${r.team} · ${r.teamName}\n`
+    + `SCOR E\n${r.score} / ${r.max}\nP LACE IN D IVISION ${r.division}\n${ord}\nof ${r.of}\n`;
+}
+
+test('a printed page is known by the one student or team it names, and nothing else is', () => {
+  assert.deepEqual(identifyPage('Individual score report\nAda\nA011 Division A Team A01 · Cowbell'),
+    { kind: 'student', id: 'A011' });
+  assert.deepEqual(identifyPage('TEAM SCORE REPORT\nCowbell\nTeam A01 Division A\nA011 Ada 12\nA012 Grace 14'),
+    { kind: 'team', id: 'A01' });
+  assert.equal(identifyPage('Individual score report\nA011 … A012').kind, null, 'two students on one page');
+  assert.equal(identifyPage('✓ 17 62% ✗ 18 67%').kind, null, 'the second half of a report that ran over');
+  const { pageOf, problems } = indexPages([
+    'Individual score report A011', 'Individual score report A012', 'nothing', 'Individual score report A011',
+  ], 'student');
+  assert.deepEqual([...pageOf], [['A011', 0], ['A012', 1]]);
+  assert.equal(problems.length, 2);
+  assert.match(problems[0], /page 3 does not say whose/);
+  assert.match(problems[1], /A011 is on page 1 and again on page 4/);
+});
+
+test('a page is only good while it still shows the portal’s name, score and place', () => {
+  const f = reportFixture();
+  const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg,
+    combined: f.combined, guts: f.guts });
+  const texts = students.map(pageText);
+  const { pageOf } = indexPages(texts, 'student');
+  const fresh = checkPages(students, pageOf, texts);
+  assert.equal(fresh.found.size, students.length);
+  assert.deepEqual(fresh.stale, []);
+  assert.deepEqual(reportFingerprint(students[0]).slice(0, 3), ['A011', 'Ada <b>Lovelace</b>', '15 / 20']);
+
+  // A tiebreak since the PDF was saved: A011 and A012 were both 2nd; the
+  // tiebreak keeps A012 2nd and puts A011 3rd, so only A011's page is wrong.
+  const moved = individualStandings(f.contestants.map((c) => (c.individual_id === 'A012'
+    ? { ...c, tiebreak_rank: 1 } : c)), f.key, cfg);
+  const now = studentReports({ individuals: moved, teams: f.teams, key: f.key, cfg });
+  const stale = checkPages(now, pageOf, texts);
+  assert.deepEqual(stale.stale.map((x) => [x.id, x.off]), [['A011', ['3rd of 4']]],
+    'the page that now shows the wrong place is caught');
+  // And somebody disqualified since.
+  const out = now.filter((r) => r.id !== 'B011');
+  assert.deepEqual(checkPages(out, pageOf, texts).extra, ['B011']);
+});
+
+test('addresses paste from a whole registration row, and a doubtful line is held back', () => {
+  const { byId, problems } = parseRecipients([
+    'ID\tName\tEmail\tParent email',
+    'A011\tAda Lovelace\tada@example.com\tParent@Example.com',
+    'A012, grace@example.com',
+    'A013\tSomeone Else\tother@example.com',
+    'A021\talan@example.com',
+    'A021\tdifferent@example.com',
+    'A022\tNo Address',
+    'nobody@example.com',
+    'A023 A024 both@example.com',
+  ].join('\n'));
+  assert.deepEqual(byId.get('A011').emails, ['ada@example.com', 'parent@example.com']);
+  assert.deepEqual(byId.get('A011').words, ['Ada', 'Lovelace']);
+  assert.deepEqual(byId.get('A012').emails, ['grace@example.com']);
+  assert.equal(byId.get('A021').conflict, true);
+  assert.equal(problems.length, 3);
+  assert.equal(nameFits('Ada <b>Lovelace</b>', ['Lovelace']), true);
+  assert.equal(nameFits('Grace Hopper', []), true, 'no name on the line, nothing to check');
+  assert.equal(nameFits('Emmy Noether', ['Someone', 'Else']), false);
+  assert.equal(nameFits('José Núñez', ['NUNEZ']), true);
+
+  const f = reportFixture();
+  const students = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg });
+  const studentPages = new Map(students.filter((r) => r.id !== 'B011').map((r, i) => [r.id, i]));
+  const plan = planEmails({ students, studentPages, recipients: byId });
+  assert.deepEqual(plan.ready.map((x) => [x.report.id, x.to.length]), [['A011', 2], ['A012', 1]]);
+  assert.deepEqual(plan.held.map((h) => h.id), ['A013', 'A021']);
+  assert.match(plan.held[0].why, /Someone Else/);
+  assert.deepEqual(plan.notPrinted, ['B011']);
+  const withTeams = planEmails({ students, studentPages, teamPages: new Map([['A01', 0]]), recipients: byId });
+  assert.deepEqual(withTeams.ready.map((x) => x.teamPage), [0, 0]);
+});
+
+test('the email is well-formed MIME, with its PDFs attached and nothing else', () => {
+  const f = reportFixture();
+  const [ada] = studentReports({ individuals: f.individuals, teams: f.teams, key: f.key, cfg });
+  const fields = templateFields(ada, 'Cowconuts 2026 Annual Math Contest');
+  assert.equal(fields.first, 'Ada');
+  assert.equal(firstName(''), 'there');
+  assert.equal(fillTemplate('Hi {first} — {id}, Division {division}, {team_name}. {unknown}', fields),
+    'Hi Ada — A011, Division A, Cowbell. {unknown}');
+  assert.equal(encodeHeader('Plain subject'), 'Plain subject');
+  const long = encodeHeader('Cowconuts 2026 — your score report, with an accent: é'.repeat(2));
+  for (const word of long.split('\r\n ')) assert.ok(word.length <= 75, word);
+  const pdf = new Uint8Array([37, 80, 68, 70, 45, 49, 46, 55, 10, 200, 201]);
+  const mime = buildMessage({
+    from: 'director@example.com', fromName: 'Cowconuts Math Contest', to: ['a@example.com', 'b@example.com'],
+    subject: 'Your report — A011', body: 'Hi Ada,\nAttached.', boundary: 'BOUNDARY',
+    attachments: [{ filename: 'Cowconuts-2026-score-report-A011.pdf', bytes: pdf }],
+  });
+  assert.match(mime, /^From: Cowconuts Math Contest <director@example\.com>\r\n/);
+  assert.match(mime, /\r\nTo: a@example\.com, b@example\.com\r\n/);
+  assert.match(mime, /\r\nSubject: =\?UTF-8\?B\?/);
+  assert.ok(/^[\x00-\x7f]*$/.test(mime), 'ASCII throughout');
+  const parts = mime.split('--BOUNDARY');
+  assert.equal(parts.length, 4, 'preamble, body, one attachment, and the close');
+  const b64 = (part) => part.split('\r\n\r\n')[1].replace(/\s+/g, '');
+  assert.equal(Buffer.from(b64(parts[1]), 'base64').toString('utf8'), 'Hi Ada,\r\nAttached.');
+  assert.deepEqual([...Buffer.from(b64(parts[2]), 'base64')], [...pdf]);
+  assert.match(parts[2], /filename="Cowconuts-2026-score-report-A011\.pdf"/);
+  const raw = toBase64Url(mime);
+  assert.ok(!/[+/=]/.test(raw));
+  assert.equal(Buffer.from(raw, 'base64url').toString('latin1'), mime);
+  assert.match(buildMessage({ from: 'd@example.com', fromName: 'Contest, Staff', to: ['a@example.com'], subject: 's', body: 'b' }),
+    /^From: =\?UTF-8\?B\?[^?]+\?= <d@example\.com>/, 'a name with a comma is encoded, not left to break the header');
 });

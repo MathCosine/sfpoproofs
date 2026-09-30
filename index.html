@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="assets/styles.css">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥥</text></svg>">
 </head>
-<body data-app-version="2026.09.28.2">
+<body data-app-version="2026.09.30.1">
 
 <div class="gate" id="gate">
   <div class="gate__card card">
@@ -594,6 +594,91 @@
         </div>
         <p class="field__hint" id="reportState" style="margin-top:8px"></p>
 
+        <div class="panel__head" style="margin-top:28px"><h2>Email the reports</h2>
+          <span class="spacer"></span><span class="tag" id="mailState">not connected</span></div>
+        <p class="field__hint" style="margin-bottom:6px">
+          Sends each student their own report as a PDF attachment, from a Google account you
+          connect here. Every page is checked before it goes: it has to name the student and
+          show the portal's current score and place, or nothing is sent. Addresses stay in this
+          tab and are never saved. Needs a one-time Google setup — see
+          <b>Emailing the reports</b> in the README.
+        </p>
+
+        <div class="subhead"><span class="step">1</span><h3>Connect Google</h3></div>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="mailClientId">OAuth client ID</label>
+            <input class="input mono" id="mailClientId" placeholder="….apps.googleusercontent.com"
+                   autocomplete="off" spellcheck="false">
+          </div>
+          <div class="field">
+            <label class="field__label" for="mailFromName">Sender name</label>
+            <input class="input" id="mailFromName" autocomplete="off">
+          </div>
+        </div>
+        <div class="chip-row" style="margin-top:10px">
+          <button class="btn btn--primary" id="mailConnect">Connect Google account</button>
+          <span class="field__hint" id="mailAccount">Not connected.</span>
+        </div>
+
+        <div class="subhead"><span class="step">2</span><h3>The reports, saved as PDF</h3></div>
+        <p class="field__hint" style="margin-bottom:10px">
+          Open <b>Student reports</b> above with Division on Both and nothing in Only these, and
+          save it as a PDF (margins and scale left at Default), then choose that file here. Team
+          reports are optional; with them, each student also gets their team's page.
+        </p>
+        <div class="grid-2">
+          <div class="field">
+            <label class="field__label" for="mailStudentPdf">Student reports PDF</label>
+            <input class="input" type="file" id="mailStudentPdf" accept="application/pdf,.pdf">
+          </div>
+          <div class="field">
+            <label class="field__label" for="mailTeamPdf">Team reports PDF <span class="muted">optional</span></label>
+            <input class="input" type="file" id="mailTeamPdf" accept="application/pdf,.pdf">
+          </div>
+        </div>
+        <div id="mailPdfState"></div>
+
+        <div class="subhead"><span class="step">3</span><h3>Email addresses</h3></div>
+        <p class="field__hint" style="margin-bottom:10px">
+          Paste from the registration sheet: each line needs the student's ID and their email.
+          Whole rows are fine, and every address on a line gets the email. If a line also has a
+          name that is not the student's, that student is held back — it is how a mistyped ID shows.
+        </p>
+        <textarea class="input" id="mailRecipients" rows="5" spellcheck="false"
+                  placeholder="A011&#9;Sam Taylor&#9;sam@example.com&#9;parent@example.com"></textarea>
+        <div id="mailRecipientState"></div>
+
+        <div class="subhead"><span class="step">4</span><h3>The message</h3></div>
+        <div class="field">
+          <label class="field__label" for="mailSubject">Subject</label>
+          <input class="input" id="mailSubject" autocomplete="off">
+        </div>
+        <div class="field" style="margin-top:10px">
+          <label class="field__label" for="mailBody">Message</label>
+          <textarea class="input" id="mailBody" rows="9"></textarea>
+          <span class="field__hint">{first}, {name}, {id}, {division}, {team}, {team_name} and
+            {contest} are filled in for each student.</span>
+        </div>
+        <div id="mailPreview"></div>
+
+        <div class="subhead"><span class="step">5</span><h3>Send</h3></div>
+        <div class="field">
+          <label class="field__label" for="mailOnly">Only these <span class="muted">optional</span></label>
+          <input class="input mono" id="mailOnly" placeholder="A011 A012, or a team like A01" autocomplete="off">
+        </div>
+        <label class="check" style="margin:10px 0">
+          <input type="checkbox" id="mailResend">
+          <span>Also send to students this browser has already sent to.</span>
+        </label>
+        <div class="chip-row">
+          <button class="btn btn--ghost" id="mailTest">Send a test to me</button>
+          <button class="btn btn--primary" id="mailSend">Send</button>
+          <button class="btn btn--ghost hidden" id="mailStop">Stop</button>
+        </div>
+        <p class="field__hint" id="mailProgress" style="margin-top:8px"></p>
+        <div id="mailLog"></div>
+
         <div class="panel__head" style="margin-top:28px"><h2>Clear test data</h2></div>
         <p class="field__hint" style="margin-bottom:12px">
           Deletes every answer sheet, guts answer and lock, and forgets who signed in. The
@@ -650,6 +735,6 @@
     window.addEventListener('load', function () { setTimeout(halfUpdated, 4000); });
   })();
 </script>
-<script type="module" src="assets/app.js?v=2026.09.28.2"></script>
+<script type="module" src="assets/app.js?v=2026.09.30.1"></script>
 </body>
 </html>

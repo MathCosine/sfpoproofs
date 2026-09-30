@@ -17,7 +17,7 @@
 import {
   competitionRanks, ordinal, summarise, keyMaxPoints, gutsKey, problemsInSet,
   divisionOfTeam, compareIndividuals, individualRankKey, hasTiebreak,
-} from './scoring.js?v=2026.09.28.2';
+} from './scoring.js?v=2026.09.30.1';
 
 const byId = (a, b) => String(a).localeCompare(String(b), undefined, { numeric: true });
 
@@ -671,6 +671,22 @@ html,body{margin:0;background:var(--desk);color:var(--ink);font-family:var(--san
  * The whole printable document. `reports` is a mix of student and team
  * reports in the order they should print.
  */
+/**
+ * What a printed page has to say for it to be this report, as it is now:
+ * who it is for, the score, and the place. Emailing checks each page of a
+ * saved PDF against these, so a page never goes to the wrong family and a
+ * PDF saved before a score or a tiebreak changed is not sent at all.
+ */
+export function reportFingerprint(r) {
+  if (r.kind === 'team') {
+    const p = r.places.combined;
+    return [`Team ${r.team}`, r.name || null, `${fmt(r.total)} / ${fmt(r.max)}`,
+      p?.place ? `${ordinal(p.place)} of ${p.of}` : null].filter(Boolean);
+  }
+  return [r.id, r.name || null, `${fmt(r.score)} / ${fmt(r.max)}`,
+    r.place ? `${ordinal(r.place)} of ${r.of}` : null].filter(Boolean);
+}
+
 export function renderReportsDocument(reports, { contestName = 'Contest', title = 'Score reports' } = {}) {
   const pages = reports.map((r) => (r.kind === 'team' ? teamPage(r, contestName) : studentPage(r, contestName)))
     .join('');

@@ -2249,6 +2249,199 @@ await shot.close();
   await rc.close();
 }
 
+// ---- emailing the reports ------------------------------------------------
+// Google and Gmail are stood in for: the sign-in hands back a token, and
+// every email Gmail would have sent is kept here and taken apart, down to
+// reading the text of each attached PDF, so the test knows exactly which
+// page went to which address.
+{
+  const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  const pdfPages = async (bytes) => {
+    const doc = await getDocument({ data: new Uint8Array(bytes), isEvalSupported: false }).promise;
+    const texts = [];
+    for (let i = 1; i <= doc.numPages; i += 1) {
+      const c = await (await doc.getPage(i)).getTextContent();
+      texts.push(c.items.map((it) => it.str + (it.hasEOL ? '\n' : '')).join(''));
+    }
+    await doc.destroy();
+    return texts;
+  };
+  const unpack = (raw) => {
+    const mime = Buffer.from(raw, 'base64url').toString('latin1');
+    const [head] = mime.split('\r\n\r\n');
+    const boundary = /boundary="([^"]+)"/.exec(head)[1];
+    const parts = mime.split(`--${boundary}`).slice(1, -1).map((p) => {
+      const [h, ...body] = p.replace(/^\r\n/, '').split('\r\n\r\n');
+      return { head: h, data: Buffer.from(body.join('\r\n\r\n').replace(/\s+/g, ''), 'base64') };
+    });
+    const header = (name) => new RegExp(`^${name}: (.*)$`, 'm').exec(head)?.[1] ?? '';
+    return {
+      to: header('To').split(', '),
+      subject: header('Subject'),
+      from: header('From'),
+      text: parts[0].data.toString('utf8'),
+      files: parts.slice(1).map((p) => ({ name: /filename="([^"]+)"/.exec(p.head)[1], data: p.data })),
+    };
+  };
+
+  const mc = await browser.newContext({ viewport: { width: 1300, height: 900 } });
+  await mc.route(/fonts\.(googleapis|gstatic)\.com/, (route) => route.abort());
+  await mc.route('https://accounts.google.com/gsi/client', (route) => route.fulfill({
+    contentType: 'text/javascript',
+    body: `window.google = { accounts: { oauth2: {
+      initTokenClient(c) { return { requestAccessToken() {
+        window.__gis = { client_id: c.client_id, scope: c.scope };
+        setTimeout(() => c.callback({ access_token: 'test-token', expires_in: 3599, scope: c.scope }), 20);
+      } }; },
+      hasGrantedAllScopes(r, ...s) { return s.every((x) => r.scope.split(' ').includes(x)); },
+    } } };`,
+  }));
+  await mc.route('https://www.googleapis.com/oauth2/v3/userinfo', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify({ email: 'director@example.com' }),
+  }));
+  const outbox = [];
+  await mc.route('https://gmail.googleapis.com/gmail/v1/users/me/messages/send', (route) => {
+    outbox.push({ raw: JSON.parse(route.request().postData()).raw,
+      auth: route.request().headers().authorization });
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ id: `m${outbox.length}` }) });
+  });
+
+  const admin = await mc.newPage();
+  watch(admin, 'mail');
+  await admin.goto(BASE, { waitUntil: 'networkidle' });
+  await admin.fill('#graderName', 'Mail Admin');
+  await admin.fill('#adminPassword', 'demo');
+  await admin.click('#gateEnter');
+  await admin.waitForSelector('#app:not(.hidden)');
+  await admin.click('.tab[data-tab="setup"]');
+  await seedDemoData(admin);
+  await admin.waitForTimeout(600);
+
+  // Both PDFs saved the way a director would: the whole set, Letter.
+  const savePdf = async (button) => {
+    const [pop] = await Promise.all([mc.waitForEvent('page'), admin.click(button)]);
+    await pop.waitForLoadState('load');
+    const pdf = await pop.pdf({ format: 'Letter', printBackground: true });
+    await pop.close();
+    return pdf;
+  };
+  const studentPdf = await savePdf('#reportStudents');
+  const teamPdf = await savePdf('#reportTeams');
+
+  check('sending waits for a Google account', await admin.locator('#mailSend').isDisabled());
+  await admin.fill('#mailClientId', 'test-client.apps.googleusercontent.com');
+  await admin.click('#mailConnect');
+  await admin.waitForFunction(() => /director@example\.com/.test(document.querySelector('#mailAccount').textContent),
+    null, { timeout: 10000 }).catch(() => {});
+  const gis = await admin.evaluate(() => window.__gis);
+  check('connecting asks Google for send permission only, with the client ID given',
+    gis?.client_id === 'test-client.apps.googleusercontent.com'
+      && gis.scope.split(' ').includes('https://www.googleapis.com/auth/gmail.send')
+      && !/mail\.google\.com|gmail\.readonly|gmail\.modify/.test(gis.scope),
+    JSON.stringify(gis));
+
+  await admin.setInputFiles('#mailStudentPdf', { name: 'students.pdf', mimeType: 'application/pdf', buffer: studentPdf });
+  await admin.setInputFiles('#mailTeamPdf', { name: 'teams.pdf', mimeType: 'application/pdf', buffer: teamPdf });
+  await admin.waitForFunction(() => (document.querySelector('#mailPdfState').textContent.match(/each one checked/g) ?? []).length === 2,
+    null, { timeout: 30000 }).catch(() => {});
+  const pdfState = (await admin.locator('#mailPdfState').innerText()).replace(/\s+/g, ' ');
+  check('both saved PDFs are read and every page matched to its report',
+    (pdfState.match(/each one checked/g) ?? []).length === 2 && !/cannot be sent/.test(pdfState),
+    pdfState.slice(0, 200));
+
+  // Five students with addresses, one line naming somebody else, and the
+  // rest of the room with nothing pasted.
+  const people = await admin.evaluate(() => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    const outTeams = new Set(db.teams.filter((t) => t.disqualified).map((t) => String(t.team)));
+    return db.contestants.filter((c) => !c.disqualified && !outTeams.has(String(c.team)))
+      .sort((a, b) => a.individual_id.localeCompare(b.individual_id))
+      .slice(0, 6).map((c) => ({ id: c.individual_id, name: c.name, team: String(c.team) }));
+  });
+  const addressOf = (p) => [`${p.id.toLowerCase()}@example.com`, ...(p === people[0] ? ['parent@example.com'] : [])];
+  await admin.fill('#mailRecipients', [
+    'ID\tName\tEmail\tParent',
+    ...people.slice(0, 5).map((p) => [p.id, p.name, ...addressOf(p)].join('\t')),
+    `${people[5].id}\tSomeone Else\twrong@example.com`,
+  ].join('\n'));
+  await admin.waitForTimeout(300);
+  const recState = (await admin.locator('#mailRecipientState').innerText()).replace(/\s+/g, ' ');
+  check('five ready, and the line with somebody else’s name held back',
+    /5 ready/.test(recState) && /1 held back/.test(recState) && recState.includes(people[5].id)
+      && /Someone Else/.test(recState),
+    recState.slice(0, 200));
+  const preview = (await admin.locator('#mailPreview').innerText()).replace(/\s+/g, ' ');
+  check('the preview shows the first email as it will go',
+    preview.includes(addressOf(people[0]).join(', ')) && preview.includes(`score-report-${people[0].id}.pdf`)
+      && /Thank you for competing/.test(preview), preview.slice(0, 200));
+
+  await admin.click('#mailTest');
+  await admin.waitForFunction(() => /Test sent/.test(document.body.innerText), null, { timeout: 15000 }).catch(() => {});
+  const test = outbox[0] && unpack(outbox[0].raw);
+  check('a test goes to the connected account only, marked as a test',
+    outbox.length === 1 && test.to.join() === 'director@example.com' && /^\[Test\]/.test(test.subject)
+      && test.files.length === 2 && outbox[0].auth === 'Bearer test-token',
+    test ? `${test.to} / ${test.subject}` : 'nothing sent');
+
+  await admin.click('#mailSend');
+  check('sending takes two clicks',
+    /Click again to email 5 students/.test(await admin.locator('#mailSend').innerText()) && outbox.length === 1);
+  await admin.click('#mailSend');
+  await admin.waitForFunction(() => /5 sent of 5/.test(document.querySelector('#mailProgress').textContent),
+    null, { timeout: 30000 }).catch(() => {});
+  const sent = outbox.slice(1).map((m) => unpack(m.raw));
+  check('five emails go out', sent.length === 5, `${sent.length} sent`);
+
+  let right = 0;
+  const wrong = [];
+  for (const m of sent) {
+    const p = people.find((x) => m.to[0] === `${x.id.toLowerCase()}@example.com`);
+    const [own, team] = m.files;
+    const ownText = own ? (await pdfPages(own.data)) : [];
+    const teamText = team ? (await pdfPages(team.data)) : [];
+    const ok = p && m.to.join() === addressOf(p).join()
+      && own.name.endsWith(`-score-report-${p.id}.pdf`) && ownText.length === 1
+      && /Individual score report/i.test(ownText[0]) && ownText[0].includes(p.id)
+      && ownText[0].replace(/\s+/g, '').includes(p.name.replace(/\s+/g, ''))
+      && team.name.endsWith(`-team-report-${p.team}.pdf`) && teamText.length === 1
+      && new RegExp(`Team\\s*${p.team}(?![0-9])`).test(teamText[0]);
+    if (ok) right += 1; else wrong.push(m.to.join());
+  }
+  check('each student gets their own page and their own team’s, and nobody else’s',
+    right === 5, wrong.join(' | '));
+  check('the email names the student and says it is from the contest',
+    sent.every((m) => /^Cowconuts 2026 Annual Math Contest: your score report$/.test(m.subject)
+      && /^Hi \S+,/.test(m.text)) && /<director@example\.com>$/.test(sent[0].from),
+    `${sent[0]?.subject} / ${sent[0]?.from}`);
+
+  const remembered = await admin.evaluate(() => [localStorage.getItem('contest-mail-sent'),
+    localStorage.getItem('contest-mail-prefs')]);
+  check('this browser remembers who was sent to, but never an address',
+    people.slice(0, 5).every((p) => remembered[0]?.includes(p.id)) && !/@/.test(remembered[0] ?? '@')
+      && !/example\.com/.test(remembered[1] ?? ''),
+    remembered.join(' | ').slice(0, 160));
+  await admin.waitForTimeout(300);
+  check('and does not send them a second copy',
+    await admin.locator('#mailSend').isDisabled() && outbox.length === 6);
+
+  // A score changes after the PDF was saved: that PDF can no longer be sent from.
+  await admin.evaluate((id) => {
+    const db = JSON.parse(localStorage.getItem('contest-demo-db'));
+    const c = db.contestants.find((x) => x.individual_id === id);
+    c.answers = c.answers.map(() => null);
+    localStorage.setItem('contest-demo-db', JSON.stringify(db));
+    window.dispatchEvent(new StorageEvent('storage', { key: 'contest-demo-db' }));
+  }, people[1].id);
+  await admin.check('#mailResend');
+  await admin.waitForTimeout(800);
+  const staleState = (await admin.locator('#mailPdfState').innerText()).replace(/\s+/g, ' ');
+  check('a PDF saved before a score changed is refused, naming who changed',
+    /cannot be sent from/.test(staleState) && staleState.includes(people[1].id)
+      && await admin.locator('#mailSend').isDisabled(),
+    staleState.slice(0, 200));
+  await mc.close();
+}
+
 // ---- a half-typed sheet is not lost to a stray reload ------------------
 {
   const own = await browser.newContext({ viewport: { width: 1300, height: 900 } });

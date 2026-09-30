@@ -130,6 +130,42 @@ demo data.
 - A page that would run long — a name that fills two lines — tightens its own spacing
   and chart until it fits, so nothing is ever cut off at the foot of a sheet.
 
+**Email the reports** — Admin → Setup → Email the reports. Each student gets their own
+report as a PDF, and optionally their team's, from a Google account connected there.
+Needs a one-time Google setup ([below](#5-emailing-the-reports-optional)). Then:
+
+1. **Connect Google account.** A Google window asks to let the portal send email as you.
+   Access lasts an hour and is never saved.
+2. **Save the reports as a PDF.** Use **Student reports** above (Division on Both, nothing
+   in Only these), print, and choose **Save as PDF**, with margins and scale left at
+   Default. Do the same for **Team reports** if the team page should go too. Choose the
+   files in the panel.
+3. **Paste the addresses** from the registration sheet, a row per student: the ID and
+   the email anywhere on it (`A011  Sam Taylor  11  sam@example.com` is fine). Every
+   address on a line gets the email.
+4. **Check the preview**, edit the subject and message if you like (`{first}`, `{name}`,
+   `{id}`, `{division}`, `{team}`, `{team_name}` and `{contest}` are filled in), and **Send a test to
+   me** — it arrives in your own inbox exactly as a family will get it.
+5. **Send**, two clicks. About one email a second; keep the tab open. **Stop** is safe:
+   sending again carries on with those not yet sent.
+
+What keeps a report from the wrong family:
+
+- **Every page is read before anything is sent.** A page must name exactly one
+  student (or team) and still show the portal's name, score and place for them. If any
+  page doesn't match (a report ran onto two pages, or a score or tiebreak changed after
+  the PDF was saved), the whole PDF is refused and the panel names the pages. Save it
+  again and choose the new file.
+- **A pasted line that names someone else is held back.** If the line has a name and it
+  isn't the student's, that student is not sent to. This is how a mistyped ID shows up.
+  The same ID on two lines with different addresses is held back too.
+- **Nothing is stored but IDs.** The addresses stay in the tab and never reach the
+  database. The browser remembers which IDs it has sent to, so nobody gets a second
+  copy unless **Also send to students this browser has already sent to** is ticked.
+
+A personal Gmail account can send to 500 addresses a day; a Google Workspace
+(school or work) account, 2,000.
+
 **Clear answer key** empties both divisions and guts in two deliberate clicks, keeping
 the guts point values, which are configuration rather than answers.
 
@@ -413,6 +449,33 @@ whoever sent the link.
 
 **Settings → Pages → Deploy from a branch.** The portal is `/`, the public board is
 `/guts.html`.
+
+### 5. Emailing the reports (optional)
+
+Only needed to email the score reports. About ten minutes, once, in the Google account
+that will send them. No review by Google is needed: the project stays in **Testing**, and
+only the accounts you list can use it.
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) and create a
+   project (any name, e.g. *Contest reports*).
+2. **APIs & Services → Library**, search **Gmail API**, click **Enable**.
+3. **Google Auth platform → Branding** (it may say **Get started**): app name, e.g.
+   *Contest reports*; your email as the support address; audience **External**; your
+   email again as the contact; agree to the policy; **Create**.
+4. **Google Auth platform → Audience → Test users → Add users**: add the Gmail address
+   that will send the reports. Leave the app in **Testing**.
+5. **Google Auth platform → Clients → Create client**: type **Web application**. Under
+   **Authorized JavaScript origins**, add `https://mathcosine.github.io` (just the site,
+   no path; add `http://localhost:8000` too if you run the portal locally). **Create**,
+   then copy the **Client ID**. It ends in `.apps.googleusercontent.com`. It is not a
+   secret, and there is no client secret to keep.
+6. In the portal: **Admin → Setup → Email the reports**, paste the Client ID, and
+   **Connect Google account**.
+
+Google will say **"Google hasn't verified this app."** That is expected for a project
+in Testing: click **Continue** and allow **Send email on your behalf**. The portal asks
+only to send. It cannot read, delete or search your mail. Google lets a test account's
+permission last seven days; after that, connecting again asks again.
 
 ---
 
@@ -731,8 +794,11 @@ assets/
   app.js                entry console, progress, leaderboards, clock
   store.js              Supabase + demo backends, realtime patching
   scoring.js            pure logic — grading, standings, the clock
+  reports.js            score reports, a page per student and per team
+  mailer.js             emailing the reports: page checks, MIME, Gmail
   csv.js                exports
   styles.css            design system
+  vendor/               supabase-js, pdf.js and pdf-lib, served from here
 scorer-card.html        one printed page per scorer, for the day
 supabase/schema.sql     paste into the Supabase SQL editor
 tests/                  unit tests + a two-tab browser test
