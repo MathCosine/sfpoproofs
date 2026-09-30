@@ -29,7 +29,7 @@ export const CONFIG = {
   // project that sends them (README, "Emailing the reports"). Not a
   // secret -- Google only lets it be used from this site's address, by the
   // accounts listed as test users. Left blank, Admin asks for it instead.
-  GOOGLE_CLIENT_ID: '',
+  GOOGLE_CLIENT_ID: '277271733043-3niiu0jt46mpom8vu178js8mrtaij5pi.apps.googleusercontent.com',
 
   // ---- Individual round -------------------------------------------
   INDIVIDUAL_PROBLEMS: 20,
